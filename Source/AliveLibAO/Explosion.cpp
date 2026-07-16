@@ -18,23 +18,6 @@
 
 namespace AO {
 
-#ifdef TETHYS_SATURN
-// SATURN (bt823): live pad-driven A/B bisection of the death-on-mine R1P15C01
-// crash. The crash is screen-specific (this screen's object set incl. a Slig
-// differs from screens where death+respawn is clean -- so NOT Abe's death
-// machinery) and manifests as a silent SH-2 reset to BIOS (PC~0x000003xx,
-// GBR=0xFFFFFE00, non-deterministic green/black): a wild jsr trashes SP so the
-// CPU double-faults its own exception push before any handler can render. Ymir
-// here cannot break-on-exception, so instead we let the pad SKIP each suspect
-// path live: hold the button while Abe hits the mine (he is dying = buttons are
-// free) and whichever skip STOPS the crash names the culprit. Set in the input
-// seam (sys_saturn.cxx Input_Read_Pad, pad 0):
-//   bit1 (pad2 B) = skip the sleeping-Slig gib path (last block)
-//   bit2 (pad2 C) = skip the alive-object VGetBoundingRect/VTakeDamage loop
-//   B+C together  = skip ALL of DealBlastDamage (rest is just rect math)
-extern "C" volatile u8 Tethys_gDbgSkip;
-#endif
-
 Explosion* Explosion::ctor_458B80(FP xpos, FP ypos, FP exposion_size)
 {
     ctor_417C10();
@@ -255,9 +238,6 @@ void Explosion::DealBlastDamage_459160(PSX_RECT* pRect)
         expandedRect.h += 240;
     }
 
-#ifdef TETHYS_SATURN
-    if (!(Tethys_gDbgSkip & 4u)) // C: bisect -- skip the alive-object virtual dispatch
-#endif
     for (s32 idx = 0; idx < gBaseAliveGameObjects_4FC8A0->Size(); idx++)
     {
         auto pObj = gBaseAliveGameObjects_4FC8A0->ItemAt(idx);
@@ -277,10 +257,6 @@ void Explosion::DealBlastDamage_459160(PSX_RECT* pRect)
             }
         }
     }
-
-#ifdef TETHYS_SATURN
-    if (Tethys_gDbgSkip & 2u) { return; } // B: bisect -- skip the sleeping-Slig gib path (last block)
-#endif
 
     auto pTlv = static_cast<Path_Slig*>(gMap_507BA8.TLV_Get_At_446260(
         expandedRect.x,

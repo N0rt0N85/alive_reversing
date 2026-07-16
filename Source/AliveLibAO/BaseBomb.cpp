@@ -15,6 +15,20 @@ namespace AO {
 
 ALIVE_VAR(1, 0x4FFA4C, s16, word_4FFA4C, 0);
 
+#ifdef TETHYS_SATURN
+// SATURN (bt824): the death-on-mine R1P15C01 crash is UPSTREAM of the Explosion
+// blast (bt823 proved skipping ALL of Explosion::DealBlastDamage does not stop
+// it). The mine spawns a BaseBomb whose ctor runs DealDamageRect (a
+// gBaseAliveGameObjects iterate + pObj->VTakeDamage virtual dispatch) AND a
+// ParticleBurst -- both instant, at mine contact ("Abe still in fall anim"). One
+// of them wild-jsr's (stale/garbage object, or a valid non-Abe object -- the
+// Slig -- whose VTakeDamage cascades). Live PAD-2 bisection (Tethys_gDbgSkip):
+//   bit1 (B) = in DealDamageRect, skip VTakeDamage on NON-Abe objects (Abe still
+//              dies, so the death still happens) -> isolates the Slig/others
+//   bit2 (C) = skip the ctor ParticleBurst spawn
+extern "C" volatile u8 Tethys_gDbgSkip;
+#endif
+
 void BaseBomb::VUpdate_417580()
 {
     PSX_RECT rect = {};
@@ -218,6 +232,15 @@ void BaseBomb::DealDamageRect_417A50(const PSX_RECT* pRect)
                 const s16 obj_ypos = FP_GetExponent(pObj->field_AC_ypos);
                 if (obj_ypos >= top && obj_ypos <= bottom && field_BC_sprite_scale == (pObj->field_BC_sprite_scale * FP_FromDouble(2.75)))
                 {
+#ifdef TETHYS_SATURN
+                    // B: bisect -- skip VTakeDamage on non-Abe objects (Abe still
+                    // dies). If the crash stops, a non-Abe object's VTakeDamage
+                    // (the Slig?) is the wild call.
+                    if ((Tethys_gDbgSkip & 2u) && pObj->field_4_typeId != Types::eAbe_43)
+                    {
+                        continue;
+                    }
+#endif
                     pObj->VTakeDamage(this);
                 }
             }
@@ -266,15 +289,20 @@ BaseBomb* BaseBomb::ctor_4173A0(FP xpos, FP ypos, s32 /*unused*/, FP scale)
         pScreenShake->ctor_4624D0(1);
     }
 
-    auto pParticleBurst = ao_new<ParticleBurst>();
-    if (pParticleBurst)
+#ifdef TETHYS_SATURN
+    if (!(Tethys_gDbgSkip & 4u)) // C: bisect -- skip the ctor ParticleBurst spawn
+#endif
     {
-        pParticleBurst->ctor_40D0F0(
-            field_A8_xpos,
-            field_AC_ypos,
-            35,
-            field_E4_scale,
-            BurstType::eFallingRocks_0);
+        auto pParticleBurst = ao_new<ParticleBurst>();
+        if (pParticleBurst)
+        {
+            pParticleBurst->ctor_40D0F0(
+                field_A8_xpos,
+                field_AC_ypos,
+                35,
+                field_E4_scale,
+                BurstType::eFallingRocks_0);
+        }
     }
 
     PSX_RECT damageRect = {
