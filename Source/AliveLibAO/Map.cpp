@@ -968,7 +968,32 @@ void Map::RestoreBlyData_446A90(const u8* pSaveData)
                         for (;;)
                         {
                             pTlv->RangeCheck();
+#ifdef TETHYS_SATURN
+                            // SATURN (bt819): a SAME-SCREEN respawn keeps the
+                            // screen's TLV objects RESIDENT (LoadFromMemory passes
+                            // bKillObjects=0 and GoTo_Camera skips the free/reload
+                            // on unchanged level/path). The saved flag byte has
+                            // Created/Destroyed CLEARED (SaveBlyData_446900:918-923
+                            // records live objects as "recreate on load"), so
+                            // restoring it verbatim clears the RESIDENT TLV's Created
+                            // bit -> Loader_446590 re-runs the factory -> a DUPLICATE
+                            // object on top of the survivor. On R1P15C01 that doubles
+                            // the object set (~29 -> 60 sprites) and slSynch overflows
+                            // the SGL work area -> `jsr` into trashed data (0x060E7558)
+                            // -> illegal-instruction exception storm (the death-on-
+                            // mine crash). Preserve the resident Created/Destroyed
+                            // bits: on a resident screen an ALIVE object stays SET so
+                            // Loader dedups (no clone); a DESTROYED object is already
+                            // CLEARED so it still re-creates (reset); on a freshly
+                            // reloaded screen the bits were CLEARED anyway == no-op.
+                            const bool tethysWasCreated = pTlv->field_0_flags.Get(eBit1_Created);
+                            const bool tethysWasDestroyed = pTlv->field_0_flags.Get(eBit2_Destroyed);
                             pTlv->field_0_flags.Raw().all = *pAfterSwitchStates;
+                            if (tethysWasCreated) pTlv->field_0_flags.Set(eBit1_Created);
+                            if (tethysWasDestroyed) pTlv->field_0_flags.Set(eBit2_Destroyed);
+#else
+                            pTlv->field_0_flags.Raw().all = *pAfterSwitchStates;
+#endif
                             pAfterSwitchStates++;
 
                             pTlv->field_1_unknown = *pAfterSwitchStates;
