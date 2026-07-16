@@ -6982,26 +6982,43 @@ void Abe::Motion_60_Dead_42C4C0()
         case 1:
         {
             Event_Broadcast_417220(kEventHeroDying_3, this);
-            auto pDeathBirdParticle = ao_new<DeathBirdParticle>();
-            if (!(gnFrameCount_507670 % 4) && pDeathBirdParticle)
+            // SATURN (bt831): CONFIRMED death-on-mine HWRAM leak. The original ran
+            // ao_new<DeathBirdParticle>() EVERY frame but only ctor_41D950'd it
+            // (which is what registers the object into gBaseGameObject_list) 1
+            // frame in 4. ao_new = ao_new_malloc(sizeof) + placement new
+            // (stdlib.hpp:14); an un-ctor'd instance enters NO list, so ~3/4 of
+            // these 240-byte HWRAM blocks were orphaned -- permanently unreachable,
+            // and no reap gate can free them (Game.cpp frees only list members
+            // that are dead && refCount==0, :472/531/580). Over case 1's ~30
+            // frames that orphaned ~22 blocks (~5 KB) PER death; on the ~30 KB
+            // Saturn ao_new pool the heavy R1P15 mine screen OOM'd on the 3rd
+            // death ("HWRAM OOM: ao_new_malloc", hw~1704 free). Harmless on PC
+            // (GBs + free-on-exit). Hoist the alloc INSIDE the %4 guard so
+            // alloc==ctor 1:1, matching case 0's shape (:6958); behaviour-
+            // identical otherwise (pDeathBirdParticle is used ONLY in this block).
+            if (!(gnFrameCount_507670 % 4))
             {
-                auto aux = 0;
-                if (field_F0_pTlv && field_F0_pTlv->field_4_type == TlvTypes::DeathDrop_5)
+                auto pDeathBirdParticle = ao_new<DeathBirdParticle>();
+                if (pDeathBirdParticle)
                 {
-                    aux = 60;
+                    auto aux = 0;
+                    if (field_F0_pTlv && field_F0_pTlv->field_4_type == TlvTypes::DeathDrop_5)
+                    {
+                        aux = 60;
+                    }
+                    else
+                    {
+                        aux = 15;
+                    }
+                    const FP ypos = FP_FromInteger(Math_NextRandom() % 10) + field_AC_ypos + FP_FromInteger(15);
+                    const FP xpos = FP_FromInteger(((Math_NextRandom() % 64) - 32)) + field_A8_xpos;
+                    pDeathBirdParticle->ctor_41D950(
+                        xpos,
+                        ypos,
+                        (Math_NextRandom() % 8) + field_118_timer + aux,
+                        0,
+                        field_BC_sprite_scale);
                 }
-                else
-                {
-                    aux = 15;
-                }
-                const FP ypos = FP_FromInteger(Math_NextRandom() % 10) + field_AC_ypos + FP_FromInteger(15);
-                const FP xpos = FP_FromInteger(((Math_NextRandom() % 64) - 32)) + field_A8_xpos;
-                pDeathBirdParticle->ctor_41D950(
-                    xpos,
-                    ypos,
-                    (Math_NextRandom() % 8) + field_118_timer + aux,
-                    0,
-                    field_BC_sprite_scale);
             }
             field_BC_sprite_scale -= FP_FromDouble(0.008);
 
