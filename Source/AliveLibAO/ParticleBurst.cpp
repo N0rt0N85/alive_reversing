@@ -36,6 +36,20 @@ static inline FP Random_Speed(FP scale)
 ParticleBurst* ParticleBurst::ctor_40D0F0(FP xpos, FP ypos, s16 particleCount, FP scale, BurstType type)
 {
     ctor_417C10();
+#ifdef TETHYS_SATURN
+    // SATURN (bt829): CONFIRMED ROOT of the death-on-mine crash. The mine's
+    // falling-rocks burst emits ~35 sprites; on top of Abe + the scene they
+    // overflow SGL's sort/work area (the P2-proven Saturn hazard: a sprite past
+    // the sort-table capacity trashes SGL's work area -> the vblank callback
+    // stomp -> wild jsr -> silent SH-2 reset, "green/black, no fatal"). NOT the
+    // heap (bt828's no-compaction best-effort did not stop it); it is the RENDER
+    // (bt826 skip-render did). Empirically 3 is safe and 35 resets; cap every
+    // burst to a small budget. Cosmetic only -- a few debris sprites instead of a
+    // shower. Raise TETHYS_MAX_BURST_PARTICLES once a higher value is HW/Ymir-
+    // verified stable (the true SGL sort-table headroom depends on scene sprites).
+    #define TETHYS_MAX_BURST_PARTICLES 3
+    if (particleCount > TETHYS_MAX_BURST_PARTICLES) { particleCount = TETHYS_MAX_BURST_PARTICLES; }
+#endif
     SetVTable(this, 0x4BA480);
     field_4_typeId = Types::eParticleBurst_19;
     field_BC_sprite_scale = scale;
