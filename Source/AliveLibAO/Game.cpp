@@ -24,6 +24,7 @@
 #include "Midi.hpp"
 #include "PauseMenu.hpp"
 #include "Abe.hpp"
+#include "SaveGame.hpp" // SATURN bt816: seed gSaveBuffer_505668 at boot
 #include "ShadowZone.hpp"
 #include "CameraSwapper.hpp"
 #include "AmbientSound.hpp"
@@ -650,6 +651,13 @@ EXPORT void Game_Run_4373D0()
         pPauseMenu_5080E0 = ao_new<PauseMenu>();
         pPauseMenu_5080E0->ctor_44DEA0();
     }
+    // SATURN (bt816): the jump-start above skipped NewGameStart / the
+    // ContinuePoint TLV that seed the death-respawn buffer. Seed it now from the
+    // live R1P15C01 map + Abe so a death BEFORE any checkpoint reloads THIS
+    // resident screen, not SetActiveCam(eMenu_0,0,0) on a zeroed buffer (which
+    // loads a level the Saturn never opened -> null-handle crash). See
+    // SaveGame::Tethys_SeedSaveBuffer.
+    SaveGame::Tethys_SeedSaveBuffer();
 #else
     Path_Set_NewData_FromLvls();
 

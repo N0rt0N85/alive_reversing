@@ -101,6 +101,17 @@ public:
 
     static s16 GetPathId(s16 pathToFind, s16* outFoundPathRow = nullptr);
     static s32 Hash(SaveData* table);
+#ifdef TETHYS_SATURN
+    // SATURN (bt816): seed gSaveBuffer_505668 from the live map + Abe at boot.
+    // The R1P15C01 jump-start (Game.cpp) skips NewGameStart AND the ContinuePoint
+    // TLV that normally seed the buffer, so a death BEFORE Abe touches a
+    // checkpoint drives Abe::Motion_61_Respawn -> LoadFromMemory_459970 ->
+    // SetActiveCam(field_234/236/238 = 0/0/0) = level 0 (eMenu) -- a level the
+    // Saturn boot never opened -> missing resource -> null-handle deref
+    // (0x20000200) = the death-on-mine crash (upstream even warns of it at
+    // Abe.cpp Motion_61_Respawn). Seed once so death reloads the CURRENT screen.
+    static void CC Tethys_SeedSaveBuffer();
+#endif
 };
 
 extern const s8 word_4BC670[6][8];

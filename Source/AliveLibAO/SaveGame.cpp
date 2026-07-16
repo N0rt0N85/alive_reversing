@@ -149,6 +149,16 @@ void SaveGame::LoadFromMemory_459970(SaveData* pData, s32 bKillObjects)
         1);
 }
 
+#ifdef TETHYS_SATURN
+// SATURN (bt816): see SaveGame.hpp. Captures the live map (current level/path/
+// camera) + Abe into gSaveBuffer_505668 so the death->respawn LoadFromMemory
+// reloads THIS (resident) screen instead of the zeroed SetActiveCam(0,0,0).
+void CC SaveGame::Tethys_SeedSaveBuffer()
+{
+    SaveToMemory_459490(&gSaveBuffer_505668);
+}
+#endif
+
 const s8 word_4BC670[6][8] = {
     {0x0F, 0x10, 0x11, 0x12, 0x13, 0x14, 0x00, 0x00},
     {0x01, 0x02, 0x03, 0x0A, 0x00, 0x00, 0x00, 0x00},
