@@ -1534,6 +1534,9 @@ LoadingFile* CC ResourceManager::LoadResourceFile_4551E0(const char_type* pFileN
     return pLoadingFile;
 }
 
+#ifdef TETHYS_SATURN
+extern "C" [[noreturn]] void Tethys_Fatal(const char_type* msg); // SATURN bt814
+#endif
 u8** ResourceManager::Alloc_New_Resource_Impl(u32 type, u32 id, u32 size, bool locked, BlockAllocMethod allocType)
 {
     u8** ppNewRes = Allocate_New_Block_454FE0(size + sizeof(Header), allocType);
@@ -1552,6 +1555,35 @@ u8** ResourceManager::Alloc_New_Resource_Impl(u32 type, u32 id, u32 size, bool l
         pHeader->field_4_ref_count = 1;
         pHeader->field_6_flags = locked ? ResourceHeaderFlags::eLocked : 0;
     }
+#ifdef TETHYS_SATURN
+    else
+    {
+        // SATURN (bt814): the null-handle bug class. Upstream callers do NOT
+        // check this handle for null (PC's 5.12 MB heap never fails); on SH-2 a
+        // returned null is *deref'd -> reads the BIOS reset-vector region
+        // (0x20000200) and a bogus pointer/store detonates a frame later -- the
+        // prime suspect for the death-on-mine 0x20000226 stomp of the SRL sync
+        // events. Fail LOUD, naming the resource (fourcc type + hex size),
+        // instead of a silent null. Never fires in normal play (the game reaches
+        // the mine screen fine); if it fires, a death/explosion resource could
+        // not be served by the cart heap.
+        static char_type msg[40];
+        char_type* p = msg;
+        for (const char_type* s = "RES NULL "; *s; s++) { *p++ = *s; }
+        *p++ = static_cast<char_type>(type & 0xFF);        // fourcc, low byte first
+        *p++ = static_cast<char_type>((type >> 8) & 0xFF);
+        *p++ = static_cast<char_type>((type >> 16) & 0xFF);
+        *p++ = static_cast<char_type>((type >> 24) & 0xFF);
+        *p++ = ' ';
+        for (s32 i = 0; i < 8; i++)
+        {
+            const u32 nib = (size >> (28 - 4 * i)) & 0xF;
+            *p++ = static_cast<char_type>(nib < 10 ? '0' + nib : 'a' + nib - 10);
+        }
+        *p = 0;
+        Tethys_Fatal(msg);
+    }
+#endif
     return ppNewRes;
 }
 
