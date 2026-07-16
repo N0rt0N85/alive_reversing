@@ -16,6 +16,17 @@
 
 namespace AO {
 
+#ifdef TETHYS_SATURN
+// SATURN (bt826): death-on-mine R1P15C01 is the BaseBomb's falling-rocks
+// ParticleBurst (skipping its creation stopped the crash, bt825). Bisect WITHIN
+// it -- pad-0 X skips VRender_40D7F0, L skips VUpdate_40D600. If X stops the
+// crash the wild jsr is in the render (VRender2_403FD0 derefs the shared
+// field_10_anim block WITHOUT the null guard Animation::VRender_403AE0 has); if L
+// stops it, the update; if neither, the ctor's locked resource alloc + item
+// setup (the 35*0x88 B block on the memory-tight R1P15 resource heap).
+extern "C" volatile u8 Tethys_gDbgSkip;
+#endif
+
 struct ParticleBurst_Item final
 {
     FP field_0_x;
@@ -218,6 +229,9 @@ void ParticleBurst::VUpdate()
 
 void ParticleBurst::VUpdate_40D600()
 {
+#ifdef TETHYS_SATURN
+    if (Tethys_gDbgSkip & 4u) { return; } // L: bisect -- skip the burst update
+#endif
     for (s32 i = 0; i < field_EC_count; i++)
     {
         ParticleBurst_Item* pItem = &field_E8_pRes[i];
@@ -291,6 +305,9 @@ void ParticleBurst::VRender(PrimHeader** ppOt)
 
 void ParticleBurst::VRender_40D7F0(PrimHeader** ppOt)
 {
+#ifdef TETHYS_SATURN
+    if (Tethys_gDbgSkip & 2u) { return; } // X: bisect -- skip the burst render
+#endif
     if (sNumCamSwappers_507668 != 0)
     {
         return;
