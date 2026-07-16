@@ -180,7 +180,7 @@ struct PathData final
     s16 field_12;
     s32 field_14_object_offset;
     s32 field_18_object_index_table_offset;
-    PathFunctionTable field_1C_object_funcs;
+    const PathFunctionTable* field_1C_object_funcs; // SATURN: by-value 1024-byte table x 1386 PathData entries = 1.41 MB of .data; one read site (Map.cpp:2047)
 };
 
 struct CollisionInfo;

@@ -4138,10 +4138,23 @@ void Abe::Motion_0_Idle_423520()
                 case TlvTypes::DemoPlaybackStone_96:
                 case TlvTypes::HandStone_100:
                 {
+#ifdef TETHYS_SATURN
+                    // SATURN: stones are inert until S8+ -- MovieStone needs
+                    // the (stubbed) Movie class, HandStone flips to its
+                    // board-view camera and back (two full camera loads
+                    // against the tight heap; its DeathFadeOut renders as a
+                    // no-op Tile until S8) and DemoPlayback replays need the
+                    // demo path validated. S7 field report: using the C02
+                    // "Directoire" stone glued Abe to it. Play the shrug
+                    // instead of entering the stone state machine.
+                    field_FC_current_motion = eAbeMotions::Motion_36_DunnoBegin_423260;
+                    break;
+#else
                     field_F0_pTlv = pTlv;
                     field_FC_current_motion = eAbeMotions::Motion_88_HandstoneBegin_430590;
                     field_110_state.stone = StoneStates::eHandstoneStart_0;
                     return;
+#endif
                 }
                 case TlvTypes::BoomMachine_97:
                 {

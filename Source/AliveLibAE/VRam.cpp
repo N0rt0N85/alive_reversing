@@ -207,8 +207,23 @@ EXPORT void CC Vram_alloc_explicit_4955F0(s16 x, s16 y, s16 w, s16 h)
     }
 }
 
+#ifdef TETHYS_SATURN
+// SATURN (P8): Vram_free_495A60 is the ONLY point where the game releases a
+// VRAM rect (Animation::VCleanUp, FG1 dtor, Paramite/Scrab far-away frees).
+// The backend keeps one VDP1 texture slot per live rect and must retire it
+// there, BEFORE the model recycles the coordinates for the next camera's
+// allocs -- a stale slot would alias the recycled rect (same origin,
+// possibly different depth). Defined in src/renderer_saturn.cxx; pure
+// function of the rect, silent when no slot matches (never-uploaded rects),
+// safe at any time (mid-gameplay frees included).
+extern "C" void Tethys_VramFree(s16 x, s16 y, s16 w, s16 h);
+#endif
+
 EXPORT void CC Vram_free_495A60(PSX_Point xy, PSX_Point wh)
 {
+#ifdef TETHYS_SATURN
+    Tethys_VramFree(xy.field_0_x, xy.field_2_y, wh.field_0_x, wh.field_2_y); // SATURN: P8 hook, see above
+#endif
     // Find the allocation
     for (s32 i = 0; i < sVramNumberOfAllocations_5CC888; i++)
     {

@@ -30,8 +30,52 @@ ALIVE_VAR(1, 0x9F0E50, s16, sAllocationFailed_9F0E50, 0);
 ALIVE_VAR(1, 0x50EE2C, ResourceManager::ResourceHeapItem*, sFirstLinkedListItem_50EE2C, nullptr);
 ALIVE_VAR(1, 0x50EE28, ResourceManager::ResourceHeapItem*, sSecondLinkedListItem_50EE28, nullptr);
 
+#ifdef TETHYS_SATURN
+// SATURN: the 5.12 MB static heap does not even link on Saturn (HWRAM = 1 MB).
+// The shrunk heap lives in LWRAM; the platform layer (src/main.cxx) allocates
+// it and binds it through Tethys_BindResourceHeap() before Init_454DA0 runs.
+// Sizing: R1P15C01's REAL resident set measured at S4 is 817,980 B with the
+// FG1 CHNK block still unallocated -- 819200 left 1.2 KB of margin and the
+// FG1 ctor's unchecked Allocate_New_Locked_Resource returned null (wild
+// writes through *nullptr). The VAG/entry sound tables moved out of LWRAM
+// (main.cxx: VDP1 VRAM tail until the S9 SCSP move) to fund this growth.
+// S5: +20 KB more, funded by the CLUT mirror's move to the same tail --
+// the S4 construct peak (1,002,460) came within 1,060 B of the previous
+// 1,003,520 cap and the LCDScreen FntP alloc died exactly there.
+// NOT higher: the heap is ONE LWRAM TLSF malloc and TLSF's good-fit search
+// rounds the request up by its size-class granularity (16 KB in the
+// 512K..1M band) -- 1,036,288 rounded crosses into the 2^20 class, which
+// no block in a 1 MB pool can satisfy ("LWRAM alloc: resource heap" boot
+// fatal with 1,045,380 B reported free). 1,024,000 + 16,383 stays inside
+// the top fl19 class and matches the pool's ~1,045 K block.
+u32 kResHeapSize = 1024000; // SATURN: runtime now (cart mode raises it)
+u8* sResourceHeap_50EE38 = nullptr;
+
+void Tethys_BindResourceHeap(u8* pHeap)
+{
+    sResourceHeap_50EE38 = pHeap;
+}
+
+u32 Tethys_ResHeapSize()
+{
+    return kResHeapSize;
+}
+
+// SATURN cart mode (S8): when a RAM cartridge is present the whole resource
+// heap relocates into it (main.cxx BindLowWorkRamBlocks) and grows past the
+// LWRAM/TLSF good-fit ceiling of 1,036,288 (a raw cart pointer bypasses TLSF).
+// MUST be called before Tethys_BindResourceHeap + Init_454DA0. Every internal
+// reader of kResHeapSize (Init extent, the Move_Resources out-of-heap sentinel,
+// Reclaim, the diagnostics) tracks the new value automatically -- the name is
+// unchanged -- so a stale-small size (false "out of heap") cannot happen.
+void Tethys_SetResHeapSize(u32 n)
+{
+    kResHeapSize = n;
+}
+#else
 const u32 kResHeapSize = 5120000;
 ALIVE_ARY(1, 0x50EE38, u8, kResHeapSize, sResourceHeap_50EE38, {}); // Huge 5.4 MB static resource buffer
+#endif
 
 const u32 kLinkedListArraySize = 375;
 ALIVE_ARY(1, 0x50E270, ResourceManager::ResourceHeapItem, kLinkedListArraySize, sResourceLinkedList_50E270, {});
@@ -47,6 +91,145 @@ EXPORT void CC Odd_Sleep_48DD90(u32 /*dwMilliseconds*/)
 
 ALIVE_VAR(1, 0x507714, s32, gFilesPending_507714, 0);
 ALIVE_VAR(1, 0x50768C, s16, bLoadingAFile_50768C, 0);
+
+#ifdef TETHYS_SATURN
+// SATURN: LoadingFile state-0 allocation retry counter (wedge detector --
+// see the fatal in VUpdate_41E900).
+static u32 Tethys_gState0Retries = 0;
+
+// SATURN sticky resources (S7): the flip protocol frees the old camera's
+// refs BEFORE the new camera queues its list, so shared heavyweights -- the
+// walking-Slig set, ~380 K across SLIG.BND + SLIGZ.BND + 7 SLG*.BAN --
+// are freed and re-read whole on EVERY flip between Slig screens. The
+// re-read's whole-file staging (SLIG.BND alone = 82 sectors = 167,936 B
+// contiguous ON TOP of the new camera's set) is what wedged C02->C03 with
+// us=993,080/1,024,000. Files matched by Tethys_StickyName get ONE extra
+// permanent ref on their requested (type,id) at first load: the chunks then
+// survive camera teardown, the next queue's dedup finds them resident, and
+// the file is never staged again. Scope: R1 is Slig-land, every P15 camera
+// wants the set. Tethys_ReleaseStickyResources() drops the extra refs at
+// LEVEL change (Map.cpp SATURN hook) so the next level does not inherit it.
+struct TethysStickyEntry
+{
+    u32 type;
+    u32 id;
+};
+static TethysStickyEntry sTethysStickyPending[20] = {};
+static s32 sTethysStickyPendingCount = 0;
+static TethysStickyEntry sTethysStickyHeld[20] = {};
+static s32 sTethysStickyHeldCount = 0;
+
+static bool Tethys_StickyName(const char_type* pFileName)
+{
+    return strncmp(pFileName, "SLG", 3) == 0
+        || strcmp(pFileName, "SLIG.BND") == 0
+        || strcmp(pFileName, "SLIGZ.BND") == 0;
+}
+
+static bool Tethys_StickyIn(const TethysStickyEntry* pTable, s32 count, u32 type, u32 id)
+{
+    for (s32 i = 0; i < count; i++)
+    {
+        if (pTable[i].type == type && pTable[i].id == id)
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
+// Called at every LoadResource request carrying a file name (the only place
+// names exist). Resident already -> take the permanent ref NOW; else mark
+// pending for On_Loaded_446C10.
+static void Tethys_StickyRequest(const char_type* pFileName, u32 type, u32 id)
+{
+    if (!Tethys_StickyName(pFileName)
+        || Tethys_StickyIn(sTethysStickyHeld, sTethysStickyHeldCount, type, id))
+    {
+        return;
+    }
+    if (ResourceManager::GetLoadedResource_4554F0(type, id, 1, 0)) // the permanent ref
+    {
+        if (sTethysStickyHeldCount < 20)
+        {
+            sTethysStickyHeld[sTethysStickyHeldCount].type = type;
+            sTethysStickyHeld[sTethysStickyHeldCount].id = id;
+            sTethysStickyHeldCount++;
+        }
+        return;
+    }
+    if (!Tethys_StickyIn(sTethysStickyPending, sTethysStickyPendingCount, type, id)
+        && sTethysStickyPendingCount < 20)
+    {
+        sTethysStickyPending[sTethysStickyPendingCount].type = type;
+        sTethysStickyPending[sTethysStickyPendingCount].id = id;
+        sTethysStickyPendingCount++;
+    }
+}
+
+// Called from On_Loaded_446C10 once the chunk exists in the heap.
+static void Tethys_StickyMaterialize(u32 type, u32 id)
+{
+    for (s32 i = 0; i < sTethysStickyPendingCount; i++)
+    {
+        if (sTethysStickyPending[i].type == type && sTethysStickyPending[i].id == id)
+        {
+            if (ResourceManager::GetLoadedResource_4554F0(type, id, 1, 0) // the permanent ref
+                && sTethysStickyHeldCount < 20)
+            {
+                sTethysStickyHeld[sTethysStickyHeldCount].type = type;
+                sTethysStickyHeld[sTethysStickyHeldCount].id = id;
+                sTethysStickyHeldCount++;
+            }
+            sTethysStickyPending[i] = sTethysStickyPending[--sTethysStickyPendingCount];
+            return;
+        }
+    }
+}
+
+// Level change: drop every permanent ref (the freed chunks then reclaim
+// normally) and forget everything. Wired in Map.cpp's level-change block.
+void Tethys_ReleaseStickyResources()
+{
+    for (s32 i = 0; i < sTethysStickyHeldCount; i++)
+    {
+        u8** ppRes = ResourceManager::GetLoadedResource_4554F0(
+            sTethysStickyHeld[i].type, sTethysStickyHeld[i].id, 0, 0);
+        if (ppRes)
+        {
+            ResourceManager::FreeResource_455550(ppRes);
+        }
+    }
+    sTethysStickyHeldCount = 0;
+    sTethysStickyPendingCount = 0;
+}
+
+// Wedge diagnostics (S7 round 6): a staging block that cannot fit is now a
+// GENUINE working-set overflow (post-round-5 the CAM no longer stages -- the
+// remaining wedges are factory BNDs like EXPLODE.BND on Slig+Mudokon+explosion
+// screens whose resident set exceeds the 1,024,000 B heap). Name the SCREEN
+// (sCameraBeingLoaded's .CAM) on the forensic fatal so a field photo says
+// exactly which camera overflowed -- the input to deciding critical-path
+// (asset reduction) vs skippable. The stuck file's sector count is already on
+// overlay row 5 (q/st/sz), so it is not re-formatted here (keeps .text down).
+static void Tethys_WedgeFatal()
+{
+    static char_type msg[40];
+    char_type* p = msg;
+    for (const char_type* s = "LWRAM wedge "; *s; s++)
+    {
+        *p++ = *s;
+    }
+    Camera* pCam = sCameraBeingLoaded_507C98;
+    const char_type* nm = (pCam && pCam->field_1E_fileName[0]) ? pCam->field_1E_fileName : "?";
+    for (const char_type* s = nm; *s && p < &msg[39]; s++)
+    {
+        *p++ = *s;
+    }
+    *p = 0;
+    ALIVE_FATAL(msg);
+}
+#endif
 
 class LoadingFile final  : public BaseGameObject
 {
@@ -125,10 +308,62 @@ public:
                         ResourceManager::Increment_Pending_Count_4557A0();
                         bLoadingAFile_50768C = 1;
                         field_28_state = 1;
+#ifdef TETHYS_SATURN
+                        Tethys_gState0Retries = 0;
+#endif
                     }
                     else
                     {
                         ResourceManager::Reclaim_Memory_455660(200000u);
+#ifdef TETHYS_SATURN
+                        // SATURN: on the 1,024,000 B heap this retry loop is
+                        // the S7 wedge mode -- the whole-file staging block
+                        // (field_10_size << 11) cannot fit, Reclaim no-ops
+                        // while resources are pending, LoadingLoop never
+                        // yields to the destroy pass, and the screen freezes
+                        // forever with no CD activity (first hit: SLIG.BND,
+                        // 82 sectors, at the C02->C03 flip).
+                        ++Tethys_gState0Retries;
+
+                        // Sticky-until-pressure (S7 round 4): the sticky Slig
+                        // set (~250-300 K permanent) plus Abe's resident banks
+                        // leaves ~68 K free at flip time, and a flip must
+                        // stage the WHOLE new .CAM contiguously (72-111 K in
+                        // R1P15 -- field round 4 wedged on R1P15C10.CAM, 41
+                        // sectors, us 955,696). When staging cannot be
+                        // served: drop the sticky refs (chunks with no other
+                        // holder free up; ones the new queue already re-
+                        // requested survive via their camera ref) and force a
+                        // full compaction with the pending guard masked --
+                        // safe here because bLoadingAFile==0 gates this state,
+                        // so no file owns a read buffer and every pending
+                        // file is buffer-less at state 0; live chunks are
+                        // handle-addressed (the PSX ran this same compactor
+                        // under gameplay) and eLocked ones are skipped. Cost:
+                        // the next Slig screen re-stages its set once, into
+                        // the ~300 K that just opened. Three passes because
+                        // one list walk does not fully compact.
+                        if (Tethys_gState0Retries == 10)
+                        {
+                            Tethys_ReleaseStickyResources();
+                            const s16 savedPending = sResources_Pending_Loading_9F0E38;
+                            sResources_Pending_Loading_9F0E38 = 0;
+                            ResourceManager::Reclaim_Memory_455660(0);
+                            ResourceManager::Reclaim_Memory_455660(0);
+                            ResourceManager::Reclaim_Memory_455660(0);
+                            sResources_Pending_Loading_9F0E38 = savedPending;
+                        }
+
+                        // Still stuck after the pressure release: turn ~10 s
+                        // of silent spin into the forensic death screen. The
+                        // fatal names the screen + the stuck file's sectors
+                        // (Tethys_WedgeFatal), and the heap top-8 names the
+                        // occupants.
+                        if (Tethys_gState0Retries > 600)
+                        {
+                            Tethys_WedgeFatal();
+                        }
+#endif
                     }
                 }
                 break;
@@ -166,7 +401,8 @@ public:
             case 4:
                 ResourceManager::Move_Resources_To_DArray_455430(
                     field_20_ppRes,
-                    &field_1C_pCamera->field_0_array);
+                    &field_1C_pCamera->field_0_array,
+                    static_cast<u32>(field_10_size) << 11); // SATURN: block bound
                 field_28_state = 5;
                 break;
 
@@ -211,6 +447,10 @@ public:
         return this;
     }
 
+#ifdef TETHYS_SATURN
+    friend void Tethys_LoadingProbe(s32* pCount, s32* pState, s32* pSizeSectors);
+#endif
+
     s32 field_10_size;
     TLoaderFn field_14_fn;
     void* field_18_fn_arg;
@@ -222,6 +462,249 @@ public:
     s16 field_2E_pad;
 };
 ALIVE_ASSERT_SIZEOF(LoadingFile, 0x30);
+
+#ifdef TETHYS_SATURN
+// SATURN: is this a plausible pointer for heap bookkeeping? The S5 wild-jump
+// fatal (pc ffffe1fa) froze a death screen whose rows 7+ never printed: the
+// heap walkers below chased a corrupted chain into their OWN nested CPU
+// exception. Every deref in the forensics must be range-checked.
+static bool Tethys_PtrSane(const void* p)
+{
+    const u32 a = reinterpret_cast<u32>(p);
+    if (a & 3)
+    {
+        return false;
+    }
+    return (a >= 0x06000000u && a < 0x06100000u) // HWRAM
+        || (a >= 0x00200000u && a < 0x00300000u) // LWRAM
+        || (a >= 0x02400000u && a < 0x02800000u); // cart RAM cached window (up to 4MB, S8 cart mode)
+}
+
+// SATURN: continuous physical-heap integrity check (live overlay row):
+// 0 = every header stride is sane up to the heap end, else the byte offset
+// of the first corrupt header. Localizes WHEN corruption starts instead of
+// only seeing its wild-jump aftermath.
+s32 Tethys_HeapCheck()
+{
+    const u8* pBase = sResourceHeap_50EE38;
+    if (!pBase)
+    {
+        return 0;
+    }
+    const u8* pCur = pBase;
+    const u8* pEnd = pBase + kResHeapSize;
+    u32 guard = 0;
+    while (pCur + sizeof(ResourceManager::Header) <= pEnd && guard++ <= 4096u)
+    {
+        const ResourceManager::Header* pHdr = reinterpret_cast<const ResourceManager::Header*>(pCur);
+        if (pHdr->field_0_size < sizeof(ResourceManager::Header) || (pHdr->field_0_size & 3)
+            || pCur + pHdr->field_0_size > pEnd)
+        {
+            return static_cast<s32>(pCur - pBase) | 1; // never 0
+        }
+        pCur += pHdr->field_0_size;
+    }
+    return 0;
+}
+
+// SATURN (S7): physical heap usage by stride walk -- used bytes + live block
+// count of non-Free headers. The no-leak gate CANNOT use
+// sManagedMemoryUsedSize_9F0E48: Allocate_New_Block adds the ROUNDED REQUEST
+// (:1086) but Split_block declines to split when the remainder < a Header
+// (:954-978) and FreeResource later subtracts the block's LARGER real size
+// (:1359) -- up to 15 B of drift per alloc/free cycle, accumulating every
+// lap. The walk reads what is physically there. Returns 0 on success, -1 on
+// a corrupt stride (same detection as Tethys_HeapCheck).
+s32 Tethys_HeapUsage(u32* pUsedBytes, u32* pLiveBlocks)
+{
+    *pUsedBytes = 0;
+    *pLiveBlocks = 0;
+    const u8* pBase = sResourceHeap_50EE38;
+    if (!pBase)
+    {
+        return 0;
+    }
+    const u8* pCur = pBase;
+    const u8* pEnd = pBase + kResHeapSize;
+    u32 guard = 0;
+    while (pCur + sizeof(ResourceManager::Header) <= pEnd && guard++ <= 4096u)
+    {
+        const ResourceManager::Header* pHdr = reinterpret_cast<const ResourceManager::Header*>(pCur);
+        if (pHdr->field_0_size < sizeof(ResourceManager::Header) || (pHdr->field_0_size & 3)
+            || pCur + pHdr->field_0_size > pEnd)
+        {
+            return -1;
+        }
+        if (pHdr->field_8_type != ResourceManager::Resource_Free)
+        {
+            *pUsedBytes += pHdr->field_0_size;
+            (*pLiveBlocks)++;
+        }
+        pCur += pHdr->field_0_size;
+    }
+    return 0;
+}
+
+// SATURN: fatal-time heap accounting (src/sys_saturn.cxx death screen) --
+// the idx-th biggest non-Free block of the resource heap, by selection scan
+// over the used chain (~174 nodes; only runs on the frozen fatal screen).
+void Tethys_HeapTop(s32 idx, u32* pType, u32* pId, u32* pSize)
+{
+    *pType = 0;
+    *pId = 0;
+    *pSize = 0;
+    u32 prevSize = 0xFFFFFFFFu;
+    u32 prevId = 0xFFFFFFFFu;
+    for (s32 rank = 0; rank <= idx; rank++)
+    {
+        u32 bestSize = 0;
+        u32 bestType = 0;
+        u32 bestId = 0;
+        u32 guard = 0;
+        for (ResourceManager::ResourceHeapItem* pItem = sFirstLinkedListItem_50EE2C;
+             pItem && guard <= 375u;
+             pItem = pItem->field_4_pNext, guard++)
+        {
+            if (!Tethys_PtrSane(pItem) || !Tethys_PtrSane(pItem->field_0_ptr))
+            {
+                break; // corrupted chain: report what accumulated so far
+            }
+            ResourceManager::Header* pHdr = ResourceManager::Get_Header_455620(&pItem->field_0_ptr);
+            if (pHdr->field_8_type == ResourceManager::Resource_Free)
+            {
+                continue;
+            }
+            // Strictly below the previous rank; ties broken by id so equal
+            // sizes are enumerated once each.
+            if (pHdr->field_0_size > prevSize
+                || (pHdr->field_0_size == prevSize && pHdr->field_C_id >= prevId))
+            {
+                continue;
+            }
+            if (pHdr->field_0_size > bestSize)
+            {
+                bestSize = pHdr->field_0_size;
+                bestType = pHdr->field_8_type;
+                bestId = pHdr->field_C_id;
+            }
+        }
+        prevSize = bestSize;
+        prevId = bestId;
+        *pType = bestType;
+        *pId = bestId;
+        *pSize = bestSize;
+    }
+}
+
+// SATURN: is (type, id) resident? -> block size, or -1.
+s32 Tethys_HeapFind(u32 type, u32 id)
+{
+    u32 guard = 0;
+    for (ResourceManager::ResourceHeapItem* pItem = sFirstLinkedListItem_50EE2C;
+         pItem && guard <= 375u;
+         pItem = pItem->field_4_pNext, guard++)
+    {
+        if (!Tethys_PtrSane(pItem) || !Tethys_PtrSane(pItem->field_0_ptr))
+        {
+            return -3; // corrupted chain
+        }
+        ResourceManager::Header* pHdr = ResourceManager::Get_Header_455620(&pItem->field_0_ptr);
+        if (pHdr->field_8_type == type && pHdr->field_C_id == id)
+        {
+            return static_cast<s32>(pHdr->field_0_size);
+        }
+    }
+    return -1;
+}
+
+// SATURN: same question asked of the PHYSICAL heap (header-to-header by
+// size stride, list ignored). List-find -1 but raw-scan hit = the linked
+// list lost the block (Reclaim compactor suspect -- code the PC build
+// never exercises: its 5.12 MB heap feels no pressure at boot).
+s32 Tethys_HeapScanRaw(u32 type, u32 id)
+{
+    const u8* pCur = sResourceHeap_50EE38;
+    const u8* pEnd = sResourceHeap_50EE38 + kResHeapSize;
+    u32 guard = 0;
+    while (pCur + sizeof(ResourceManager::Header) <= pEnd && guard++ <= 2048u)
+    {
+        const ResourceManager::Header* pHdr = reinterpret_cast<const ResourceManager::Header*>(pCur);
+        if (pHdr->field_8_type == type && pHdr->field_C_id == id)
+        {
+            return static_cast<s32>(pHdr->field_0_size);
+        }
+        if (pHdr->field_0_size < sizeof(ResourceManager::Header) || (pHdr->field_0_size & 3))
+        {
+            return -2; // stride corrupt: physical chain unwalkable past here
+        }
+        pCur += pHdr->field_0_size;
+    }
+    return -1;
+}
+
+// SATURN: which resident block CONTAINS pointer p? Physical stride walk
+// (same hazards as Tethys_HeapScanRaw). Returns the offset of p inside the
+// block (header included) with the owner's type/id in the out params, or
+// -1 (p outside the heap / stride corrupt before reaching it). Names the
+// object whose data a rogue OT prim lives in.
+s32 Tethys_HeapOwner(const void* p, u32* pType, u32* pId)
+{
+    *pType = 0;
+    *pId = 0;
+    const u8* pTarget = static_cast<const u8*>(p);
+    const u8* pCur = sResourceHeap_50EE38;
+    const u8* pEnd = sResourceHeap_50EE38 + kResHeapSize;
+    if (pTarget < pCur || pTarget >= pEnd)
+    {
+        return -1;
+    }
+    u32 guard = 0;
+    while (pCur + sizeof(ResourceManager::Header) <= pEnd && guard++ <= 2048u)
+    {
+        const ResourceManager::Header* pHdr = reinterpret_cast<const ResourceManager::Header*>(pCur);
+        if (pHdr->field_0_size < sizeof(ResourceManager::Header) || (pHdr->field_0_size & 3))
+        {
+            return -1; // stride corrupt before reaching p
+        }
+        if (pTarget < pCur + pHdr->field_0_size)
+        {
+            *pType = pHdr->field_8_type;
+            *pId = pHdr->field_C_id;
+            return static_cast<s32>(pTarget - pCur);
+        }
+        pCur += pHdr->field_0_size;
+    }
+    return -1;
+}
+
+// SATURN: S4 soft-hang forensics for the platform overlay (src/sys_saturn.cxx)
+// -- the LoadingFile class is TU-local, so its head state is exposed here.
+void Tethys_LoadingProbe(s32* pCount, s32* pState, s32* pSizeSectors)
+{
+    *pCount = -1;
+    *pState = -1;
+    *pSizeSectors = -1;
+    if (gLoadingFiles && Tethys_PtrSane(gLoadingFiles))
+    {
+        *pCount = gLoadingFiles->Size();
+        for (s32 i = 0; i < gLoadingFiles->Size(); i++)
+        {
+            LoadingFile* pFile = static_cast<LoadingFile*>(gLoadingFiles->ItemAt(i));
+            if (pFile && !Tethys_PtrSane(pFile))
+            {
+                *pState = -3; // corrupted list
+                break;
+            }
+            if (pFile)
+            {
+                *pState = pFile->field_28_state;
+                *pSizeSectors = pFile->field_10_size;
+                break;
+            }
+        }
+    }
+}
+#endif
 
 void CC Game_ShowLoadingIcon_445EB0()
 {
@@ -288,6 +771,9 @@ void CC ResourceManager::On_Loaded_446C10(ResourceManager_FileRecord* pLoaded)
         if (ppRes)
         {
             pFilePart->field_8_pCamera->field_0_array.Push_Back(ppRes);
+#ifdef TETHYS_SATURN
+            Tethys_StickyMaterialize(pFilePart->field_0_type, pFilePart->field_4_res_id); // SATURN: see the sticky block
+#endif
         }
 
         ao_delete_free_447540(pFilePart);
@@ -310,6 +796,10 @@ void CC ResourceManager::LoadResource_446C90(const char_type* pFileName, u32 typ
     {
         return;
     }
+
+#ifdef TETHYS_SATURN
+    Tethys_StickyRequest(pFileName, type, resourceId); // SATURN: see the sticky block above LoadingFile
+#endif
 
     u8** ppExistingRes = ResourceManager::GetLoadedResource_4554F0(type, resourceId, 1, 0);
     if (ppExistingRes)
@@ -402,6 +892,18 @@ void CC ResourceManager::LoadResourcesFromList_446E80(const char_type* pFileName
     {
         return;
     }
+
+#ifdef TETHYS_SATURN
+    // SATURN: sticky heavyweights come through THIS entry too -- SLIG.BND
+    // (the 82-sector wedge file) is requested as a list (Factory.cpp:784,
+    // kSligResources_4BD1CC), not via LoadResource_446C90.
+    for (s32 i = 0; i < pTypeAndIdList->field_0_count; i++)
+    {
+        Tethys_StickyRequest(pFileName,
+                             pTypeAndIdList->field_4_items[i].field_0_type,
+                             pTypeAndIdList->field_4_items[i].field_4_res_id);
+    }
+#endif
 
     // Check if all resources are already loaded
     bool allResourcesLoaded = true;
@@ -700,7 +1202,19 @@ void CC ResourceManager::Init_454DA0()
 ResourceManager::ResourceHeapItem* ResourceManager::Push_List_Item()
 {
     auto old = sSecondLinkedListItem_50EE28;
-    sSecondLinkedListItem_50EE28 = sSecondLinkedListItem_50EE28->field_4_pNext;
+#ifdef TETHYS_SATURN
+    // SATURN: the kLinkedListArraySize (375) node pool is a HARD cap on live
+    // blocks; exhaustion used to null-write in the callers (Split_block /
+    // Move_Resources) -> the BIOS-vector crash class. A bigger cart heap can
+    // hold more concurrent blocks, so name it: a diagnosable fatal, not a wild
+    // crash. If this ever fires, grow the node array (into cart RAM, not the
+    // tight HWRAM .bss pool).
+    if (!old)
+    {
+        ALIVE_FATAL("resource node pool exhausted (375)");
+    }
+#endif
+    sSecondLinkedListItem_50EE28 = old->field_4_pNext;
     return old;
 }
 
@@ -738,12 +1252,272 @@ ResourceManager::ResourceHeapItem* ResourceManager::Split_block(ResourceManager:
     return pItem;
 }
 
+#ifdef TETHYS_SATURN
+// SATURN round 5: CAM streaming. Renderer sinks (src/renderer_saturn.cxx):
+// Begin latches VDP2 VRAM + CRAM bank on first call; Palette writes the CAM's
+// 256 CRAM entries; Pixels CPU-copies a run of the 320x224 plane into VDP2
+// (row-stride remap 320->512 inside); End stamps the flip timer.
+extern "C" void Tethys_CamStreamBegin();
+extern "C" void Tethys_CamStreamPalette(const u8* pal512);
+extern "C" void Tethys_CamStreamPixels(u32 absOff, const u8* src, u32 len);
+extern "C" void Tethys_CamStreamEnd();
+// 71,680 B of HWRAM scratch (the renderer's latch-only sCamPix): [0..2047] is
+// the CD sector bounce (4-aligned, HWRAM -> the seam's fast path), [2048..2559]
+// assembles the 512 B palette for the one-shot CRAM write. No fresh .bss here
+// (a 2.5 KB add pushed the TLSF pool under the pre-flight floor).
+extern "C" u8* Tethys_CamStreamScratch();
+
+namespace {
+// Forward, sector-at-a-time reader over one CD file record. Re-seeks before
+// every read (the seam cursor is a single global -- LvlArchive.cpp precedent)
+// and treats only a FileIOWait of -1 as a hard error (the Saturn seam returns
+// 0 for "done", never 1). A failed read leaves the cursor unmoved, so the
+// bounded retry re-seeks (OpenArchive precedent).
+struct CamSectorReader
+{
+    u8*  sec;       // 2048 B bounce (renderer scratch slice, HWRAM 4-aligned)
+    s32  basePos;   // file-relative start sector of the record
+    s32  numSec;    // sectors in the record
+    s32  nextSec;   // next sector index to fetch
+    u32  bufOff;    // bytes consumed within sec
+    u32  bufLen;    // valid bytes in sec (0 => none loaded yet)
+    bool bad;
+
+    void Init(u8* bounce, s32 base, s32 count)
+    {
+        sec = bounce;
+        basePos = base;
+        numSec = count;
+        nextSec = 0;
+        bufOff = 0;
+        bufLen = 0;
+        bad = false;
+    }
+
+    bool Fill()
+    {
+        if (nextSec >= numSec)
+        {
+            bad = true;
+            return false;
+        }
+        for (s32 attempt = 0; attempt < 8; attempt++)
+        {
+            CdlLOC loc;
+            PSX_Pos_To_CdLoc_49B340(basePos + nextSec, &loc);
+            if (PSX_CD_File_Seek_49B670(2, &loc)
+                && PSX_CD_File_Read_49B8B0(1, sec)
+                && PSX_CD_FileIOWait_49B900(0) != -1)
+            {
+                nextSec++;
+                bufOff = 0;
+                bufLen = 2048;
+                return true;
+            }
+        }
+        bad = true;
+        return false;
+    }
+
+    // Copy n bytes forward into dst, spanning sector refills as needed.
+    void Read(u8* dst, u32 n)
+    {
+        while (n && !bad)
+        {
+            if (bufOff >= bufLen && !Fill())
+            {
+                return;
+            }
+            u32 take = bufLen - bufOff;
+            if (take > n)
+            {
+                take = n;
+            }
+            for (u32 i = 0; i < take; i++)
+            {
+                dst[i] = sec[bufOff + i];
+            }
+            dst += take;
+            bufOff += take;
+            n -= take;
+        }
+    }
+
+    // Route n bytes of the pixel plane to VDP2 with no intermediate copy;
+    // absOff = the plane offset of the first byte produced by this call.
+    void Pixels(u32 absOff, u32 n)
+    {
+        u32 produced = 0;
+        while (n && !bad)
+        {
+            if (bufOff >= bufLen && !Fill())
+            {
+                return;
+            }
+            u32 take = bufLen - bufOff;
+            if (take > n)
+            {
+                take = n;
+            }
+            Tethys_CamStreamPixels(absOff + produced, &sec[bufOff], take);
+            bufOff += take;
+            produced += take;
+            n -= take;
+        }
+    }
+};
+} // namespace
+
+// Fail loud naming the offending .CAM (project rule -- LoadResourceFile_4551E0
+// hardened the sibling path the same way). [[noreturn]] via ALIVE_FATAL.
+static void Tethys_CamStreamFatal(const char_type* pWhat, const char_type* pName)
+{
+    static char_type msg[40];
+    char_type* p = msg;
+    for (const char_type* s = pWhat; *s && p < &msg[31]; s++)
+    {
+        *p++ = *s;
+    }
+    for (const char_type* s = pName; *s && p < &msg[39]; s++)
+    {
+        *p++ = *s;
+    }
+    *p = 0;
+    ALIVE_FATAL(msg);
+}
+
+void CC ResourceManager::Tethys_StreamCamFile(Camera* pCamera)
+{
+    LvlFileRecord* pRec = sLvlArchive_4FFD60.Find_File_Record_41BED0(pCamera->field_1E_fileName);
+    if (!pRec)
+    {
+        Tethys_CamStreamFatal("CAM stream: CD miss ", pCamera->field_1E_fileName);
+    }
+
+    // Latch VDP2 first (Begin's one-time LoadBitmap DMAs sCamPix); only after
+    // it returns is the scratch buffer free to become the CD bounce.
+    Tethys_CamStreamBegin();
+
+    u8* scratch = Tethys_CamStreamScratch();
+    u8* palBuf = scratch + 2048;
+
+    CamSectorReader rd;
+    rd.Init(scratch, sLvlArchive_4FFD60.field_4_cd_pos + pRec->field_C_start_sector, pRec->field_10_num_sectors);
+
+    // Walk the BE chunk chain (Bits, [FG1], [Anim], End!) by header size. The
+    // ONLY clean exit is the End! sentinel; a truncated read (rd.bad -- 8-retry
+    // CD fault or short record) or a malformed size means a torn background and
+    // possibly a half-written FG1 chunk, so it must fail loud with the file
+    // name (project rule; matches LoadResourceFile_4551E0's "CD miss") rather
+    // than commit a partial camera whose Create_FG1s would then walk garbage.
+    bool sawEnd = false;
+    for (;;)
+    {
+        Header hdr;
+        rd.Read(reinterpret_cast<u8*>(&hdr), sizeof(Header));
+        if (rd.bad)
+        {
+            break;
+        }
+        if (hdr.field_8_type == Resource_End)
+        {
+            sawEnd = true;
+            break;
+        }
+        if (hdr.field_0_size < sizeof(Header) || (hdr.field_0_size & 3u))
+        {
+            Tethys_CamStreamFatal("CAM stream: bad chunk size ", pCamera->field_1E_fileName);
+        }
+        const u32 payloadLen = hdr.field_0_size - sizeof(Header);
+
+        if (hdr.field_8_type == Resource_Bits)
+        {
+            // Payload = u16 w | u16 h | 256 x u16 CRAM | 320*224 8bpp indices.
+            if (payloadLen < 4u + 512u) // underflow guard for pixLen below
+            {
+                Tethys_CamStreamFatal("CAM stream: short Bits ", pCamera->field_1E_fileName);
+            }
+            u8 wh[4];
+            rd.Read(wh, 4);
+            const u32 w = (static_cast<u32>(wh[0]) << 8) | wh[1];
+            const u32 h = (static_cast<u32>(wh[2]) << 8) | wh[3];
+            if (w != 320 || h != 224)
+            {
+                Tethys_CamStreamFatal("CAM stream: bad Bits hdr ", pCamera->field_1E_fileName);
+            }
+            rd.Read(palBuf, 512);
+            Tethys_CamStreamPalette(palBuf);
+            rd.Pixels(0, payloadLen - 4u - 512u); // 71,680 -> VDP2, never heaped
+        }
+        else
+        {
+            // Fabricate a heap chunk (FG1/Anim) exactly as Move_Resources
+            // would: type/id from the on-disk header, ref_count 1, one push
+            // into the camera array (Create_FG1s scans it by type; the dtor
+            // frees each entry once -> balanced). Our own alloc-retry stands
+            // in for the LoadingFile state-0 pressure machinery we bypass
+            // (Reclaim runs here -- sResources_Pending_Loading is 0).
+            u8** ppRes = nullptr;
+            for (s32 attempt = 0; attempt < 4 && !ppRes; attempt++)
+            {
+                ppRes = Alloc_New_Resource_454F20(hdr.field_8_type, hdr.field_C_id, payloadLen);
+                if (!ppRes)
+                {
+                    Reclaim_Memory_455660(0);
+                }
+            }
+            if (!ppRes)
+            {
+                ALIVE_FATAL("CAM stream: chunk OOM");
+            }
+            rd.Read(*ppRes, payloadLen); // *ppRes = payload start (after Alloc's 16 B header)
+            if (rd.bad)
+            {
+                break; // truncated payload -- do NOT commit; fatal below
+            }
+            pCamera->field_0_array.Push_Back(ppRes);
+        }
+
+        if (rd.bad)
+        {
+            break; // truncated mid-Bits (palette/pixels) -- fatal below
+        }
+    }
+
+    Tethys_CamStreamEnd();
+
+    if (!sawEnd)
+    {
+        Tethys_CamStreamFatal("CAM stream: torn ", pCamera->field_1E_fileName);
+    }
+    pCamera->field_30_flags |= 1u; // camera resources ready (no field_C_ppBits: Bits live in VDP2)
+}
+#endif
+
 LoadingFile* CC ResourceManager::LoadResourceFile_4551E0(const char_type* pFileName, TLoaderFn fnOnLoad, Camera* pCamera1, Camera* pCamera2)
 {
     LvlFileRecord* pFileRec = sLvlArchive_4FFD60.Find_File_Record_41BED0(pFileName);
     if (!pFileRec)
     {
+#ifdef TETHYS_SATURN
+        // SATURN: on this path (CAM + factory prefetch) every name must
+        // exist; the OG silent skip just defers the death to a later
+        // CheckResourceIsLoaded with the culprit's name lost. Name it now.
+        static char_type msg[32];
+        char_type* p = msg;
+        for (const char_type* s = "CD miss "; *s; s++)
+        {
+            *p++ = *s;
+        }
+        for (const char_type* s = pFileName; *s && p < &msg[31]; s++)
+        {
+            *p++ = *s;
+        }
+        *p = 0;
+        ALIVE_FATAL(msg);
+#else
         return nullptr;
+#endif
     }
 
     auto pLoadingFile = ao_new<LoadingFile>();
@@ -931,14 +1705,28 @@ EXPORT s16 CC ResourceManager::LoadResourceFile_455270(const char_type* filename
         return 0;
     }
 
-    ResourceManager::Move_Resources_To_DArray_455430(ppRes, &pCam->field_0_array);
+    ResourceManager::Move_Resources_To_DArray_455430(ppRes, &pCam->field_0_array,
+                                                      static_cast<u32>(size)); // SATURN: block bound
     return 1;
 }
 
-s16 CC ResourceManager::Move_Resources_To_DArray_455430(u8** ppRes, DynamicArrayT<u8*>* pArray)
+s16 CC ResourceManager::Move_Resources_To_DArray_455430(u8** ppRes, DynamicArrayT<u8*>* pArray, u32 blockBytes)
 {
     auto pItemToAdd = (ResourceHeapItem*) ppRes;
     Header* pHeader = Get_Header_455620(ppRes);
+#ifdef TETHYS_SATURN
+    // SATURN: end of the loaded file block. The chunk walk below strides by
+    // field_0_size; if the on-disk chain lacks a clean terminator it over-runs
+    // the block into ADJACENT heap. On LWRAM the adjacent bytes read as a size
+    // >= the 1 MB heap and the guard below (>= kResHeapSize) stopped it. With
+    // the heap relocated to the 4 MB cart, kResHeapSize is ~4 MB, so an adjacent
+    // "size" in (1 MB, 4 MB] slips through and fabricates a resource pointing
+    // into the zeroed cart tail -> the wild jump to 0x026d27c0. Bounding the
+    // walk to the block makes the over-run detectable regardless of heap size.
+    u8* const pBlockEnd = blockBytes
+        ? reinterpret_cast<u8*>(Get_Header_455620(ppRes)) + blockBytes
+        : nullptr;
+#endif
     if (pHeader->field_8_type != Resource_End)
     {
         while (pHeader->field_8_type != Resource_Pend
@@ -954,10 +1742,20 @@ s16 CC ResourceManager::Move_Resources_To_DArray_455430(u8** ppRes, DynamicArray
             pHeader = (Header*) ((s8*) pHeader + pHeader->field_0_size);
 
             // Out of heap space
+#ifdef TETHYS_SATURN
+            // SATURN: positional bound first (the over-run past the block is the
+            // real corruption signal), then the original size backstop.
+            if ((pBlockEnd && reinterpret_cast<u8*>(pHeader) >= pBlockEnd)
+                || pHeader->field_0_size >= kResHeapSize)
+            {
+                return 1;
+            }
+#else
             if (pHeader->field_0_size >= kResHeapSize)
             {
                 return 1;
             }
+#endif
 
             ResourceHeapItem* pNewListItem = Push_List_Item();
             pNewListItem->field_4_pNext = pItemToAdd->field_4_pNext;
@@ -1030,7 +1828,37 @@ void ResourceManager::CheckResourceIsLoaded(u32 type, AOResourceID resourceId)
     if (!ppRes)
     {
         LOG_ERROR("Resource not loaded type " << type << " resource Id " << resourceId);
+#ifdef TETHYS_SATURN
+        // SATURN: the death screen is the only log -- name the culprit
+        // (type fourcc, low byte first + decimal id) in the fatal message.
+        static char_type msg[40];
+        char_type* p = msg;
+        for (const char_type* s = "Res missing "; *s; s++)
+        {
+            *p++ = *s;
+        }
+        for (s32 i = 0; i < 4; i++)
+        {
+            *p++ = static_cast<char_type>((type >> (8 * i)) & 0xFF);
+        }
+        *p++ = ' ';
+        u32 id = static_cast<u32>(resourceId);
+        char_type digits[10];
+        s32 n = 0;
+        do
+        {
+            digits[n++] = static_cast<char_type>('0' + (id % 10));
+            id /= 10;
+        } while (id);
+        while (n)
+        {
+            *p++ = digits[--n];
+        }
+        *p = 0;
+        ALIVE_FATAL(msg);
+#else
         ALIVE_FATAL("Resource not loaded");
+#endif
     }
 }
 

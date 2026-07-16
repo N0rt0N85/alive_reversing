@@ -125,7 +125,12 @@
 
 #include <cstddef>
 #include <cstring>
+#ifndef TETHYS_SATURN
+// SATURN: <iostream> injects a std::ios_base::Init static into EVERY TU,
+// dragging the whole iostream+locale+wchar machinery (~200-300 K and the
+// _ITM_*/__ssputws_r link breakage) into the image. Nothing kept uses cout.
 #include <iostream>
+#endif
 #include <map>
 #include <memory>
 #include <string>

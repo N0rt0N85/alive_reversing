@@ -9,8 +9,13 @@ using char_type = char;
 using u16 = uint16_t;
 using s16 = int16_t;
 
+#if TETHYS_SATURN // SATURN: newlib/SH defines int32_t as long; upstream ABI expects s32==int
+using u32 = unsigned int;
+using s32 = int;
+#else
 using u32 = uint32_t;
 using s32 = int32_t;
+#endif
 
 using f32 = float;
 using f64 = double;

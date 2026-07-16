@@ -29,6 +29,13 @@
 #include "Sys.hpp"
 #include "PlatformBase.hpp"
 
+#ifdef TETHYS_SATURN
+// SATURN: boot forensics for the platform overlay (src/sys_saturn.cxx) --
+// which GoTo_Camera phase and which TLV factory were live at fatal time.
+extern "C" volatile s32 Tethys_gBootPhase;
+extern "C" volatile s32 Tethys_gLastTlvType;
+#endif
+
 namespace AO {
 
 class BaseGameObject;
@@ -757,12 +764,28 @@ void Map::ScreenChange_Common()
     gSndChannels_507CA0 = 0;
 }
 
+#ifdef TETHYS_SATURN
+// SATURN: flip-commit notification for the backend (src/renderer_saturn.cxx):
+// stops the per-frame sprite list from being re-presented (its VDP1
+// textures, CRAM banks and LUTs are freed/recycled by the dtor storm inside
+// ScreenChange while PSX_VSync keeps re-submitting the stale list through
+// the synchronous CD stall) and stamps the flip-timer T0 (T1 = the flip's
+// single Tethys_UploadCamBlob).
+extern "C" void Tethys_OnScreenChange();
+#endif
+
 void Map::ScreenChange_4444D0()
 {
     if (field_6_state == CamChangeStates::eInactive_0)
     {
         return;
     }
+
+#ifdef TETHYS_SATURN
+    // SATURN: a screen change is committed past this point (see the extern
+    // above).
+    Tethys_OnScreenChange();
+#endif
 
     if (sMap_bDoPurpleLightEffect_507C9C && field_0_current_level != LevelIds::eBoardRoom_12)
     {
@@ -1044,6 +1067,33 @@ Camera* Map::GetCamera(CameraPos pos)
     return field_34_camera_array[static_cast<s32>(pos)];
 }
 
+#ifdef TETHYS_SATURN
+// SATURN: neighbour Camera OBJECTS are never created on Saturn (GoTo_Camera
+// nulls field_34_camera_array[1..4] to hold the S4 heap posture), so the
+// GetCamera() null-tests below would refuse EVERY edge flip -- Abe could
+// never leave a screen. Consult the Path's CameraName grid instead, with
+// the exact border semantics of Create_Camera_445BE0 (bounds check + empty
+// name = no camera there). Zero heap impact; the flip itself then loads the
+// new cell synchronously inside GoTo_Camera as designed.
+static bool Tethys_GridHasCamera(Map* pMap, s32 dx, s32 dy)
+{
+    const s32 xpos = pMap->field_20_camX_idx + dx;
+    const s32 ypos = pMap->field_22_camY_idx + dy;
+    if (xpos < 0 || ypos < 0 || xpos >= pMap->field_24_max_cams_x || ypos >= pMap->field_26_max_cams_y)
+    {
+        return false;
+    }
+    u8** ppPathRes = pMap->GetPathResourceBlockPtr(pMap->field_2_current_path);
+    if (!ppPathRes || !*ppPathRes)
+    {
+        return false;
+    }
+    const CameraName* pCamName = reinterpret_cast<const CameraName*>(
+        &(*ppPathRes)[sizeof(CameraName) * (xpos + pMap->field_24_max_cams_x * ypos)]);
+    return pCamName->name[0] != 0;
+}
+#endif
+
 s16 Map::SetActiveCameraDelayed_444CA0(MapDirections direction, BaseAliveGameObject* pObj, s16 swapEffect)
 {
     Path_Change* pPathChangeTLV = nullptr;
@@ -1078,6 +1128,35 @@ s16 Map::SetActiveCameraDelayed_444CA0(MapDirections direction, BaseAliveGameObj
     {
         switch (direction)
         {
+#ifdef TETHYS_SATURN
+            // SATURN: neighbour Camera objects don't exist -- test the grid
+            // (see Tethys_GridHasCamera above). dx/dy per the CameraPos
+            // convention at Start_Sounds_For_Objects_In_Near_Cameras_4467D0.
+            case MapDirections::eMapLeft_0:
+                if (!Tethys_GridHasCamera(this, -1, 0))
+                {
+                    return 0;
+                }
+                break;
+            case MapDirections::eMapRight_1:
+                if (!Tethys_GridHasCamera(this, 1, 0))
+                {
+                    return 0;
+                }
+                break;
+            case MapDirections::eMapBottom_3:
+                if (!Tethys_GridHasCamera(this, 0, 1))
+                {
+                    return 0;
+                }
+                break;
+            case MapDirections::eMapTop_2:
+                if (!Tethys_GridHasCamera(this, 0, -1))
+                {
+                    return 0;
+                }
+                break;
+#else
             case MapDirections::eMapLeft_0:
                 if (!GetCamera(CameraPos::eCamLeft_3))
                 {
@@ -1102,6 +1181,7 @@ s16 Map::SetActiveCameraDelayed_444CA0(MapDirections direction, BaseAliveGameObj
                     return 0;
                 }
                 break;
+#endif
         }
 
         field_C_path = field_2_current_path;
@@ -1503,12 +1583,23 @@ void Map::Load_Path_Items_445DA0(Camera* pCamera, LoadMode loadMode)
     {
         if (loadMode == LoadMode::ConstructObject_0)
         {
+#ifdef TETHYS_SATURN
+            // SATURN round 5: sector-stream the .CAM instead of whole-file
+            // staging it. Bits -> VDP2 (never heaped), FG1/Anim -> fabricated
+            // heap chunks. Synchronous and complete on return (sets
+            // field_30_flags|=1, leaves field_C_ppBits null -- the round-2/3
+            // DecompressCameraToVRam guards no-op; the VDP2 bitmap holds the
+            // image). Kills the 72-111 KB flip-time staging peak that wedged
+            // the heap at C09->C10 (round 4).
+            ResourceManager::Tethys_StreamCamFile(pCamera);
+#else
             // Async camera load
             ResourceManager::LoadResourceFile(
                 pCamera->field_1E_fileName,
                 Camera::On_Loaded_4447A0,
                 pCamera,
                 pCamera);
+#endif
             sCameraBeingLoaded_507C98 = pCamera;
             Loader_446590(pCamera->field_14_cam_x, pCamera->field_16_cam_y, LoadMode::LoadResourceFromList_1, TlvTypes::None_m1); // none = load all
         }
@@ -1683,6 +1774,9 @@ void Map::ClearPathResourceBlocks()
 
 void Map::GoTo_Camera_445050()
 {
+#ifdef TETHYS_SATURN
+    Tethys_gBootPhase = 1;
+#endif
     s16 bShowLoadingIcon = FALSE;
 
     //dword_507CA4 = 0; // never read
@@ -1749,6 +1843,14 @@ void Map::GoTo_Camera_445050()
     {
         ResourceManager::LoadingLoop_41EAD0(bShowLoadingIcon);
 
+#ifdef TETHYS_SATURN
+        // SATURN: drop the sticky-resource permanent refs (ResourceManager
+        // .cpp SATURN block) -- the next level must not inherit ~380 K of
+        // this level's Slig set.
+        extern void Tethys_ReleaseStickyResources();
+        Tethys_ReleaseStickyResources();
+#endif
+
         // Free all cameras
         for (s32 i = 0; i < ALIVE_COUNTOF(field_34_camera_array); i++)
         {
@@ -1782,12 +1884,18 @@ void Map::GoTo_Camera_445050()
 
         GetPathResourceBlockPtrs();
 
+#ifdef TETHYS_SATURN
+        Tethys_gBootPhase = 2;
+#endif
         SND_Load_VABS_477040(Path_Get_MusicInfo(field_A_level), Path_Get_Reverb(field_A_level));
 
         // Struct is using AE format so pass address of seq table in the exe to avoid a crash
         //SND_Load_Seqs_477AB0(reinterpret_cast<OpenSeqHandleAE*>(0x4C9E70), rPathRoot.field_C_bsq_file_name);
 
         SND_Load_Seqs_477AB0(g_SeqTable_4C9E70, Path_Get_BsqFileName(field_A_level));
+#ifdef TETHYS_SATURN
+        Tethys_gBootPhase = 3;
+#endif
         auto pBackgroundMusic = ao_new<BackgroundMusic>();
         pBackgroundMusic->ctor_476370(Path_Get_BackGroundMusicId(field_A_level));
 
@@ -1911,11 +2019,33 @@ void Map::GoTo_Camera_445050()
         field_34_camera_array[i] = nullptr;
     }
 
+#ifdef TETHYS_SATURN
+    Tethys_gBootPhase = 4;
+#endif
     field_34_camera_array[0] = Create_Camera_445BE0(field_20_camX_idx, field_22_camY_idx, 1);
+#ifdef TETHYS_SATURN
+    // SATURN: neighbor cells are NOT precached until the P5 async CD layer.
+    // Measured at S4: the 3-cell window + Abe's 13 resident banks demand
+    // ~822 K against the 819 200 B heap (us 815 996 with ABEBSIC.BAN still
+    // pending = state-0 allocation wedge). Screen flips load the new cell
+    // synchronously inside GoTo_Camera (NO loading icon arms on flips --
+    // bShowLoadingIcon is boot-only, see :1700 -- the screen freezes on the
+    // last drawn frame; S7 measures that stall on overlay row 8). Null
+    // neighbor slots are an already-supported state: Create_Camera_445BE0
+    // returns nullptr for any cell without a camera name (e.g. (0,0) at
+    // R1P15C01) and every consumer tolerates it (Load_Path_Items below is
+    // called on these very returns). Edge-flip DETECTION consults the
+    // CameraName grid instead of these objects (Tethys_GridHasCamera).
+    field_34_camera_array[3] = nullptr;
+    field_34_camera_array[4] = nullptr;
+    field_34_camera_array[1] = nullptr;
+    field_34_camera_array[2] = nullptr;
+#else
     field_34_camera_array[3] = Create_Camera_445BE0(field_20_camX_idx - 1, field_22_camY_idx, 0);
     field_34_camera_array[4] = Create_Camera_445BE0(field_20_camX_idx + 1, field_22_camY_idx, 0);
     field_34_camera_array[1] = Create_Camera_445BE0(field_20_camX_idx, field_22_camY_idx - 1, 0);
     field_34_camera_array[2] = Create_Camera_445BE0(field_20_camX_idx, field_22_camY_idx + 1, 0);
+#endif
 
     // Free resources for each camera
     for (s32 i = 0; i < ALIVE_COUNTOF(field_48_stru_5); i++)
@@ -1939,8 +2069,14 @@ void Map::GoTo_Camera_445050()
         }
     }
 
+#ifdef TETHYS_SATURN
+    Tethys_gBootPhase = 5;
+#endif
     Load_Path_Items_445DA0(field_34_camera_array[0], LoadMode::ConstructObject_0);
     ResourceManager::LoadingLoop_41EAD0(bShowLoadingIcon);
+#ifdef TETHYS_SATURN
+    Tethys_gBootPhase = 6;
+#endif
     Load_Path_Items_445DA0(field_34_camera_array[3], LoadMode::ConstructObject_0);
     Load_Path_Items_445DA0(field_34_camera_array[4], LoadMode::ConstructObject_0);
     Load_Path_Items_445DA0(field_34_camera_array[1], LoadMode::ConstructObject_0);
@@ -1952,7 +2088,13 @@ void Map::GoTo_Camera_445050()
         pScreenManager_4FF7C8->ctor_406830(field_34_camera_array[0]->field_C_ppBits, &field_2C_camera_offset);
     }
 
+#ifdef TETHYS_SATURN
+    Tethys_gBootPhase = 7;
+#endif
     Loader_446590(field_20_camX_idx, field_22_camY_idx, LoadMode::ConstructObject_0, TlvTypes::None_m1); // none = load all
+#ifdef TETHYS_SATURN
+    Tethys_gBootPhase = 8;
+#endif
 
     if (old_current_path != field_2_current_path || old_current_level != field_0_current_level)
     {
@@ -2043,8 +2185,11 @@ void Map::Loader_446590(s16 camX, s16 camY, LoadMode loadMode, TlvTypes typeToLo
                     data.parts.levelId = static_cast<u8>(field_0_current_level);
                     data.parts.pathId = static_cast<u8>(field_2_current_path);
 
+#ifdef TETHYS_SATURN
+                    Tethys_gLastTlvType = static_cast<s32>(pPathTLV->field_4_type.mType);
+#endif
                     // Call the factory to construct the item
-                    field_D4_pPathData->field_1C_object_funcs.object_funcs[static_cast<s16>(pPathTLV->field_4_type.mType)](pPathTLV, this, data, loadMode);
+                    field_D4_pPathData->field_1C_object_funcs->object_funcs[static_cast<s16>(pPathTLV->field_4_type.mType)](pPathTLV, this, data, loadMode); // SATURN: field_1C is a pointer now
 
                     if (loadMode == LoadMode::ConstructObject_0)
                     {

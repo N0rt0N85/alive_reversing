@@ -212,6 +212,11 @@ static void Main_ParseCommandLineArguments()
 
     PSX_EMU_Set_Cd_Emulation_Paths_49B000(".", cdDrivePath, nullptr);
 
+#ifdef TETHYS_SATURN
+    // SATURN: no window, no title -- and this was the last live std::string
+    // of the core (keeps basic_string-inst out of the image, ~30-40 K).
+    Sys_WindowClass_Register_48E9E0("ABE_WINCLASS", "Tethys", 32, 64, 640, 480);
+#else
     std::string windowTitle = WindowTitleAO();
 
     if (GetGameAutoPlayer().IsRecording())
@@ -224,6 +229,7 @@ static void Main_ParseCommandLineArguments()
     }
 
     Sys_WindowClass_Register_48E9E0("ABE_WINCLASS", windowTitle.c_str(), 32, 64, 640, 480);
+#endif
 
     Sys_Set_Hwnd_48E340(Sys_GetWindowHandle_48E930());
 
@@ -620,6 +626,31 @@ EXPORT void Game_Run_4373D0()
 
     Init_Sound_DynamicArrays_And_Others_41CD20();
 
+#ifdef TETHYS_SATURN
+    // SATURN: no Pxtd extension chunks on the converted disc, and the retail
+    // implementation opens all 16 LVLs at boot (dozens of seconds on a real
+    // CD drive). The compiled-in PathData tables are the ground truth here.
+    // SATURN: boot straight into the new-game start screen (R1 path 15 cam 1,
+    // Menu::NewGameStart_47B9C0 -> MainMenu.cpp:2153) -- no menus, no FMV.
+    // The AbeStart_37 TLV of R1P15C01 creates Abe + PauseMenu via
+    // Factory_AbeStart_486050; the block below is the safety net in case the
+    // camera has no AbeStart TLV (mirrors NewGameStart_47B9C0; no
+    // gInfiniteGrenades_5076EC reset -- its static init is already 0 and
+    // Grenade.hpp is not included here).
+    gMap_507BA8.Init_443EE0(LevelIds::eRuptureFarms_1, 15, 1, CameraSwapEffects::eInstantChange_0, 0, 0);
+    if (!sActiveHero_507678)
+    {
+        sActiveHero_507678 = ao_new<Abe>();
+        sActiveHero_507678->ctor_420770(55888, 85, 57, 55);
+        sActiveHero_507678->field_A8_xpos = FP_FromInteger(1378);
+        sActiveHero_507678->field_AC_ypos = FP_FromInteger(83);
+    }
+    if (!pPauseMenu_5080E0)
+    {
+        pPauseMenu_5080E0 = ao_new<PauseMenu>();
+        pPauseMenu_5080E0->ctor_44DEA0();
+    }
+#else
     Path_Set_NewData_FromLvls();
 
 #if DEVELOPER_MODE
@@ -628,6 +659,7 @@ EXPORT void Game_Run_4373D0()
 #else
     // Normal copy right screen boot
     gMap_507BA8.Init_443EE0(LevelIds::eMenu_0, 1, 10, CameraSwapEffects::eInstantChange_0, 0, 0);
+#endif
 #endif
 
     DDCheat_Allocate_409560();

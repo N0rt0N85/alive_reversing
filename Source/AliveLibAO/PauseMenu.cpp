@@ -180,6 +180,17 @@ enum PauseMenuPages
 
 void PauseMenu::VUpdate_44DFB0()
 {
+#ifdef TETHYS_SATURN
+    // SATURN: sFontContext_4FFD68's atlas is loaded only by the Menu
+    // (MainMenu.cpp:730), which the menu-less boot (P3_DESIGN D10) never
+    // runs -- entering the pause modal would DrawString through a null
+    // field_8_atlas_array. Keep the PauseMenu (created by Factory_AbeStart)
+    // inert until S8 loads the font at boot.
+    if (!sFontContext_4FFD68.field_8_atlas_array)
+    {
+        return;
+    }
+#endif
     if (Input().IsAnyHeld(InputCommands::ePause))
     {
         SND_StopAll_4762D0();
@@ -735,6 +746,16 @@ void PauseMenu::DrawEntries(PrimHeader** ppOt, PauseEntry* entry, s16 selectedEn
 
 void PauseMenu::VRender_44E6F0(PrimHeader** ppOt)
 {
+#ifdef TETHYS_SATURN
+    // SATURN: belt-and-braces with the VUpdate_44DFB0 guard -- every branch
+    // below measures/draws text through the shared atlas (null until S8).
+    // VRender can also fire from the modal loop's drawables walk if anything
+    // external sets eDrawable_Bit4.
+    if (!sFontContext_4FFD68.field_8_atlas_array)
+    {
+        return;
+    }
+#endif
     switch (field_126_page)
     {
         case PauseMenuPages::ePause_0:

@@ -244,6 +244,12 @@ const Font_AtlasEntry sFont2Atlas_4C58B8[104] = {
     {60, 132, 20, 15}};
 
 
+#ifdef TETHYS_SATURN
+// SATURN: fonts whose FntP poly block failed to allocate (dead fonts) --
+// shown on the death screen / overlay (src/sys_saturn.cxx row 12 "F").
+extern "C" volatile u32 Tethys_gFontNullPolys = 0;
+#endif
+
 void CC FontContext::static_ctor_41C010()
 {
     atexit(static_dtor_41C020);
@@ -316,6 +322,21 @@ AliveFont* AliveFont::ctor_41C170(s32 maxCharLength, const u8* palette, FontCont
         ResourceManager::Resource_FntP,
         fontContext->field_C_resource_id,
         sizeof(Poly_FT4) * 2 * maxCharLength);
+#ifdef TETHYS_SATURN
+    // SATURN: third instance of the unchecked-null-handle class (after FG1's
+    // CHNK block): on a heap at peak this alloc returns null and the *null
+    // below reads the BIOS reset vector -- DrawString then queued "polys"
+    // at 0x20000200 into the OT (the S4 "OTa 20000200" fatal, LCDScreen).
+    // Degrade instead of dying: a dead font draws nothing (PauseMenu's
+    // 175-char block may legitimately fail until fonts land in S8).
+    if (!field_20_fnt_poly_block_ptr)
+    {
+        Tethys_gFontNullPolys = Tethys_gFontNullPolys + 1;
+        field_24_fnt_poly_array = nullptr;
+        field_30_poly_count = 0;
+        return this;
+    }
+#endif
     field_24_fnt_poly_array = reinterpret_cast<Poly_FT4*>(*field_20_fnt_poly_block_ptr);
     return this;
 }
@@ -395,6 +416,13 @@ s32 AliveFont::MeasureWidth_41C280(const char_type* text, FP scale)
 
 EXPORT s32 AliveFont::DrawString_41C360(PrimHeader** ppOt, const char_type* text, s16 x, s16 y, TPageAbr abr, s32 bSemiTrans, s32 blendMode, Layer layer, u8 r, u8 g, u8 b, s32 polyOffset, FP scale, s32 maxRenderWidth, s32 colorRandomRange)
 {
+#ifdef TETHYS_SATURN
+    // SATURN: dead font (FntP alloc failed at ctor) -- draw nothing.
+    if (!field_24_fnt_poly_array)
+    {
+        return polyOffset;
+    }
+#endif
     if (!sFontDrawScreenSpace_508BF4)
     {
         x = PsxToPCX(x, 11);
@@ -497,6 +525,13 @@ void AliveFont::dtor_41C130()
 {
     IRenderer::GetRenderer()->PalFree(IRenderer::PalRecord{field_28_palette_rect.x, field_28_palette_rect.y, field_28_palette_rect.w});
     field_28_palette_rect.x = 0;
+#ifdef TETHYS_SATURN
+    // SATURN: dead font (see ctor) -- nothing to free.
+    if (!field_20_fnt_poly_block_ptr)
+    {
+        return;
+    }
+#endif
     ResourceManager::FreeResource_455550(field_20_fnt_poly_block_ptr);
 }
 

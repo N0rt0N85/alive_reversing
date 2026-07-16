@@ -9,10 +9,28 @@
 #undef min
 #undef max
 
+#ifdef TETHYS_SATURN
+// SATURN: VDP2 CAM upload, defined in src/renderer_saturn.cxx (global
+// namespace). The converted Bits payload is one Saturn-native blob
+// (tools/converter/cam.py): u16 BE w=320, u16 BE h=224, 256 x u16 BE Saturn
+// CRAM entries (0x0000 transparent, else |0x8000), then 320*224 8bpp indices.
+// Must consume the blob synchronously: it lives in the resource heap and
+// Reclaim_Memory_455660 memmoves heap chunks.
+void Tethys_UploadCamBlob(const u8* pBlob);
+#endif
+
+#ifdef TETHYS_SATURN
+#include "Map.hpp" // SATURN: gMap_507BA8 for the post-upload CAM blob free
+#endif
+
 namespace AO {
 
 ALIVE_VAR(1, 0x4FF7C8, ScreenManager*, pScreenManager_4FF7C8, nullptr);
 ALIVE_ARY(1, 0x4FC8A8, SprtTPage, 300, sSpriteTPageBuffer_4FC8A8, {});
+
+#ifdef TETHYS_SATURN
+ALIVE_VAR_EXTERN(Map, gMap_507BA8); // defined Map.cpp:330
+#endif
 
 Camera* Camera::ctor_4446E0()
 {
@@ -42,10 +60,76 @@ void Camera::dtor_444700()
 }
 
 
+#ifdef TETHYS_SATURN
+// SATURN: upload the camera's CAM blob to VDP2 VRAM and free the heap copy
+// (72,212 B). The PC keeps the blob for dirty-rect Sprt recomposition, which
+// the Saturn renderer drops, so once the pixels live in VDP2 the heap copy
+// is dead weight. Frees BOTH refs (the LoadingFile state-4
+// Move_Resources_To_DArray push into field_0_array + On_Loaded's
+// GetLoadedResource(+1) into field_C_ppBits) and nulls the cached handle so
+// Camera::dtor_444700's own FreeResource(field_C_ppBits) no-ops
+// (FreeResource_455550 is null-safe). Idempotent: a second call finds
+// field_C_ppBits null and returns.
+static void Tethys_ConsumeCamBlob(Camera* pCam)
+{
+    if (!pCam || !pCam->field_C_ppBits || !*pCam->field_C_ppBits)
+    {
+        return;
+    }
+
+    Tethys_UploadCamBlob(*pCam->field_C_ppBits);
+
+    // Clear the same dirty sets the PC path cleared after a full redraw
+    // (boot: the ScreenManager does not exist yet at the first consume).
+    if (pScreenManager_4FF7C8)
+    {
+        pScreenManager_4FF7C8->field_58_20x16_dirty_bits[0] = {};
+        pScreenManager_4FF7C8->field_58_20x16_dirty_bits[1] = {};
+        pScreenManager_4FF7C8->field_58_20x16_dirty_bits[2] = {};
+        pScreenManager_4FF7C8->field_58_20x16_dirty_bits[3] = {};
+    }
+
+    for (s32 i = 0; i < pCam->field_0_array.Size(); i++)
+    {
+        u8** ppRes = pCam->field_0_array.ItemAt(i);
+        if (!ppRes)
+        {
+            break;
+        }
+        if (ppRes == pCam->field_C_ppBits)
+        {
+            ResourceManager::FreeResource_455550(ppRes);
+            pCam->field_0_array.RemoveAt(i);
+            break;
+        }
+    }
+    ResourceManager::FreeResource_455550(pCam->field_C_ppBits);
+    pCam->field_C_ppBits = nullptr;
+}
+#endif
+
 void CC Camera::On_Loaded_4447A0(Camera* pThis)
 {
     pThis->field_30_flags |= 1u;
     pThis->field_C_ppBits = ResourceManager::GetLoadedResource_4554F0(ResourceManager::Resource_Bits, pThis->field_10_resId, 1, 0);
+#ifdef TETHYS_SATURN
+    // SATURN: consume the blob THE MOMENT it arrives, not at flip end. Field
+    // round 2 wedged at bp5 with the fresh CAM (B-type, 72,212 B) resident
+    // while the rest of the flip's queue staged behind it (us 1,002,396 /
+    // 1,024,000, an 18-sector file stuck at state 0): waiting for the
+    // CameraSwapper's DecompressCameraToVRam at the END of GoTo_Camera
+    // withholds the +72 K exactly when the load needs it. On_Loaded fires
+    // from LoadingFile state 5, BEFORE any later file allocates, so freeing
+    // here hands the hole to the very next staging. On Saturn this callback
+    // only ever runs for the active camera (the S4 patch nulls all neighbor
+    // slots, Map.cpp GoTo_Camera), but keep the guard for shape-safety; the
+    // DecompressCameraToVRam path stays as backstop for the blocking-load
+    // route (LoadResourceFile_455270) which sets field_C without On_Loaded.
+    if (pThis == gMap_507BA8.field_34_camera_array[0])
+    {
+        Tethys_ConsumeCamBlob(pThis);
+    }
+#endif
 }
 
 void ScreenManager::MoveImage_406C40()
@@ -60,6 +144,32 @@ void ScreenManager::MoveImage_406C40()
 
 void ScreenManager::DecompressCameraToVRam_407110(u16** ppBits)
 {
+#ifdef TETHYS_SATURN
+    // SATURN: the converter replaced the PC Bits payload (u16 strip lengths +
+    // 40 x 16x240 RGB565 strips) with the Saturn blob above -- the strip walk
+    // below would misparse it. Hand the whole payload to the VDP2 NBG1
+    // backend (P3_DESIGN D5) and clear the same dirty sets the PC path
+    // cleared after a full redraw. The ~300 recomposition Sprts this class
+    // keeps emitting from VRender_406A60 are dropped by the renderer
+    // (background-tpage decode), so the dirty-bit machinery stays verbatim.
+    // SATURN: normally the blob was already consumed at arrival (see
+    // Tethys_ConsumeCamBlob + the On_Loaded_4447A0 hook above), so every
+    // caller of this function (boot runs it twice: Init_4068A0 then
+    // CameraSwapper Init_48C830 re-reading the nulled field_C_ppBits; Abe's
+    // movie-done restore Abe.cpp eHandstoneMovieDone_2 is a third) arrives
+    // with a null or stale handle -- skip, the VDP2 bitmap still holds the
+    // image. Without the guard those calls dereference nullptr (address 0 =
+    // BIOS vector table on SH-2, no MMU) and die on the blob header check.
+    // The consume below only fires on the blocking-load route
+    // (LoadResourceFile_455270 sets field_C_ppBits without On_Loaded).
+    Camera* pCam = gMap_507BA8.field_34_camera_array[0];
+    if (!ppBits || !pCam || pCam->field_C_ppBits != reinterpret_cast<u8**>(ppBits))
+    {
+        return;
+    }
+    Tethys_ConsumeCamBlob(pCam);
+    return;
+#else
     PSX_RECT rect = {0, 0, 16, 240};
     u8** pRes = ResourceManager::Alloc_New_Resource_454F20(ResourceManager::Resource_VLC, 0, 0x7E00); // 4 KB
     if (pRes)
@@ -93,6 +203,7 @@ void ScreenManager::DecompressCameraToVRam_407110(u16** ppBits)
         field_58_20x16_dirty_bits[2] = {};
         field_58_20x16_dirty_bits[3] = {};
     }
+#endif
 }
 
 void ScreenManager::InvalidateRect_406CC0(s32 x, s32 y, s32 width, s32 height)

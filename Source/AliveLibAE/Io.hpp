@@ -9,6 +9,9 @@
 
 #if USE_SDL2_IO
 using IO_FileHandleType = struct SDL_RWops*;
+#elif TETHYS_SATURN // SATURN: newlib FILE is a typedef; 'struct FILE' is ill-formed
+    #include <cstdio>
+using IO_FileHandleType = FILE*;
 #else
 using IO_FileHandleType = struct FILE*;
 #endif

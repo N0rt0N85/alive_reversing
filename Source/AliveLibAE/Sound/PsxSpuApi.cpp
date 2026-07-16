@@ -60,8 +60,23 @@ ALIVE_VAR(1, 0xC13180, VabUnknown, s512_byte_C13180, {});
 ALIVE_ARY(1, 0xBE6144, u8, kMaxVabs, sVagCounts_BE6144, {});
 ALIVE_ARY(1, 0x0BDCD64, u8, kMaxVabs, sProgCounts_BDCD64, {});
 ALIVE_ARY(1, 0xC13160, VabHeader*, 4, spVabHeaders_C13160, {});
+#ifdef TETHYS_SATURN
+// SATURN: ~180 KB of VAG/sound tables live in LWRAM. The platform layer
+// (src/main.cxx) binds them to the SAME blocks as the AO twins (AO/Midi.cpp
+// Tethys_BindSoundTables) before any sound code runs -- both the pre-SND_Init
+// AE defaults and the post-init AO vars then address one storage.
+static ConvertedVagTable* gpConvertedVagTable_AE_Saturn = nullptr;
+static SoundEntryTable* gpSoundEntryTable16_AE_Saturn = nullptr;
+
+void Tethys_BindSoundTablesAE(void* pVagTable, void* pSoundEntryTable)
+{
+    gpConvertedVagTable_AE_Saturn = static_cast<ConvertedVagTable*>(pVagTable);
+    gpSoundEntryTable16_AE_Saturn = static_cast<SoundEntryTable*>(pSoundEntryTable);
+}
+#else
 ALIVE_VAR(1, 0xBEF160, ConvertedVagTable, sConvertedVagTable_BEF160, {});
 ALIVE_VAR(1, 0xBE6160, SoundEntryTable, sSoundEntryTable16_BE6160, {});
+#endif
 ALIVE_VAR(1, 0xC14080, MidiChannels, sMidi_Channels_C14080, {});
 ALIVE_VAR(1, 0xC13400, MidiSeqSongsTable, sMidiSeqSongs_C13400, {});
 ALIVE_VAR(1, 0xbd1cf4, s32, sMidi_Inited_dword_BD1CF4, 0);
@@ -109,12 +124,20 @@ public:
 
     virtual ConvertedVagTable& sConvertedVagTable() override
     {
+#ifdef TETHYS_SATURN
+        return *gpConvertedVagTable_AE_Saturn; // SATURN: LWRAM, bound by Tethys_BindSoundTablesAE
+#else
         return sConvertedVagTable_BEF160;
+#endif
     }
 
     virtual SoundEntryTable& sSoundEntryTable16() override
     {
+#ifdef TETHYS_SATURN
+        return *gpSoundEntryTable16_AE_Saturn; // SATURN: LWRAM, bound by Tethys_BindSoundTablesAE
+#else
         return sSoundEntryTable16_BE6160;
+#endif
     }
 
     virtual MidiChannels& sMidi_Channels() override

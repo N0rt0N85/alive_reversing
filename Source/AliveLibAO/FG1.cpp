@@ -120,6 +120,54 @@ private:
     u32 mIdx = 0;
 };
 
+#ifdef TETHYS_SATURN
+// SATURN: forensics for the OT code-0 abort seen at S4 -- distinguishes
+// "block never filled by the reader" (bad at ctor exit) from "block
+// corrupted between ctor and first VRender" (heap-side). Wired to the
+// death screen via a named fatal in VRender below.
+extern "C" volatile s32 Tethys_gFg1BadAtCtor;
+volatile s32 Tethys_gFg1BadAtCtor = -1;
+extern "C" volatile s32 Tethys_gFg1Ctors;
+volatile s32 Tethys_gFg1Ctors = 0;
+extern "C" volatile s32 Tethys_gFg1LastN;
+volatile s32 Tethys_gFg1LastN = -1;
+extern "C" [[noreturn]] void Tethys_Fatal(const char_type* msg);
+
+[[noreturn]] static void Tethys_Fg1Fatal(const char_type* what, s32 a, s32 b, s32 c, s32 d, s32 e)
+{
+    static char_type msg[44];
+    char_type* p = msg;
+    for (const char_type* s = what; *s; s++)
+    {
+        *p++ = *s;
+    }
+    const s32 vals[5] = {a, b, c, d, e};
+    for (s32 v = 0; v < 5; v++)
+    {
+        *p++ = ' ';
+        s32 x = vals[v];
+        if (x < 0)
+        {
+            *p++ = '-';
+            x = -x;
+        }
+        char_type d[10];
+        s32 n = 0;
+        do
+        {
+            d[n++] = static_cast<char_type>('0' + x % 10);
+            x /= 10;
+        } while (x);
+        while (n)
+        {
+            *p++ = d[--n];
+        }
+    }
+    *p = 0;
+    Tethys_Fatal(msg);
+}
+#endif
+
 static const Layer sFg1_layer_to_bits_layer_4BC024[] = {Layer::eLayer_FG1_37, Layer::eLayer_FG1_Half_18};
 
 void FG1::Convert_Chunk_To_Render_Block_453BA0(const Fg1Chunk* pChunk, Fg1Block* pBlock)
@@ -256,6 +304,15 @@ FG1* FG1::ctor_4539C0(u8** ppRes)
 
     field_18_render_block_count = static_cast<s16>(pHeader->mCount);
     field_1C_ptr = ResourceManager::Allocate_New_Locked_Resource_454F80(ResourceManager::Resource_CHNK, 0, pHeader->mCount * sizeof(Fg1Block));
+#ifdef TETHYS_SATURN
+    // SATURN: on a full resource heap this alloc returns null and the
+    // deref below writes 21 render blocks through *nullptr (wild writes;
+    // cost a full S4 forensics chain). PC's 5.12 MB heap never fails here.
+    if (!field_1C_ptr)
+    {
+        Tethys_Fatal("FG1 CHNK alloc failed");
+    }
+#endif
     field_20_chnk_res = reinterpret_cast<Fg1Block*>(*field_1C_ptr);
 
     if (isReliveFG1)
@@ -268,6 +325,21 @@ FG1* FG1::ctor_4539C0(u8** ppRes)
         FG1Reader loader(*this);
         loader.Iterate(pHeader);
     }
+
+#ifdef TETHYS_SATURN
+    // How many render blocks left the ctor WITHOUT an initialized poly
+    // (code 0 = the reader never filled the slot, or vram_alloc failed).
+    Tethys_gFg1Ctors++;
+    Tethys_gFg1LastN = field_18_render_block_count;
+    Tethys_gFg1BadAtCtor = 0;
+    for (s32 i = 0; i < field_18_render_block_count; i++)
+    {
+        if (field_20_chnk_res[i].field_0_polys[0].mBase.header.rgb_code.code_or_pad == 0)
+        {
+            Tethys_gFg1BadAtCtor++;
+        }
+    }
+#endif
 
     return this;
 }
@@ -307,6 +379,21 @@ void FG1::VRender_453D50(PrimHeader** ppOt)
         {
             Poly_FT4* pPoly = &pBlock->field_0_polys[gPsxDisplay_504C78.field_A_buffer_index];
 
+#ifdef TETHYS_SATURN
+            // SATURN: name the faulting block before the generic OT trap
+            // fires -- "FG1 <blk> <count> <badAtCtor>": badAtCtor 0 means
+            // the poly was VALID at ctor exit and something corrupted it
+            // between ctor and this first render.
+            // "FG1 <blk> <nThis> <rect.w> <ctorCalls> <nLastCtor>":
+            // rect.w 0 = vram_alloc failed for this very block; >0 with a
+            // zero code = corrupted after ctor. ctorCalls>1 = several FG1
+            // objects were built (bad/lastN then describe the LATEST one).
+            if (pPoly->mBase.header.rgb_code.code_or_pad == 0)
+            {
+                Tethys_Fg1Fatal("FG1", i, field_18_render_block_count,
+                                pBlock->field_58_rect.w, Tethys_gFg1Ctors, Tethys_gFg1LastN);
+            }
+#endif
             OrderingTable_Add_498A80(OtLayer(ppOt, pBlock->field_66_mapped_layer), &pPoly->mBase.header);
 
             pScreenManager_4FF7C8->InvalidateRect_406E40(

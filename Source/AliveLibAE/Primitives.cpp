@@ -4,6 +4,11 @@
 #include "stdlib.hpp"
 #include "Game.hpp"
 
+#ifdef TETHYS_SATURN
+// SATURN: named death handler (src/main.cxx) for the OT debug trap below.
+extern "C" [[noreturn]] void Tethys_Fatal(const char_type* msg);
+#endif
+
 void Primitives_ForceLink()
 { }
 
@@ -115,14 +120,89 @@ void CC Poly_Set_SemiTrans_4F8A60(PrimHeader* pPrim, s32 bSemiTrans)
     }
 }
 
+#ifdef TETHYS_SATURN
+// SATURN: is p a plausible OT node? HWRAM/LWRAM cached windows, 4-aligned
+// (mirrors src/renderer_saturn.cxx IsOtNodePlausible -- keep in sync).
+static bool Tethys_OtPtrOk(u32 a)
+{
+    if (a & 3)
+    {
+        return false;
+    }
+    // SATURN S8: the resource heap can live in the cart's cached window now, so
+    // a resource-heap-allocated prim (Animation dbuf poly, FG1 chunk, sprite
+    // dbuf) is a LEGIT cart address -- accept it (same range as Tethys_PtrSane,
+    // ResourceManager.cpp). This guard was NOT updated when S8 moved the heap
+    // to the cart: the first heavy cart screen queued a valid poly at 0x024xxxxx
+    // and it read here as a wild tag -> the "OTa 026d27c0 ..." cart-mode fatal.
+    return (a >= 0x06000000u && a < 0x06100000u) // HWRAM
+        || (a >= 0x00200000u && a < 0x00300000u) // LWRAM
+        || (a >= 0x02400000u && a < 0x02800000u); // cart RAM cached window (S8 cart heap)
+}
+#endif
+
 void CC OrderingTable_Add_4F8AA0(PrimHeader** ppOt, PrimHeader* pItem)
 {
+#ifdef TETHYS_SATURN
+    // SATURN: ADD-TIME chain validation. The S4 walk-side guard caught a
+    // clipper whose tag went wild but cannot tell WHEN it went bad; failing
+    // here instead names the queueing call site (ra) and whether the rot is
+    // the incoming prim (p) or the bucket head it would link to (h).
+    const u32 itemAddr = reinterpret_cast<u32>(pItem);
+    const u32 headAddr = reinterpret_cast<u32>(*ppOt);
+    if (!Tethys_OtPtrOk(itemAddr) || (headAddr != 0xFFFFFFFFu && !Tethys_OtPtrOk(headAddr)))
+    {
+        static char_type msg[40];
+        char_type* p = msg;
+        for (const char_type* s = "OTa "; *s; s++)
+        {
+            *p++ = *s;
+        }
+        const u32 vals[3] = {itemAddr, headAddr, reinterpret_cast<u32>(__builtin_return_address(0))};
+        for (s32 v = 0; v < 3; v++)
+        {
+            for (s32 i = 0; i < 8; i++)
+            {
+                const u32 nib = (vals[v] >> (28 - 4 * i)) & 0xF;
+                *p++ = static_cast<char_type>(nib < 10 ? '0' + nib : 'a' + nib - 10);
+            }
+            *p++ = ' ';
+        }
+        *--p = 0;
+        Tethys_Fatal(msg);
+    }
+#endif
     // Debugging code, rendering type 2 will currently crash.
     // I can't see where in the code type 2 is ever used but somehow it must be
     // given it crashed in standalone rendering type 2. Type may also be 0 with blending enabled.
     if (pItem->rgb_code.code_or_pad == 2 || pItem->rgb_code.code_or_pad == 0)
     {
+#ifdef TETHYS_SATURN
+        // SATURN: upstream leftover debug trap -- a mute abort() cost a
+        // debugging round-trip; name the code and the CALLER (the VRender
+        // that queued the uninitialized prim; resolve via build/Tethys.map).
+        static char_type msg[36];
+        char_type* p = msg;
+        for (const char_type* s = "OT code "; *s; s++)
+        {
+            *p++ = *s;
+        }
+        *p++ = static_cast<char_type>('0' + pItem->rgb_code.code_or_pad);
+        for (const char_type* s = " ra 0x"; *s; s++)
+        {
+            *p++ = *s;
+        }
+        const u32 ra = reinterpret_cast<u32>(__builtin_return_address(0));
+        for (s32 i = 0; i < 8; i++)
+        {
+            const u32 nib = (ra >> (28 - 4 * i)) & 0xF;
+            *p++ = static_cast<char_type>(nib < 10 ? '0' + nib : 'a' + nib - 10);
+        }
+        *p = 0;
+        Tethys_Fatal(msg);
+#else
         abort();
+#endif
     }
 
     // Get current OT ptr

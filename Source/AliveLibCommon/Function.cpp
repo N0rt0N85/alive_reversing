@@ -1,7 +1,9 @@
 #include "stdafx_common.h"
 #include "Function.hpp"
+#ifndef TETHYS_SATURN // SATURN: CheckVars (stringstream/set) only ever runs under ExportHooker (not compiled)
 #include <set>
 #include <fstream>
+#endif
 
 #if defined(_WIN32) && !defined(_WIN64)
     #include "detours.h"
@@ -22,6 +24,14 @@ void SetVTable(void* thisPtr, u32 vTable)
 #endif
 }
 
+#ifdef TETHYS_SATURN
+// SATURN: no AliveVar registry (Function.hpp TETHYS_SATURN macros emit plain
+// definitions) -- CheckVars has nothing to check and its stringstream/set
+// machinery would drag the locale half of libstdc++ into the image.
+void CheckVars()
+{
+}
+#else
 struct TVarInfo
 {
     u32 mAddr;
@@ -101,6 +111,7 @@ AliveVar::AliveVar(const char_type* name, u32 addr, u32 sizeInBytes, bool isPoin
 {
     Vars().push_back({addr, sizeInBytes, isPointerType, isConstData, name});
 }
+#endif // TETHYS_SATURN
 
 #ifdef _MSC_VER
 ScopedDetour::~ScopedDetour()

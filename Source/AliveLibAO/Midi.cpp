@@ -137,8 +137,28 @@ ALIVE_VAR(1, 0xABF8C0, VabUnknown, s512_byte_ABF8C0, {});
 ALIVE_ARY(1, 0xA9289C, u8, kMaxVabs, sVagCounts_A9289C, {});
 ALIVE_ARY(1, 0xA92898, u8, kMaxVabs, sProgCounts_A92898, {});
 ALIVE_ARY(1, 0xABF8A0, VabHeader*, 4, spVabHeaders_ABF8A0, {});
+#ifdef TETHYS_SATURN
+// SATURN: ~180 KB of VAG/sound tables live in LWRAM; the platform layer
+// (src/main.cxx) allocates them and binds them through Tethys_BindSoundTables()
+// before Init_Sound_DynamicArrays_And_Others_41CD20 runs.
+static ConvertedVagTable* gpConvertedVagTable_Saturn = nullptr;
+static SoundEntryTable* gpSoundEntryTable16_Saturn = nullptr;
+
+void Tethys_BindSoundTables(void* pVagTable, void* pSoundEntryTable)
+{
+    gpConvertedVagTable_Saturn = static_cast<ConvertedVagTable*>(pVagTable);
+    gpSoundEntryTable16_Saturn = static_cast<SoundEntryTable*>(pSoundEntryTable);
+}
+
+void Tethys_SoundTablesSizes(u32* pVagTableSize, u32* pSoundEntryTableSize)
+{
+    *pVagTableSize = sizeof(ConvertedVagTable);
+    *pSoundEntryTableSize = sizeof(SoundEntryTable);
+}
+#else
 ALIVE_VAR(1, 0xA9B8A0, ConvertedVagTable, sConvertedVagTable_A9B8A0, {});
 ALIVE_VAR(1, 0xA928A0, SoundEntryTable, sSoundEntryTable16_A928A0, {});
+#endif
 ALIVE_VAR(1, 0xAC07C0, MidiChannels, sMidi_Channels_AC07C0, {});
 ALIVE_VAR(1, 0xABFB40, MidiSeqSongsTable, sMidiSeqSongs_ABFB40, {});
 ALIVE_VAR(1, 0xA89198, s32, sMidi_Inited_dword_A89198, 0);
@@ -185,12 +205,20 @@ public:
 
     virtual ConvertedVagTable& sConvertedVagTable() override
     {
+#ifdef TETHYS_SATURN
+        return *gpConvertedVagTable_Saturn; // SATURN: LWRAM, bound by Tethys_BindSoundTables
+#else
         return sConvertedVagTable_A9B8A0;
+#endif
     }
 
     virtual SoundEntryTable& sSoundEntryTable16() override
     {
+#ifdef TETHYS_SATURN
+        return *gpSoundEntryTable16_Saturn; // SATURN: LWRAM, bound by Tethys_BindSoundTables
+#else
         return sSoundEntryTable16_A928A0;
+#endif
     }
 
     virtual MidiChannels& sMidi_Channels() override
@@ -241,7 +269,11 @@ public:
     virtual IO_FileHandleType& sSoundDatFileHandle() override
     {
         // Should never be called
+#if TETHYS_SATURN // SATURN: -fno-exceptions; unreachable stub aborts instead
+        abort();
+#else
         throw std::logic_error("The method or operation is not implemented.");
+#endif
     }
 
     virtual u8& sControllerValue() override

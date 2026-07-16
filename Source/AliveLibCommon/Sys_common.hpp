@@ -75,7 +75,11 @@ inline std::string WindowTitleAE()
 
 inline void Alive_Show_ErrorMsg(const char_type* msg)
 {
+#if TETHYS_SATURN // SATURN: no message boxes on console; the platform layer logs fatals
+    (void) msg;
+#else
     SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, ("R.E.L.I.V.E. " + BuildString()).c_str(), msg, nullptr);
+#endif
 }
 
 [[noreturn]] void ALIVE_FATAL(const char_type* errMsg);

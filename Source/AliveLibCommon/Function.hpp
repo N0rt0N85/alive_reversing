@@ -87,6 +87,25 @@
 #endif
 
 
+#ifdef TETHYS_SATURN
+// SATURN: no AliveVar registry (each one is a std::vector push_back running
+// before main) and no RunningAsInjectedDll() ternary (dynamic init of ~700
+// globals = crt0-order hazard on SH-2). Plain statically-initialized
+// definitions; same declared types so extern declarations still match.
+#define ALIVE_ARY(Redirect, Addr, TypeName, Size, VarName, ...) \
+    TypeName LocalArray_##VarName[Size] = __VA_ARGS__;          \
+    TypeName* VarName = &LocalArray_##VarName[0]
+
+#define ALIVE_ARY_SIZEOF(VarName) sizeof(LocalArray_##VarName)
+
+#define ALIVE_PTR(Redirect, Addr, TypeName, VarName, Value) \
+    TypeName LocalPtr_##VarName = Value;                    \
+    std::remove_pointer<TypeName>::type* VarName = LocalPtr_##VarName
+
+#define ALIVE_VAR(Redirect, Addr, TypeName, VarName, Value) \
+    TypeName LocalVar_##VarName = Value;                    \
+    TypeName& VarName = LocalVar_##VarName
+#else
 #define ALIVE_ARY(Redirect, Addr, TypeName, Size, VarName, ...)                                                                             \
     TypeName LocalArray_##VarName[Size] = __VA_ARGS__;                                                                                      \
     AliveVar Var_##VarName(#VarName, Addr, sizeof(LocalArray_##VarName), std::is_pointer<TypeName>::value, std::is_const<TypeName>::value); \
@@ -104,6 +123,7 @@
     TypeName LocalVar_##VarName = Value;                                                                                                  \
     AliveVar Var_##VarName(#VarName, Addr, sizeof(LocalVar_##VarName), std::is_pointer<TypeName>::value, std::is_const<TypeName>::value); \
     TypeName& VarName = (Redirect && RunningAsInjectedDll()) ? *reinterpret_cast<TypeName*>(Addr) : LocalVar_##VarName
+#endif
 
 
 void CheckVars();

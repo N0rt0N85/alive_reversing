@@ -95,8 +95,14 @@ void BaseAnimatedWithPhysicsGameObject::Animation_Init_417FD0(s32 frameTableOffs
     {
         if (GetGameAutoPlayer().IsPlaying() || GetGameAutoPlayer().IsRecording())
         {
+#ifdef TETHYS_SATURN
+            // SATURN: keep std::string (+30-40 K of libstdc++) out of the image
+            // for one error message; the offset goes to the death screen anyway.
+            ALIVE_FATAL("Animation init failed! (frame table offset lost -- no std::string on Saturn)");
+#else
             std::string errMsg = "Animation init failed! frame table offset " + std::to_string(frameTableOffset);
             ALIVE_FATAL(errMsg.c_str());
+#endif
         }
         field_6_flags.Set(Options::eListAddFailed_Bit1);
         field_6_flags.Set(Options::eDead_Bit3);

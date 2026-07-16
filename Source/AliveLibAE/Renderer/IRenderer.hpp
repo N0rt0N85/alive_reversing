@@ -3,7 +3,14 @@
 #include "../AliveLibCommon/Sys_common.hpp"
 #include "Primitives.hpp"
 #include "../AliveLibCommon/Psx_common.hpp"
-#include <SDL.h>
+#if TETHYS_SATURN // SATURN: no SDL; SDL_Rect (backbuffer/movie path only) mirrored verbatim
+struct SDL_Rect
+{
+    int x, y, w, h;
+};
+#else
+    #include <SDL.h>
+#endif
 
 struct PrimHeader;
 

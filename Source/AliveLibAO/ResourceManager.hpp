@@ -131,7 +131,11 @@ public:
 
     static EXPORT void CC On_Loaded_446C10(ResourceManager_FileRecord* pLoaded);
 
-    static EXPORT s16 CC Move_Resources_To_DArray_455430(u8** ppRes, DynamicArrayT<u8*>* pArray);
+    // SATURN: blockBytes = byte-size of the loaded file block (sectors<<11), so
+    // the chunk walk can be bounded POSITIONALLY to the block instead of by the
+    // now-huge kResHeapSize (cart heap) -- see the guard in the .cpp. Default 0
+    // preserves the original size-relative backstop for any other caller.
+    static EXPORT s16 CC Move_Resources_To_DArray_455430(u8** ppRes, DynamicArrayT<u8*>* pArray, u32 blockBytes = 0);
 
     static u8** Alloc_New_Resource_Impl(u32 type, u32 id, u32 size, bool locked, BlockAllocMethod allocType);
 
@@ -189,6 +193,15 @@ public:
     static EXPORT void CC LoadResourcesFromList_446E80(const char_type* pFileName, ResourcesToLoadList* pList, LoadMode loadMode, s16);
 
     static EXPORT Header* CC Get_Header_455620(u8** ppRes);
+
+#ifdef TETHYS_SATURN
+    // SATURN round 5: sector-stream a .CAM from CD -- Bits payload straight to
+    // VDP2 (never heaped), FG1/Anim chunks fabricated on the heap. Replaces
+    // the async LoadingFile route for camera backgrounds (Map::Load_Path_Items)
+    // so the 72-111 KB whole-file staging never competes with the flip's
+    // working set on the 1,024,000 B heap (round-4 wedge).
+    static void CC Tethys_StreamCamFile(Camera* pCamera);
+#endif
 };
 
 ALIVE_VAR_EXTERN(s16, bHideLoadingIcon_5076A0);

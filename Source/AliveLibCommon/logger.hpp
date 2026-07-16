@@ -1,7 +1,9 @@
 #pragma once
 
 #include <exception>
+#ifndef TETHYS_SATURN // SATURN: <iostream> injects ios_base::Init into every TU (~200-300 K of locale machinery at link)
 #include <iostream>
+#endif
 #include "easylogging++.h"
 #include "Types.hpp"
 
@@ -15,6 +17,9 @@
 #undef ERROR
 
 #define LOGGING 1
+#if TETHYS_SATURN // SATURN: strip logging (strings + easylogging) from the console binary
+    #undef LOGGING
+#endif
 
 #ifdef LOGGING
     #define TRACE_ENTRYEXIT Logging::AutoLog __funcTrace(FNAME)
@@ -39,6 +44,7 @@
 }
 
 
+#ifndef TETHYS_SATURN // SATURN: only Exe.cpp (not compiled) redirects iostreams
 class outbuf : public std::streambuf
 {
 public:
@@ -74,6 +80,7 @@ inline void RedirectIoStream(bool replace)
         sb = nullptr;
     }
 }
+#endif
 
 namespace Logging {
 class AutoLog final
