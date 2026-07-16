@@ -21,11 +21,13 @@ ALIVE_VAR(1, 0x4FFA4C, s16, word_4FFA4C, 0);
 // it). The mine spawns a BaseBomb whose ctor runs DealDamageRect (a
 // gBaseAliveGameObjects iterate + pObj->VTakeDamage virtual dispatch) AND a
 // ParticleBurst -- both instant, at mine contact ("Abe still in fall anim"). One
-// of them wild-jsr's (stale/garbage object, or a valid non-Abe object -- the
-// Slig -- whose VTakeDamage cascades). Live PAD-2 bisection (Tethys_gDbgSkip):
-//   bit1 (B) = in DealDamageRect, skip VTakeDamage on NON-Abe objects (Abe still
-//              dies, so the death still happens) -> isolates the Slig/others
-//   bit2 (C) = skip the ctor ParticleBurst spawn
+// of them wild-jsr's (stale/garbage object, or a valid object whose VTakeDamage
+// cascades). Live PAD-0 bisection (Tethys_gDbgSkip, set in the platform seam
+// Tethys_ReadDbgPad -- bt823/824 drove it from pad 2 which the game never read,
+// so those results were void):
+//   bit1 (pad0 X) = in DealDamageRect, skip ALL VTakeDamage (Abe survives, bomb
+//                   sequence still runs) -> tests the whole VTakeDamage cascade
+//   bit2 (pad0 L) = skip the ctor ParticleBurst spawn
 extern "C" volatile u8 Tethys_gDbgSkip;
 #endif
 
@@ -233,10 +235,13 @@ void BaseBomb::DealDamageRect_417A50(const PSX_RECT* pRect)
                 if (obj_ypos >= top && obj_ypos <= bottom && field_BC_sprite_scale == (pObj->field_BC_sprite_scale * FP_FromDouble(2.75)))
                 {
 #ifdef TETHYS_SATURN
-                    // B: bisect -- skip VTakeDamage on non-Abe objects (Abe still
-                    // dies). If the crash stops, a non-Abe object's VTakeDamage
-                    // (the Slig?) is the wild call.
-                    if ((Tethys_gDbgSkip & 2u) && pObj->field_4_typeId != Types::eAbe_43)
+                    // X (bit1): bisect -- skip ALL VTakeDamage (incl. Abe's own,
+                    // so Abe survives -- but the bomb sequence still runs). If the
+                    // crash stops, the wild jsr is inside a VTakeDamage cascade
+                    // (Abe's blast-death -> Gibs, or another object). If it still
+                    // crashes, VTakeDamage is innocent and the fault is a spawn/
+                    // Animation/ScreenShake in the ctor or VUpdate.
+                    if (Tethys_gDbgSkip & 2u)
                     {
                         continue;
                     }
@@ -290,7 +295,7 @@ BaseBomb* BaseBomb::ctor_4173A0(FP xpos, FP ypos, s32 /*unused*/, FP scale)
     }
 
 #ifdef TETHYS_SATURN
-    if (!(Tethys_gDbgSkip & 4u)) // C: bisect -- skip the ctor ParticleBurst spawn
+    if (!(Tethys_gDbgSkip & 4u)) // L: bisect -- skip the ctor ParticleBurst spawn
 #endif
     {
         auto pParticleBurst = ao_new<ParticleBurst>();
