@@ -16,17 +16,6 @@
 
 namespace AO {
 
-#ifdef TETHYS_SATURN
-// SATURN (bt826): death-on-mine R1P15C01 is the BaseBomb's falling-rocks
-// ParticleBurst (skipping its creation stopped the crash, bt825). Bisect WITHIN
-// it -- pad-0 X skips VRender_40D7F0, L skips VUpdate_40D600. If X stops the
-// crash the wild jsr is in the render (VRender2_403FD0 derefs the shared
-// field_10_anim block WITHOUT the null guard Animation::VRender_403AE0 has); if L
-// stops it, the update; if neither, the ctor's locked resource alloc + item
-// setup (the 35*0x88 B block on the memory-tight R1P15 resource heap).
-extern "C" volatile u8 Tethys_gDbgSkip;
-#endif
-
 struct ParticleBurst_Item final
 {
     FP field_0_x;
@@ -51,7 +40,18 @@ ParticleBurst* ParticleBurst::ctor_40D0F0(FP xpos, FP ypos, s16 particleCount, F
     field_4_typeId = Types::eParticleBurst_19;
     field_BC_sprite_scale = scale;
 
+#ifdef TETHYS_SATURN
+    // SATURN (bt828): best-effort (bReclaimOnFail=false) so this cosmetic gib array
+    // NEVER forces Reclaim_Memory heap compaction on the walled R1P15 heap --
+    // compaction moves non-locked blocks and dangles other objects' cached raw
+    // derefs -> a later write stomps the SGL sync region -> silent SH-2 reset (the
+    // death-on-mine crash: bt825/826 traced it here, workflow pinned the
+    // compaction). If it doesn't fit in free space, ppRes is null and the else
+    // branch marks the burst dead -- the rocks just don't spawn, no compaction.
+    field_E4_ppRes = ResourceManager::Alloc_New_Resource_Impl(ResourceManager::ResourceType::Resource_3DGibs, 0, sizeof(ParticleBurst_Item) * particleCount, true, ResourceManager::BlockAllocMethod::eLastMatching, false);
+#else
     field_E4_ppRes = ResourceManager::Allocate_New_Locked_Resource_454F80(ResourceManager::ResourceType::Resource_3DGibs, 0, sizeof(ParticleBurst_Item) * particleCount);
+#endif
     if (field_E4_ppRes)
     {
         field_E8_pRes = reinterpret_cast<ParticleBurst_Item*>(*field_E4_ppRes);
@@ -229,9 +229,6 @@ void ParticleBurst::VUpdate()
 
 void ParticleBurst::VUpdate_40D600()
 {
-#ifdef TETHYS_SATURN
-    if (Tethys_gDbgSkip & 4u) { return; } // L: bisect -- skip the burst update
-#endif
     for (s32 i = 0; i < field_EC_count; i++)
     {
         ParticleBurst_Item* pItem = &field_E8_pRes[i];
@@ -305,9 +302,6 @@ void ParticleBurst::VRender(PrimHeader** ppOt)
 
 void ParticleBurst::VRender_40D7F0(PrimHeader** ppOt)
 {
-#ifdef TETHYS_SATURN
-    if (Tethys_gDbgSkip & 2u) { return; } // X: bisect -- skip the burst render
-#endif
     if (sNumCamSwappers_507668 != 0)
     {
         return;

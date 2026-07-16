@@ -1557,11 +1557,24 @@ LoadingFile* CC ResourceManager::LoadResourceFile_4551E0(const char_type* pFileN
 #ifdef TETHYS_SATURN
 extern "C" [[noreturn]] void Tethys_Fatal(const char_type* msg); // SATURN bt814
 #endif
-u8** ResourceManager::Alloc_New_Resource_Impl(u32 type, u32 id, u32 size, bool locked, BlockAllocMethod allocType)
+u8** ResourceManager::Alloc_New_Resource_Impl(u32 type, u32 id, u32 size, bool locked, BlockAllocMethod allocType, bool bReclaimOnFail)
 {
     u8** ppNewRes = Allocate_New_Block_454FE0(size + sizeof(Header), allocType);
-    if (!ppNewRes)
+    if (!ppNewRes && bReclaimOnFail)
     {
+        // SATURN (bt828): the reclaim retry runs Reclaim_Memory_455660, which
+        // COMPACTS the heap -- it memmoves every non-locked USED block to a new
+        // address and rewrites its handle. Handle-holders survive, but any live
+        // object that cached a RAW deref (u8*) of a moved block is left with a
+        // DANGLING non-null pointer -> a later write through it stomps live system
+        // state (the 0x20000226 SGL-sync region) -> the next indirect dispatch
+        // wild-jumps -> silent SH-2 reset (root of the death-on-mine crash: the
+        // mine's 4.8 KB cosmetic falling-rocks 3DGibs alloc forced this on the
+        // memory-walled R1P15 heap). RELIVE never hit this on PC's 5 MB heap.
+        // Callers that pass bReclaimOnFail=false are cosmetic/best-effort: they
+        // must tolerate a null (their own guard skips the effect) rather than pay
+        // a heap compaction. Default true preserves original behaviour everywhere
+        // else. See Allocate_New_Locked_Resource_BestEffort.
         // Failed, try to reclaim some memory and try again.
         Reclaim_Memory_455660(0);
         ppNewRes = Allocate_New_Block_454FE0(size + sizeof(Header), allocType);
@@ -1576,32 +1589,16 @@ u8** ResourceManager::Alloc_New_Resource_Impl(u32 type, u32 id, u32 size, bool l
         pHeader->field_6_flags = locked ? ResourceHeaderFlags::eLocked : 0;
     }
 #ifdef TETHYS_SATURN
-    else
+    else if (bReclaimOnFail)
     {
-        // SATURN (bt814): the null-handle bug class. Upstream callers do NOT
-        // check this handle for null (PC's 5.12 MB heap never fails); on SH-2 a
-        // returned null is *deref'd -> reads the BIOS reset-vector region
-        // (0x20000200) and a bogus pointer/store detonates a frame later -- the
-        // prime suspect for the death-on-mine 0x20000226 stomp of the SRL sync
-        // events. Fail LOUD, naming the resource (fourcc type + hex size),
-        // instead of a silent null. Never fires in normal play (the game reaches
-        // the mine screen fine); if it fires, a death/explosion resource could
-        // not be served by the cart heap.
-        static char_type msg[40];
-        char_type* p = msg;
-        for (const char_type* s = "RES NULL "; *s; s++) { *p++ = *s; }
-        *p++ = static_cast<char_type>(type & 0xFF);        // fourcc, low byte first
-        *p++ = static_cast<char_type>((type >> 8) & 0xFF);
-        *p++ = static_cast<char_type>((type >> 16) & 0xFF);
-        *p++ = static_cast<char_type>((type >> 24) & 0xFF);
-        *p++ = ' ';
-        for (s32 i = 0; i < 8; i++)
-        {
-            const u32 nib = (size >> (28 - 4 * i)) & 0xF;
-            *p++ = static_cast<char_type>(nib < 10 ? '0' + nib : 'a' + nib - 10);
-        }
-        *p = 0;
-        Tethys_Fatal(msg);
+        // SATURN (bt814): the null-handle bug class. Upstream callers do NOT check
+        // this handle for null (PC's 5.12 MB heap never fails); on SH-2 a returned
+        // null is *deref'd -> BIOS reset-vector region -> detonates a frame later.
+        // Fail LOUD instead of a silent null. Never fires in normal play. (bt828:
+        // fourcc+hex detail dropped to save pool; the resource type shows as the
+        // faulting call site's map address on the death screen.) best-effort
+        // callers (bReclaimOnFail=false) intentionally tolerate null and skip this.
+        Tethys_Fatal("RES NULL");
     }
 #endif
     return ppNewRes;

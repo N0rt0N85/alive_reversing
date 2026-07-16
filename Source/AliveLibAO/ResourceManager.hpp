@@ -137,7 +137,9 @@ public:
     // preserves the original size-relative backstop for any other caller.
     static EXPORT s16 CC Move_Resources_To_DArray_455430(u8** ppRes, DynamicArrayT<u8*>* pArray, u32 blockBytes = 0);
 
-    static u8** Alloc_New_Resource_Impl(u32 type, u32 id, u32 size, bool locked, BlockAllocMethod allocType);
+    // SATURN (bt828): bReclaimOnFail=false -> best-effort (no Reclaim_Memory
+    // compaction, no fatal); returns null if it doesn't fit existing free space.
+    static u8** Alloc_New_Resource_Impl(u32 type, u32 id, u32 size, bool locked, BlockAllocMethod allocType, bool bReclaimOnFail = true);
 
     static EXPORT u8** CC Alloc_New_Resource_454F20(u32 type, u32 id, u32 size);
 
