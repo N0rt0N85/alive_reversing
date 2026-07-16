@@ -1386,7 +1386,7 @@ static void Tethys_CamStreamFatal(const char_type* pWhat, const char_type* pName
     ALIVE_FATAL(msg);
 }
 
-void CC ResourceManager::Tethys_StreamCamFile(Camera* pCamera)
+void CC ResourceManager::Tethys_StreamCamFile(Camera* pCamera, bool bitsOnly)
 {
     LvlFileRecord* pRec = sLvlArchive_4FFD60.Find_File_Record_41BED0(pCamera->field_1E_fileName);
     if (!pRec)
@@ -1448,9 +1448,29 @@ void CC ResourceManager::Tethys_StreamCamFile(Camera* pCamera)
             rd.Read(palBuf, 512);
             Tethys_CamStreamPalette(palBuf);
             rd.Pixels(0, payloadLen - 4u - 512u); // 71,680 -> VDP2, never heaped
+            if (bitsOnly)
+            {
+                // SATURN (bt817): respawn background refresh. The Bits chunk is
+                // ALWAYS first (converter order Bits,[FG1],[Anim],End!), so upload
+                // it and STOP -- do not walk the FG1/Anim chunks (the reused
+                // camera's field_0_array already holds them; re-pushing would
+                // double-free in Camera::dtor). Leave field_30_flags untouched.
+                if (rd.bad)
+                {
+                    Tethys_CamStreamFatal("CAM refresh: torn ", pCamera->field_1E_fileName);
+                }
+                Tethys_CamStreamEnd();
+                return;
+            }
         }
         else
         {
+            if (bitsOnly)
+            {
+                // SATURN (bt817): invariant guard -- Bits must be the first chunk;
+                // never heap-allocate on the refresh path (see bitsOnly above).
+                Tethys_CamStreamFatal("CAM refresh: Bits not first ", pCamera->field_1E_fileName);
+            }
             // Fabricate a heap chunk (FG1/Anim) exactly as Move_Resources
             // would: type/id from the on-disk header, ref_count 1, one push
             // into the camera array (Create_FG1s scans it by type; the dtor

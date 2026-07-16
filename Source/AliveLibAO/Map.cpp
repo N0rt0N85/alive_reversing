@@ -2073,6 +2073,23 @@ void Map::GoTo_Camera_445050()
     Tethys_gBootPhase = 5;
 #endif
     Load_Path_Items_445DA0(field_34_camera_array[0], LoadMode::ConstructObject_0);
+#ifdef TETHYS_SATURN
+    // SATURN (bt817): same-screen death->respawn reuses the resident camera[0]
+    // (Create_Camera_445BE0:1642-1646 keeps field_30_flags bit0 set AND ORs bit1
+    // as the Motion_61_Respawn marker), so Load_Path_Items above skipped
+    // Tethys_StreamCamFile and the VDP2 NBG1 background was never re-driven after
+    // the death sequence -> fully black screen (bit1 is the OG "camera resident,
+    // don't reload bg" hint -- correct on PSX where VRAM persists, a bug here
+    // where our VDP2 upload is a separate stage gated on bit0). Re-drive the
+    // background Bits ONLY (no field_0_array re-push -> no dtor double-free).
+    // bit1 is set solely on respawn reuse, so boot and screen flips (fresh
+    // camera, bit0 cleared at :1673, bit1 never set) never enter here.
+    if (field_34_camera_array[0] && (field_34_camera_array[0]->field_30_flags & 2))
+    {
+        ResourceManager::Tethys_StreamCamFile(field_34_camera_array[0], true);
+        field_34_camera_array[0]->field_30_flags &= ~2; // consume the respawn marker
+    }
+#endif
     ResourceManager::LoadingLoop_41EAD0(bShowLoadingIcon);
 #ifdef TETHYS_SATURN
     Tethys_gBootPhase = 6;

@@ -200,7 +200,14 @@ public:
     // the async LoadingFile route for camera backgrounds (Map::Load_Path_Items)
     // so the 72-111 KB whole-file staging never competes with the flip's
     // working set on the 1,024,000 B heap (round-4 wedge).
-    static void CC Tethys_StreamCamFile(Camera* pCamera);
+    //
+    // SATURN (bt817): bitsOnly re-drives the VDP2 NBG1 background ONLY (palette +
+    // pixels, no FG1/Anim heap chunks). Same-screen death->respawn reuses the
+    // resident camera (Create_Camera_445BE0 keeps field_30_flags bit0 set), so
+    // Load_Path_Items skips the normal stream and the background is never
+    // re-uploaded -> black screen. Re-pushing FG1/Anim into the already-populated
+    // field_0_array would double-free in Camera::dtor, hence Bits-only.
+    static void CC Tethys_StreamCamFile(Camera* pCamera, bool bitsOnly = false);
 #endif
 };
 
