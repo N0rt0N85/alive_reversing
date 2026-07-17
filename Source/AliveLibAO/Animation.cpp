@@ -647,11 +647,13 @@ void Animation::VCleanUp_403F40()
     if (field_84_vram_rect.w > 0)
     {
         Vram_free_450CE0({field_84_vram_rect.x, field_84_vram_rect.y}, {field_84_vram_rect.w, field_84_vram_rect.h});
+        field_84_vram_rect.w = 0; // SATURN: idempotent -- a second vCleanUp must not double-free
     }
 
     if (field_90_pal_depth > 0)
     {
         IRenderer::GetRenderer()->PalFree(IRenderer::PalRecord{field_8C_pal_vram_xy.field_0_x, field_8C_pal_vram_xy.field_2_y, field_90_pal_depth});
+        field_90_pal_depth = 0; // SATURN: idempotent -- the dtor may vCleanUp again
     }
 
     ResourceManager::FreeResource_455550(field_24_dbuf);
@@ -860,7 +862,13 @@ s16 Animation::Init_402D20(s32 frameTableOffset, DynamicArray* /*animList*/, Bas
 
         field_8C_pal_vram_xy.field_0_x = rec.x;
         field_8C_pal_vram_xy.field_2_y = rec.y;
-        field_90_pal_depth = rec.depth;
+        // SATURN: on a FAILED PalAlloc the renderer leaves rec at {0,0}; storing
+        // a non-zero depth here would make a later vCleanUp PalFree a (0,0) rect
+        // it never owned -> Pal_free_483390 does sPal_table_5C9164[0 - 240] ^=
+        // ... (an out-of-bounds write that corrupts the AE palette-allocation
+        // model -> wrong CRAM coords -> the on-screen colour/debug corruption).
+        // Only record a palette home when the alloc actually succeeded.
+        field_90_pal_depth = bPalAllocOK ? rec.depth : 0;
 
         if (bVramAllocOK && bPalAllocOK)
         {

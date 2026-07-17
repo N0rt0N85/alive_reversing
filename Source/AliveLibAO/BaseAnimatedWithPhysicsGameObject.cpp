@@ -438,19 +438,29 @@ BaseGameObject* BaseAnimatedWithPhysicsGameObject::dtor_417D10()
 {
     SetVTable(this, 0x4BAA38);
 
-    if (!field_6_flags.Get(BaseGameObject::eListAddFailed_Bit1))
+    // SATURN: the animation's palette is released ONLY by vCleanUp. The stock
+    // gate skips it whenever eListAddFailed is set (a subclass that fails a
+    // secondary step AFTER a successful anim init -- MeatSaw/LiftPoint/TimedMine/
+    // UXB/PlatformBase all do this) or eDrawable is unset, orphaning the CRAM
+    // home. On PSX that leaked harmless VRAM; on Saturn's 6 sprite banks the
+    // orphans accumulate across scenes -> palette starvation (measured: PAL live
+    // grows and never returns to baseline). vCleanUp frees only the anim's OWN
+    // vram/pal/dbuf and is a safe no-op on a zero-constructed (never-init'd)
+    // anim, and it is idempotent (Animation.cpp resets the rects), so always run
+    // it; only the drawables Remove_Item is gated on our having joined the list.
+    if (field_6_flags.Get(BaseGameObject::eDrawable_Bit4)
+        && !field_6_flags.Get(BaseGameObject::eListAddFailed_Bit1))
     {
-        if (field_6_flags.Get(BaseGameObject::eDrawable_Bit4))
-        {
-            gObjList_drawables_504618->Remove_Item(this);
-            field_10_anim.vCleanUp();
-        }
+        gObjList_drawables_504618->Remove_Item(this);
+    }
+    field_10_anim.vCleanUp();
 
-        if (field_D0_pShadow)
-        {
-            field_D0_pShadow->dtor_462030();
-            ao_delete_free_447540(field_D0_pShadow);
-        }
+    // The shadow is a separate object with its own palette -- free it too even
+    // on the eListAddFailed path (null unless a subclass created one).
+    if (field_D0_pShadow)
+    {
+        field_D0_pShadow->dtor_462030();
+        ao_delete_free_447540(field_D0_pShadow);
     }
     return dtor_487DF0();
 }
