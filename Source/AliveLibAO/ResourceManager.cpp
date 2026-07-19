@@ -1261,6 +1261,10 @@ extern "C" void Tethys_CamStreamBegin();
 extern "C" void Tethys_CamStreamPalette(const u8* pal512);
 extern "C" void Tethys_CamStreamPixels(u32 absOff, const u8* src, u32 len);
 extern "C" void Tethys_CamStreamEnd();
+// SATURN (bt872): wipe the foreground sprite layer and PRESENT it before the
+// new background is DMA'd to VDP2, so the old screen's foreground disappears
+// FIRST (user request, 3rd ask). Renderer-side; see Tethys_ClearForegroundAndPresent.
+extern "C" void Tethys_ClearForegroundAndPresent();
 // 71,680 B of HWRAM scratch (the renderer's latch-only sCamPix): [0..2047] is
 // the CD sector bounce (4-aligned, HWRAM -> the seam's fast path), [2048..2559]
 // assembles the 512 B palette for the one-shot CRAM write. No fresh .bss here
@@ -1393,6 +1397,14 @@ void CC ResourceManager::Tethys_StreamCamFile(Camera* pCamera, bool bitsOnly)
     {
         Tethys_CamStreamFatal("CAM stream: CD miss ", pCamera->field_1E_fileName);
     }
+
+    // SATURN (bt872): the foreground must vanish BEFORE the background swaps.
+    // Present one blank-foreground frame now, while VDP2 still shows the OLD
+    // background, so the old screen's sprites are gone the instant the new
+    // Bits land (otherwise the frozen VDP1 buffer paints them over the new bg
+    // for the whole synchronous stall). The sprite list was already emptied by
+    // Tethys_OnScreenChange at the top of ScreenChange_4444D0; this commits it.
+    Tethys_ClearForegroundAndPresent();
 
     // Latch VDP2 first (Begin's one-time LoadBitmap DMAs sCamPix); only after
     // it returns is the scratch buffer free to become the CD bounce.
