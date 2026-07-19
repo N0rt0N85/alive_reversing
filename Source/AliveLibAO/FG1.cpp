@@ -131,6 +131,10 @@ extern "C" volatile s32 Tethys_gFg1Ctors;
 volatile s32 Tethys_gFg1Ctors = 0;
 extern "C" volatile s32 Tethys_gFg1LastN;
 volatile s32 Tethys_gFg1LastN = -1;
+// SATURN: FG1 blocks skipped in VRender because vram_alloc failed (dense wall
+// overflows the shared PSX VRAM model). >0 = incomplete foreground, not a crash.
+extern "C" volatile s32 Tethys_gFg1Skipped;
+volatile s32 Tethys_gFg1Skipped = 0;
 extern "C" [[noreturn]] void Tethys_Fatal(const char_type* msg);
 
 [[noreturn]] static void Tethys_Fg1Fatal(const char_type* what, s32 a, s32 b, s32 c, s32 d, s32 e)
@@ -303,6 +307,25 @@ FG1* FG1::ctor_4539C0(u8** ppRes)
     }
 
     field_18_render_block_count = static_cast<s16>(pHeader->mCount);
+
+#ifdef TETHYS_SATURN
+    // SATURN ROOT FIX (bt864): `pHeader` is a RAW pointer into the FG1 SOURCE
+    // block, which on the CAM-streaming path is NON-locked (Alloc_New_Resource
+    // in ResourceManager.cpp). The CHNK alloc just below -- and every per-chunk
+    // PBuf alloc inside loader.Iterate() -- can fail on the memory-walled barrel
+    // heap and run Reclaim_Memory, which COMPACTS: it memmoves the non-locked
+    // source and the decompressor then reads/writes through the now-dangling
+    // pointer, stomping whatever moved into its place (observed: Mine_Flash's
+    // Header -> 0x1a57120f -> heap cascade -> ALL sprites gone from the
+    // possession room + "Res missing" on the return to Abe). The CHNK and PBuf
+    // blocks are already eLocked; the SOURCE is the one movable block, so LOCK
+    // it for the construction and restore after. (PC's 5.12 MB heap never
+    // Reclaims here -- no-op there.)
+    ResourceManager::Header* pSrcHdr = ResourceManager::Get_Header_455620(ppRes);
+    const s16 srcFlagsSaved = pSrcHdr->field_6_flags;
+    pSrcHdr->field_6_flags |= ResourceManager::ResourceHeaderFlags::eLocked;
+#endif
+
     field_1C_ptr = ResourceManager::Allocate_New_Locked_Resource_454F80(ResourceManager::Resource_CHNK, 0, pHeader->mCount * sizeof(Fg1Block));
 #ifdef TETHYS_SATURN
     // SATURN: on a full resource heap this alloc returns null and the
@@ -310,6 +333,7 @@ FG1* FG1::ctor_4539C0(u8** ppRes)
     // cost a full S4 forensics chain). PC's 5.12 MB heap never fails here.
     if (!field_1C_ptr)
     {
+        pSrcHdr->field_6_flags = srcFlagsSaved; // restore before dying
         Tethys_Fatal("FG1 CHNK alloc failed");
     }
 #endif
@@ -325,6 +349,10 @@ FG1* FG1::ctor_4539C0(u8** ppRes)
         FG1Reader loader(*this);
         loader.Iterate(pHeader);
     }
+
+#ifdef TETHYS_SATURN
+    pSrcHdr->field_6_flags = srcFlagsSaved; // restore the source's original lock state
+#endif
 
 #ifdef TETHYS_SATURN
     // How many render blocks left the ctor WITHOUT an initialized poly
@@ -390,6 +418,18 @@ void FG1::VRender_453D50(PrimHeader** ppOt)
             // objects were built (bad/lastN then describe the LATEST one).
             if (pPoly->mBase.header.rgb_code.code_or_pad == 0)
             {
+                // SATURN: code 0 = uninitialized poly. rect.w == 0 means
+                // vram_alloc FAILED for this block -- a dense FG1 wall (barrel
+                // walls) overflows the shared 1024x512 PSX VRAM model, unlike
+                // Animation there is no fallback. SKIP it (draw the wall minus
+                // the blocks that did not fit) instead of feeding a garbage poly
+                // to the OT (-> wild OT write / crash). rect.w > 0 with code 0 is
+                // a genuine post-ctor corruption -> keep the forensic fatal.
+                if (pBlock->field_58_rect.w == 0)
+                {
+                    Tethys_gFg1Skipped++;
+                    continue;
+                }
                 Tethys_Fg1Fatal("FG1", i, field_18_render_block_count,
                                 pBlock->field_58_rect.w, Tethys_gFg1Ctors, Tethys_gFg1LastN);
             }

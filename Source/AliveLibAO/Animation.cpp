@@ -268,9 +268,64 @@ static IRenderer::BitDepth AnimFlagsToBitDepth(const BitField32<AnimFlags>& flag
     return IRenderer::BitDepth::e4Bit;
 }
 
+#ifdef TETHYS_SATURN
+// SATURN (bt863): both last-screen crashes trace to a corrupt/stale resource
+// block pointer (*field_20_ppBlock resolved to 0x1A57120F -- not cart/HWRAM/LWRAM).
+// A garbage block feeds garbage into BOTH the animation callback dispatch
+// (field_1C_fn_ptr_array[*data] -> wild function pointer -> the 0x0D773xxx jump)
+// AND UploadTexture (garbage compression_type 188 -> the CMP fatal). VDecode's
+// existing guard only rejected null, not garbage. Validate the block lands in a
+// real region; if not, SKIP the frame (draw stale, never crash) and record the
+// signature so the corruption SOURCE (which anim, is the address consistent) is
+// visible without a death screen. This is a firewall, not the root fix.
+extern "C" volatile s32 Tethys_gAnimBadBlock = 0; // count of skipped garbage-block decodes
+static inline bool Tethys_BlockPtrSane(const u8* b)
+{
+    const u32 a = reinterpret_cast<u32>(b);
+    return (a >= 0x02400000u && a < 0x02800000u)   // cart, cached
+        || (a >= 0x22400000u && a < 0x22800000u)   // cart, uncached
+        || (a >= 0x06000000u && a < 0x06100000u)   // HWRAM
+        || (a >= 0x00200000u && a < 0x00300000u);  // LWRAM
+}
+#endif
+
 void Animation::UploadTexture(const FrameHeader* pFrameHeader, const PSX_RECT& vram_rect, s16 width_bpp_adjusted)
 {
     IRenderer& renderer = *IRenderer::GetRenderer();
+#ifdef TETHYS_SATURN
+    // SATURN ROOT FIX (bt870): Type 4/5 (LZSS) embeds its TRUE decompressed
+    // length as the first u32 of the payload, and Decompress_Type_4_5 writes
+    // exactly that many bytes -- IGNORING field_28_dbuf_size. For several frames
+    // that dest_len EXCEEDS the buffer sized from the anim's maxW/maxH (offline
+    // tools/check_anim_overrun.py: R1ROPES.BAN id=1000 the pull-cable +56 B,
+    // FXFLARE +12, PORTAL +16 -- all cmp5). The write then overruns the
+    // decompression buffer and stomps the adjacent heap block's Header
+    // (0x0B0B0B0C) -> HI!=0 "walking as Abe" at screen 8, Abe's palette lost
+    // first. PC's 5 MB heap absorbs the spill; Saturn's packed cart heap does
+    // not. GROW the buffer to hold the full frame before decompressing (renders
+    // correctly, no clip). Sanity-capped so a garbage dest_len can't OOM.
+    {
+        const CompressionType ct = pFrameHeader->field_7_compression_type;
+        if (ct == CompressionType::eType_4_RLE || ct == CompressionType::eType_5_RLE)
+        {
+            const u32 destLen = *reinterpret_cast<const u32*>(&pFrameHeader->field_8_width2);
+            if (destLen > field_28_dbuf_size && destLen <= 0x40000u) // <=256K sanity cap
+            {
+                if (field_24_dbuf)
+                {
+                    ResourceManager::FreeResource_455550(field_24_dbuf);
+                }
+                field_28_dbuf_size = destLen;
+                field_24_dbuf = ResourceManager::Alloc_New_Resource_454F20(
+                    ResourceManager::Resource_DecompressionBuffer, 0, destLen);
+                if (!field_24_dbuf)
+                {
+                    return; // cannot fit this frame -> skip it, never overrun
+                }
+            }
+        }
+    }
+#endif
     switch (pFrameHeader->field_7_compression_type)
     {
         case CompressionType::eType_0_NoCompression:
@@ -325,9 +380,18 @@ void Animation::UploadTexture(const FrameHeader* pFrameHeader, const PSX_RECT& v
             break;
 
         default:
+#ifdef TETHYS_SATURN
+            // FIREWALL backstop (bt863): a block that passed the VDecode range
+            // check but still yields a garbage compression_type (an in-region but
+            // clobbered/mis-offset frame). SKIP the upload -- draw stale, never
+            // crash. Counted with the out-of-range skips (Tethys_gAnimBadBlock).
+            Tethys_gAnimBadBlock++;
+            break;
+#else
             LOG_ERROR("Unknown compression type " << static_cast<s32>(pFrameHeader->field_7_compression_type));
             ALIVE_FATAL("Unknown compression type");
             break;
+#endif
     }
 }
 
@@ -337,6 +401,16 @@ void Animation::VDecode_403550()
     {
         return;
     }
+#ifdef TETHYS_SATURN
+    // FIREWALL (bt863): a garbage block pointer (use-after-free / clobbered handle)
+    // would otherwise reach the callback dispatch (wild jump) and UploadTexture
+    // (CMP fatal). Skip the decode and record it instead of crashing.
+    if (!Tethys_BlockPtrSane(*field_20_ppBlock))
+    {
+        Tethys_gAnimBadBlock++; // firewall skip count (an/ap detail dropped bt867 to fund the overrun fix)
+        return;
+    }
+#endif
 
     AnimationHeader* pAnimationHeader = reinterpret_cast<AnimationHeader*>(&(*field_20_ppBlock)[field_18_frame_table_offset]);
     if (pAnimationHeader->field_2_num_frames == 1 && field_4_flags.Get(AnimFlags::eBit12_ForwardLoopCompleted))
@@ -638,6 +712,21 @@ void Animation::VCleanUp_403F40()
     if (field_4_flags.Get(AnimFlags::eBit17_bFreeResource))
     {
         ResourceManager::FreeResource_455550(field_20_ppBlock);
+#ifdef TETHYS_SATURN
+        // SATURN ROOT FIX (bt865): idempotency, mirroring the vram_rect.w=0 and
+        // pal_depth=0 guards below (added when the dtor was changed to ALWAYS
+        // vCleanUp). This free was left non-idempotent: on a persistent/pooled
+        // Animation (eSurviveDeathReset objects like Abe, alive across screen
+        // walks) a SECOND vCleanUp re-frees field_20_ppBlock. By then the heap
+        // node may have been recycled to a NEW resource, so the stale handle
+        // DECREMENTS THE NEW OCCUPANT -> premature free of a still-live block ->
+        // the next alloc coalesces + overruns its neighbour's Header (observed:
+        // heap corruption "walking as Abe", Mine_Flash stomp, sprites vanish).
+        // Clear the ownership flag + null the handle so a repeat vCleanUp is a
+        // no-op, exactly like the two frees that follow.
+        field_4_flags.Clear(AnimFlags::eBit17_bFreeResource);
+        field_20_ppBlock = nullptr;
+#endif
     }
 
     gObjList_animations_505564->Remove_Item(this);
