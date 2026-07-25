@@ -398,6 +398,26 @@ EXPORT void CC Pal_Area_Init_483080(s16 xpos, s16 ypos, u16 width, u16 height)
 
     Vram_alloc_explicit_4955F0(xpos, ypos, xpos + width - 1, ypos + height - 1);
 
+#ifdef TETHYS_SATURN
+    // SATURN FIX (bt915): the Saturn CPU CLUT mirror + PalSetData accept only x<512
+    // -- the per-row allocation bitmask sPal_table_5C9164[i] is a single s32 = 32
+    // bits x 16 colours = 512. The OG width/4 (=160 for the 640-wide PSX CLUT) lets
+    // Pal_Allocate_Helper place a palette at palX_idx up to pal_width-numBits (=144
+    // for a 256-pal), i.e. x0=16*palX_idx far past 512 (e.g. x0=384 -> 384+256=640).
+    // PalSetData then SILENTLY DROPS that write (x0+n>512) -> the anim's mirror row
+    // stays 0/stale -> the CAM-embedded bg-anims (R1 elevator barrels/chain/platform)
+    // read half-zero/half-stale -> black/white flicker (measured: mr8 rx384). Clamp
+    // the packing width to the real 32-unit row so no palette ever straddles 512
+    // (256->x0<=240, 64->x0<=432, 16->x0<=496; all fit). This is NOT a capacity cut:
+    // colours 512-640 were never tracked by the 32-bit bitmask, so allocating there
+    // only ever produced corruption. The Vram reservation above keeps the full 640
+    // (moot on Saturn: CLUTs live in the mirror/CRAM, not the PSX VRAM model).
+    if (pal_width_5C915C > 32)
+    {
+        pal_width_5C915C = 32;
+    }
+#endif
+
     for (s32 i = 0; i < height; i++)
     {
         sPal_table_5C9164[i] = 0;
