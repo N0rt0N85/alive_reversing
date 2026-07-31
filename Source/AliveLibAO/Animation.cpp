@@ -761,6 +761,21 @@ void Animation::VCleanUp_403F40()
     }
 
     ResourceManager::FreeResource_455550(field_24_dbuf);
+#ifdef TETHYS_SATURN
+    // SATURN (bt958): finish bt865 on the TWIN handle. field_24_dbuf is the same
+    // kind of thing as field_20_ppBlock -- a slot in the 375-node pool, not a
+    // block address -- so after the free it is still non-null, still 4-aligned,
+    // still in RAM, and EnsureDecompressionBuffer below tests ONLY `!field_24_dbuf`.
+    // The stale slot therefore gets reused, and Decompress_Type_4_5 writes
+    // field_28_dbuf_size bytes THROUGH it into whichever live resource now owns
+    // that node. That stomp is invisible to Tethys_HeapCheck (it validates the
+    // header stride, not payloads) and leaves exactly the field-death signature:
+    // block base sane, frame table garbage.
+    // NOTE: field_28_dbuf_size is deliberately NOT cleared. Keeping it lets a
+    // later EnsureDecompressionBuffer allocate a correctly-sized fresh buffer
+    // (including a bt870-grown size); zeroing it would ask for 0 bytes.
+    field_24_dbuf = nullptr;
+#endif
 }
 
 bool Animation::EnsureDecompressionBuffer()
@@ -1073,6 +1088,19 @@ FrameInfoHeader* Animation::Get_FrameHeader_403A00(s32 frame)
     // index reads arbitrary anim bytes and yields a wild -- frequently odd --
     // frameOffset, which produces the identical crash signature to a stale
     // block. Reject it here so the two causes stay distinguishable (why=2).
+    // bt958: validate pHead BEFORE reading through it. Check (1) validated the
+    // block BASE, not the sum: field_18_frame_table_offset is unbounded here, so
+    // a wild offset puts pHead anywhere and the num_frames read below would raise
+    // the very address error this guard exists to prevent. (Bounding the offset
+    // against the resource's own size needs the block Header -- that lands with
+    // the gauge build, together with the ownership test that is the only thing
+    // able to see a RECYCLED slot.)
+    if ((reinterpret_cast<u32>(pHead) & 3)
+        || !Tethys_BlockPtrSane(reinterpret_cast<const u8*>(pHead)))
+    {
+        return Tethys_AnimReject(5, reinterpret_cast<u32>(pHead));
+    }
+
     if (frame < 0 || pHead->field_2_num_frames <= 0 || frame >= pHead->field_2_num_frames)
     {
         return Tethys_AnimReject(2, static_cast<u32>(frame));
