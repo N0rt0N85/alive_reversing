@@ -287,6 +287,21 @@ static inline bool Tethys_BlockPtrSane(const u8* b)
         || (a >= 0x06000000u && a < 0x06100000u)   // HWRAM
         || (a >= 0x00200000u && a < 0x00300000u);  // LWRAM
 }
+
+// SATURN (bt955): the SAME corruption class also reaches the UPDATE/CULLING
+// path, which the bt863 firewall above never covered -- it only guards
+// VDecode_403550. Field death on hardware (SH-2 CPU address error, fr91475,
+// ~51 min in): Is_In_Current_Camera_417CC0 -> VGetBoundingRect_418120 ->
+// Get_FrameHeader_403A00, whose result is dereferenced with no test at all
+// 23 call sites. Gauges for the twin firewall installed there:
+//   n   = rejects
+//   why = 1 no/insane block, 2 frame index out of range, 3 misaligned or
+//         out-of-region frame header
+//   ptr = the last rejected value (the SAME address every time names a single
+//         stale owner; drifting addresses mean a wandering write)
+extern "C" volatile s32 Tethys_gAnimBadFrame = 0;
+extern "C" volatile s32 Tethys_gAnimBadWhy = 0;
+extern "C" volatile u32 Tethys_gAnimBadPtr = 0;
 #endif
 
 void Animation::UploadTexture(const FrameHeader* pFrameHeader, const PSX_RECT& vram_rect, s16 width_bpp_adjusted)
@@ -1010,12 +1025,41 @@ s16 Animation::Get_Frame_Count_403540()
 
 ALIVE_VAR(1, 0x4BA090, FrameInfoHeader, sBlankFrameInfoHeader_4BA090, {});
 
+#ifdef TETHYS_SATURN
+// SATURN (bt955): ONE out-of-line reject path shared by the three firewall
+// checks below. Inlining the counter triplet at each site cost ~60 B of .text
+// and the HWRAM pre-flight gate has well under 1 KB of slack, so keep it
+// noinline on purpose.
+__attribute__((noinline)) static FrameInfoHeader* Tethys_AnimReject(s32 why, u32 detail)
+{
+    Tethys_gAnimBadFrame++;
+    Tethys_gAnimBadWhy = why;
+    Tethys_gAnimBadPtr = detail;
+    return &sBlankFrameInfoHeader_4BA090;
+}
+#endif
+
 FrameInfoHeader* Animation::Get_FrameHeader_403A00(s32 frame)
 {
+#ifdef TETHYS_SATURN
+    // SATURN FIREWALL (bt955) -- the update/culling-path twin of the bt863
+    // firewall in VDecode_403550. NOTE the return value: on Saturn every
+    // failure yields the ZEROED sBlankFrameInfoHeader_4BA090, never nullptr.
+    // None of the 23 callers test for null, and on Saturn *null does not fault
+    // (it reads the boot ROM at 0x0000000C), so a null return just moves the
+    // crash somewhere less diagnosable. A blank header instead degrades to a
+    // zero-size bounding rect at the object's own position: the object culls
+    // out for one frame and the console lives.
+    if (!field_20_ppBlock || !*field_20_ppBlock || !Tethys_BlockPtrSane(*field_20_ppBlock))
+    {
+        return Tethys_AnimReject(1, field_20_ppBlock ? reinterpret_cast<u32>(*field_20_ppBlock) : 0u);
+    }
+#else
     if (!field_20_ppBlock)
     {
         return nullptr;
     }
+#endif
 
     if (frame < -1 || frame == -1)
     {
@@ -1023,6 +1067,18 @@ FrameInfoHeader* Animation::Get_FrameHeader_403A00(s32 frame)
     }
 
     AnimationHeader* pHead = reinterpret_cast<AnimationHeader*>(*field_20_ppBlock + field_18_frame_table_offset); // TODO: Make getting offset to animation header cleaner
+
+#ifdef TETHYS_SATURN
+    // mFrameOffsets holds exactly field_2_num_frames entries; an out-of-range
+    // index reads arbitrary anim bytes and yields a wild -- frequently odd --
+    // frameOffset, which produces the identical crash signature to a stale
+    // block. Reject it here so the two causes stay distinguishable (why=2).
+    if (frame < 0 || pHead->field_2_num_frames <= 0 || frame >= pHead->field_2_num_frames)
+    {
+        return Tethys_AnimReject(2, static_cast<u32>(frame));
+    }
+#endif
+
     u32 frameOffset = pHead->mFrameOffsets[frame];
 
     FrameInfoHeader* pFrame = reinterpret_cast<FrameInfoHeader*>(*field_20_ppBlock + frameOffset);
@@ -1034,6 +1090,19 @@ FrameInfoHeader* Animation::Get_FrameHeader_403A00(s32 frame)
     {
         FrameInfoHeader* Unknown = &sBlankFrameInfoHeader_4BA090;
         return Unknown;
+    }
+#endif
+
+#ifdef TETHYS_SATURN
+    // The guard above is the ORIGINAL PSX alignment check, and it is fenced off
+    // to 32-bit MSVC. On SH-2 it is not cosmetic: a misaligned mov.w/mov.l is a
+    // CPU address error, which IS the field death (the faulting instruction was
+    // `mov.w @(8,r6)` reading points[1] off this pointer). Revive it, and reject
+    // a header that lands outside every real region while we are here.
+    if ((reinterpret_cast<u32>(pFrame) & 3)
+        || !Tethys_BlockPtrSane(reinterpret_cast<const u8*>(pFrame)))
+    {
+        return Tethys_AnimReject(3, reinterpret_cast<u32>(pFrame));
     }
 #endif
 

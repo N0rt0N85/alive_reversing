@@ -377,6 +377,15 @@ PSX_RECT* BaseAnimatedWithPhysicsGameObject::VGetBoundingRect_418120(PSX_RECT* p
 {
     const FrameInfoHeader* pAnimFrameHeader = field_10_anim.Get_FrameHeader_403A00(-1);
 
+    // SATURN (bt955): the four reads below are where the tester's console died --
+    // `mov.w @(8,r6)` on points[1] through a wild header = SH-2 CPU address
+    // error (see the bt955 note on TETHYS_BUILD_TAG). There is deliberately NO
+    // guard here: Get_FrameHeader_403A00 (Animation.cpp) now firewalls it at the
+    // source and returns the ZEROED sBlankFrameInfoHeader instead of nullptr on
+    // Saturn, which covers all 23 unchecked call sites at once rather than this
+    // one. A local guard would only be dead .text, and the HWRAM pre-flight pool
+    // has under 1 KB of slack. If that contract ever changes, this is the site
+    // that pays for it first.
     PSX_RECT rect = {};
     // Normally this data is 3 points, one that is the frame offset and then 2 that make up the bounding rect.
     // So usually pointIdx is 1. However the way the data is structured it could be anything to treat any index
