@@ -29,3 +29,15 @@ EXPORT void CC New_ShootingZFire_Particle_419810(FP xpos, FP ypos, FP scale);
 EXPORT void CC New_ShootingFire_Particle_419720(FP xpos, FP ypos, s8 direction, FP scale);
 
 } // namespace AO
+
+#ifdef TETHYS_SATURN
+// SATURN (bt976): cosmetic-burst type, every ao_new site null-guards
+// (grep-verified incl. factory callers) -- soft OOM instead of the fatal
+// canary (see AO/stdlib.hpp Tethys_SoftOom).
+#include "stdlib.hpp"
+template <>
+struct Tethys_SoftOom<AO::Particle>
+{
+    static constexpr bool value = true;
+};
+#endif
