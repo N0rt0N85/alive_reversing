@@ -477,7 +477,8 @@ static bool Tethys_PtrSane(const void* p)
     }
     return (a >= 0x06000000u && a < 0x06100000u) // HWRAM
         || (a >= 0x00200000u && a < 0x00300000u) // LWRAM
-        || (a >= 0x02400000u && a < 0x02800000u); // cart RAM cached window (up to 4MB, S8 cart mode)
+        || (a >= 0x02400000u && a < 0x02800000u) // cart RAM cached window (up to 4MB, S8 cart mode)
+        || (a >= 0x22400000u && a < 0x22800000u); // cart uncached window (bt910 TETHYS_CART_UNCACHED A/B)
 }
 
 // SATURN: continuous physical-heap integrity check (live overlay row):

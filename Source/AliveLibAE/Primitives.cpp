@@ -137,7 +137,8 @@ static bool Tethys_OtPtrOk(u32 a)
     // and it read here as a wild tag -> the "OTa 026d27c0 ..." cart-mode fatal.
     return (a >= 0x06000000u && a < 0x06100000u) // HWRAM
         || (a >= 0x00200000u && a < 0x00300000u) // LWRAM
-        || (a >= 0x02400000u && a < 0x02800000u); // cart RAM cached window (S8 cart heap)
+        || (a >= 0x02400000u && a < 0x02800000u) // cart RAM cached window (S8 cart heap)
+        || (a >= 0x22400000u && a < 0x22800000u); // cart uncached window (bt910 TETHYS_CART_UNCACHED A/B)
 }
 #endif
 
