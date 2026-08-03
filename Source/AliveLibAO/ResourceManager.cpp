@@ -1266,10 +1266,14 @@ extern "C" void Tethys_CamStreamEnd();
 // new background is DMA'd to VDP2, so the old screen's foreground disappears
 // FIRST (user request, 3rd ask). Renderer-side; see Tethys_ClearForegroundAndPresent.
 extern "C" void Tethys_ClearForegroundAndPresent();
-// 71,680 B of HWRAM scratch (the renderer's latch-only sCamPix): [0..2047] is
-// the CD sector bounce (4-aligned, HWRAM -> the seam's fast path), [2048..2559]
-// assembles the 512 B palette for the one-shot CRAM write. No fresh .bss here
-// (a 2.5 KB add pushed the TLSF pool under the pre-flight floor).
+// EXACTLY 2,560 B of HWRAM scratch (bt978: the 71,680 B latch-only sCamPix
+// is GONE -- the renderer keeps only this small dedicated buffer): [0..2047]
+// is the CD sector bounce (4-aligned, HWRAM -> the seam's fast path),
+// [2048..2559] assembles the 512 B palette for the one-shot CRAM write.
+// HARD CONTRACT: never read/write past [2559] -- the renderer's live CAM
+// palette staging (sCamClut) sits in the adjacent .bss. The boot-time
+// ACTORPAL.R1 read (src/main.cxx) borrows [0..2047] too, capped at one
+// sector by cd_saturn.cxx.
 extern "C" u8* Tethys_CamStreamScratch();
 
 namespace {
@@ -1407,8 +1411,9 @@ void CC ResourceManager::Tethys_StreamCamFile(Camera* pCamera, bool bitsOnly)
     // Tethys_OnScreenChange at the top of ScreenChange_4444D0; this commits it.
     Tethys_ClearForegroundAndPresent();
 
-    // Latch VDP2 first (Begin's one-time LoadBitmap DMAs sCamPix); only after
-    // it returns is the scratch buffer free to become the CD bounce.
+    // Latch VDP2 first (Begin's one-time LoadBitmap + re-blank; bt978: its
+    // DMA source is a fake HWRAM span, the scratch is a separate dedicated
+    // buffer -- no ordering constraint between them remains).
     Tethys_CamStreamBegin();
 
     u8* scratch = Tethys_CamStreamScratch();
