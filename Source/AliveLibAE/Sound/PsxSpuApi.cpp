@@ -1503,9 +1503,48 @@ EXPORT s32 CC MIDI_Set_Volume_4FDE80(MIDI_Channel* pData, s32 vol)
 }
 
 
+#ifdef TETHYS_SATURN
+// SATURN: fixed-point 2^(x/12) (AUDIO_VIDEO_PLAN §2.5) -- replaces the
+// soft-double pow() at every note-on (AO/Midi.cpp:541), pitch-bend (AO
+// :780, MIDI_PitchBend below) and SsUtChangePitch.  12 exact 16.16
+// semitone anchors + linear interpolation inside the semitone (max error
+// ~0.7 cent, inaudible); octaves are shifts.  The seam signatures stay
+// f32 -- one soft-f32 multiply at the call site is cheap, the pow() was
+// not.  x256 = exponent in 1/256-semitone units.
+EXPORT f32 CC Tethys_Pow12_Saturn(s32 x256)
+{
+    static const u32 kSemi16[13] = {
+        65536u, 69433u, 73562u, 77936u, 82570u, 87480u, 92682u,
+        98193u, 104032u, 110218u, 116772u, 123716u, 131072u};
+    s32 oct = x256 / 3072; // 12 * 256
+    s32 rem = x256 - oct * 3072;
+    if (rem < 0)
+    {
+        rem += 3072;
+        oct--;
+    }
+    const u32 a = kSemi16[rem >> 8];
+    const u32 b = kSemi16[(rem >> 8) + 1];
+    const u32 v = a + (((b - a) * (u32) (rem & 255)) >> 8);
+    // Musical data stays within +-5 octaves; clamp so v<<oct cannot
+    // overflow (v < 2^17, so oct <= 14) and v>>oct cannot UB.
+    if (oct > 14)
+        oct = 14;
+    else if (oct < -16)
+        oct = -16;
+    const f32 scale = 1.0f / 65536.0f;
+    return (oct >= 0 ? (f32) (v << oct) : (f32) (v >> -oct)) * scale;
+}
+#endif
+
 EXPORT s16 CC MIDI_PitchBend_4FDEC0(s16 program, s16 pitch)
 {
+#ifdef TETHYS_SATURN
+    // SATURN: exponent was pitch/128 semitones (x256 = pitch*2)
+    const f32 pitcha = Tethys_Pow12_Saturn((s32) pitch * 2);
+#else
     const f32 pitcha = pow(1.059463094359f, (f32) pitch * 0.0078125f);
+#endif
     for (s32 i = 0; i < kNumChannels; i++)
     {
         if (gSpuVars->sMidi_Channels().channels[i].field_1C_adsr.field_1_program == program)
@@ -1520,7 +1559,12 @@ EXPORT s16 CC MIDI_PitchBend_4FDEC0(s16 program, s16 pitch)
 
 EXPORT s16 CC SsUtChangePitch_4FDF70(s16 voice, s32 /*vabId*/, s32 /*prog*/, s16 old_note, s16 old_fine, s16 new_note, s16 new_fine)
 {
+#ifdef TETHYS_SATURN
+    // SATURN: exponent was delta/128 semitones (x256 = delta*2)
+    const f32 freq = Tethys_Pow12_Saturn((new_fine + ((new_note - (s32) old_note) << 7) - old_fine) * 2);
+#else
     const f32 freq = pow(1.059463094359f, (f32)(new_fine + ((new_note - (s32) old_note) << 7) - old_fine) * 0.0078125f);
+#endif
     GetSoundAPI().SND_Buffer_Set_Frequency1(gSpuVars->sMidi_Channels().channels[voice].field_0_sound_buffer_field_4, freq);
     return 0;
 }

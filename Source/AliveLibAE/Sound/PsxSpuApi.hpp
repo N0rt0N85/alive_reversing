@@ -219,6 +219,13 @@ EXPORT void CC SsUtAllKeyOff_4FDFE0(s32 mode);
 EXPORT s16 CC SsUtKeyOffV_4FE010(s16 idx);
 EXPORT s16 CC SsUtChangePitch_4FDF70(s16 voice, s32 /*vabId*/, s32 /*prog*/, s16 old_note, s16 old_fine, s16 new_note, s16 new_fine);
 
+#ifdef TETHYS_SATURN
+// SATURN: shared fixed-point 2^(x/12) for the note-on / pitch-bend hot paths
+// (no FPU -- the f64 pow() these paths used costs thousands of cycles each).
+// x256 = exponent in 1/256-semitone units; returns the frequency multiplier.
+EXPORT f32 CC Tethys_Pow12_Saturn(s32 x256);
+#endif
+
 EXPORT s16 CC SsSeqOpen_4FD6D0(u8* pSeqData, s16 seqIdx);
 EXPORT void CC SsSeqClose_4FD8D0(s16 idx);
 EXPORT void CC SsSeqStop_4FD9C0(s16 idx);

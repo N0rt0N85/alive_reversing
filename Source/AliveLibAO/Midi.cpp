@@ -538,8 +538,16 @@ EXPORT s32 CC MIDI_PlayerPlayMidiNote_49D730(s32 vabId, s32 program, s32 note, s
                         pChannel->field_1C_adsr.field_1_program = (u8) program;
                         auto v29 = pVagOff->field_A_shift_cen;
                         pChannel->field_1C_adsr.field_2_note_byte1 = BYTE1(note) & 0x7F;
+#ifdef TETHYS_SATURN
+                        // SATURN: exponent was (note-v29)/256 semitones --
+                        // x256 = note-v29 directly (AUDIO_VIDEO_PLAN §2.5,
+                        // the note-on f64 pow on an FPU-less SH-2)
+                        const f32 freq = Tethys_Pow12_Saturn(note - v29);
+                        pChannel->field_10_freq = freq;
+#else
                         auto freq = pow(1.059463094359, (f64)(note - v29) * 0.00390625);
                         pChannel->field_10_freq = (f32) freq;
+#endif
                         SND_PlayEx_493040(
                             &GetSpuApiVars()->sSoundEntryTable16().table[vabId][vag_num],
                             panLeft,
@@ -777,7 +785,13 @@ EXPORT s32 CC MIDI_ParseMidiMessage_49DD30(s32 idx)
                         const s32 prog_num = pCtx->field_32_progVols[data.Channel()].field_0_program;
 
                         // Inlined MIDI_PitchBend
+#ifdef TETHYS_SATURN
+                        // SATURN: exponent was x/128 semitones (x256 = x*2);
+                        // this pow ran ahead of a 24-channel loop (§2.5)
+                        const f32 freq_conv = Tethys_Pow12_Saturn((s32) (s16) (((data.param1) - 0x4000) >> 4) * 2);
+#else
                         const f32 freq_conv = (f32) pow(1.059463094359, (f64)(s16)(((data.param1) - 0x4000) >> 4) * 0.0078125);
+#endif
 
                         for (s32 i = 0; i < 24; i++)
                         {
@@ -896,10 +910,15 @@ EXPORT void CC SsVabTransBody_49D3E0(VabBodyRecord* pVabBody, s16 vabId)
 
         memset(pEntry, 0, sizeof(SoundEntry));
 
+        // SATURN: S9 -- the converted .VB is a uniform PCM8 bank (signed s8,
+        // 1 byte/sample, tools/converter/vab.py) and each record's field_4
+        // carries the playback BASE RATE +-(44100>>k) instead of being
+        // unused (docs/AUDIO_VIDEO_PLAN.md §3.2 pinned contract).  sampleLen
+        // is therefore = length in bytes (was PCM16 length/2).
         s32 sampleLen = -1;
         if (pVabHeader && i >= 0)
         {
-            sampleLen = (8 * IterateVBRecords(pVabBody, i)->field_0_length_or_duration) / 16;
+            sampleLen = IterateVBRecords(pVabBody, i)->field_0_length_or_duration;
         }
 
         if (sampleLen > 0)
@@ -928,32 +947,19 @@ EXPORT void CC SsVabTransBody_49D3E0(VabBodyRecord* pVabBody, s16 vabId)
                 }
             }
 
-            if (!SND_New_492790(pEntry, sampleLen, 44100, 16u, 0))
+            // SATURN: S9 -- rate from the record (magnitude; the sign is the
+            // loop flag captured above), depth 8-bit, and DIRECT-FEED the
+            // resource memory to the backend upload instead of the original
+            // malloc+memcpy round-trip (largest record 87,808 B -- a
+            // transient that outgrows the TLSF pools at the memory-tightest
+            // phase; the Saturn SND_Load writes sound RAM straight from the
+            // source bytes).
+            const s32 recRate = v10->field_4_unused >= 0 ? v10->field_4_unused : -v10->field_4_unused;
+            if (!SND_New_492790(pEntry, sampleLen, recRate, 8u, 0))
             {
-                auto pTempBuffer = (u32*) malloc(sampleLen * pEntry->field_1D_blockAlign);
-                if (pTempBuffer)
+                if (sampleLen)
                 {
-                    u32* pSrcVB = nullptr;
-                    if (pVabHeader && i >= 0)
-                    {
-                        pSrcVB = &IterateVBRecords(pVabBody, i)->field_8_fileOffset;
-                    }
-
-                    s32 sampleLen2 = -1;
-                    if (pVabHeader && i >= 0)
-                    {
-                        sampleLen2 = (8 * IterateVBRecords(pVabBody, i)->field_0_length_or_duration) / 16;
-                    }
-
-                    const s32 len = (16 * sampleLen2) / 8;
-                    memcpy(pTempBuffer, pSrcVB, len);
-
-                    if (sampleLen2)
-                    {
-                        SND_Load_492F40(pEntry, pTempBuffer, sampleLen2);
-                    }
-
-                    free(pTempBuffer);
+                    SND_Load_492F40(pEntry, &v10->field_8_fileOffset, sampleLen);
                 }
             }
         }
@@ -971,9 +977,25 @@ EXPORT s16 CC SND_VAB_Load_476CB0(SoundBlockInfo* pSoundBlockInfo, s16 vabId)
     // Find the VH file record
     LvlFileRecord* pVabHeaderFile = sLvlArchive_4FFD60.Find_File_Record_41BED0(pSoundBlockInfo->field_0_vab_header_name);
 
+    // SATURN: a missing VH (e.g. no MONK.VH in a level) derefs null here --
+    // the S4 null-handle class (AUDIO_VIDEO_PLAN §3.3); fail soft like the
+    // missing-VB path below.
+    if (!pVabHeaderFile)
+    {
+        return 0;
+    }
+
     s32 headerSize = pVabHeaderFile->field_10_num_sectors << 11;
 
     u8** ppVabHeader = ResourceManager::Allocate_New_Locked_Resource_454F80(ResourceManager::Resource_VabHeader, vabId, headerSize);
+
+    // SATURN: unchecked Allocate_New_Locked null = *null reads the BIOS
+    // vector then Read_File writes ~2-4 KB through a wild pointer (same S4
+    // class); the alloc can fail exactly at the memory-tightest load phase.
+    if (!ppVabHeader)
+    {
+        return 0;
+    }
 
     pSoundBlockInfo->field_C_pVabHeader = *ppVabHeader;
     sLvlArchive_4FFD60.Read_File_41BE40(pVabHeaderFile, *ppVabHeader);
@@ -996,7 +1018,13 @@ EXPORT s16 CC SND_VAB_Load_476CB0(SoundBlockInfo* pSoundBlockInfo, s16 vabId)
         if (!GetMidiVars()->sSnd_ReloadAbeResources())
         {
             GetMidiVars()->sSnd_ReloadAbeResources() = TRUE;
-            sActiveHero_507678->Free_Resources_422870();
+            // SATURN: at boot the VABs load before any Abe exists -- the
+            // original derefs null here (crash class documented in
+            // tools/converter/vab.py); the Reclaim below still runs.
+            if (sActiveHero_507678)
+            {
+                sActiveHero_507678->Free_Resources_422870();
+            }
         }
 
         // Compact/reclaim any other memory we can too
@@ -1012,6 +1040,15 @@ EXPORT s16 CC SND_VAB_Load_476CB0(SoundBlockInfo* pSoundBlockInfo, s16 vabId)
 
     sLvlArchive_4FFD60.Read_File_41BE40(pVabBodyFile, *ppVabBody);
     pSoundBlockInfo->field_8_vab_id = SsVabOpenHead_49CFB0(reinterpret_cast<VabHeader*>(pSoundBlockInfo->field_C_pVabHeader));
+    // SATURN: a VH-declared id outside kMaxVabs would make TransBody index
+    // the fixed VAG/entry tables out of bounds -- on Saturn those live in
+    // the VDP1 VRAM tail, and the overrun lands in the FRAMEBUFFER with no
+    // crash (S9 review).  Real data uses ids 0..1; reject anything else.
+    if (pSoundBlockInfo->field_8_vab_id < 0 || pSoundBlockInfo->field_8_vab_id >= kMaxVabs)
+    {
+        ResourceManager::FreeResource_455550(ppVabBody);
+        return 0;
+    }
     SsVabTransBody_49D3E0(reinterpret_cast<VabBodyRecord*>(*ppVabBody), static_cast<s16>(pSoundBlockInfo->field_8_vab_id));
     SsVabTransCompleted_4FE060(SS_WAIT_COMPLETED);
 

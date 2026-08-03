@@ -42,6 +42,21 @@ EXPORT s32 CC Psx_Root_Counter_Event_Free_49C2B0(s32 event)
     return 1;
 }
 
+// SATURN: S9 music clock.  The PSX vblank root counter that drives
+// sMusicTime (OnRootCounter_4437D0, registered via Psx_Root_Counter_49C280
+// above) is never invoked by the PC reimpl nor, until S9, by the Saturn
+// platform layer -- the adaptive-music timeline sat frozen at 0.  The
+// platform layer (src/sys_saturn.cxx, PSX_VSync) calls this once per
+// counted vblank instead: wall-clock-true through loading loops, exactly
+// like the PSX counter it models (docs/AUDIO_VIDEO_PLAN.md §5.1).
+EXPORT void CC Tethys_TickMusicClock_Saturn()
+{
+    if (sRootCounerFn_AC0BE0)
+    {
+        sRootCounerFn_AC0BE0();
+    }
+}
+
 EXPORT s32 CC Psx_Root_Counter_49C3B0(s32 /*not_used*/)
 {
     return 0;
