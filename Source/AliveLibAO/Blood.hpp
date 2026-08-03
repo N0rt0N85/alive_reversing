@@ -62,3 +62,14 @@ public:
 ALIVE_ASSERT_SIZEOF(Blood, 0x120);
 
 } // namespace AO
+
+#ifdef TETHYS_SATURN
+// SATURN (bt976): blood is a cosmetic burst, all sites null-guard -- soft OOM
+// (see AO/stdlib.hpp Tethys_SoftOom).
+#include "stdlib.hpp"
+template <>
+struct Tethys_SoftOom<AO::Blood>
+{
+    static constexpr bool value = true;
+};
+#endif

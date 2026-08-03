@@ -70,3 +70,15 @@ public:
 ALIVE_ASSERT_SIZEOF(Gibs, 0x5C8);
 
 } // namespace AO
+
+#ifdef TETHYS_SATURN
+// SATURN (bt976): gibs are a cosmetic burst and EVERY ao_new<Gibs> site
+// null-guards -- degrade to "no debris" on a dry pool instead of the fatal
+// canary (field OOM: Slig gib explosion at hw1504, 1480 B object).
+#include "stdlib.hpp"
+template <>
+struct Tethys_SoftOom<AO::Gibs>
+{
+    static constexpr bool value = true;
+};
+#endif

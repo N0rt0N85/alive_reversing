@@ -32,3 +32,14 @@ public:
 ALIVE_ASSERT_SIZEOF(BulletShell, 0xF4);
 
 } // namespace AO
+
+#ifdef TETHYS_SATURN
+// SATURN (bt976): ejected shells are cosmetic, all sites null-guard -- soft
+// OOM (see AO/stdlib.hpp Tethys_SoftOom).
+#include "stdlib.hpp"
+template <>
+struct Tethys_SoftOom<AO::BulletShell>
+{
+    static constexpr bool value = true;
+};
+#endif
