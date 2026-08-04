@@ -811,6 +811,54 @@ void CC AnimationBase::AnimateAll_4034F0(DynamicArrayT<AnimationBase>* pAnimList
     }
 }
 
+#ifdef TETHYS_SATURN
+// SATURN: bt982 -- COMPILED frame-table offset -> ACTUAL offset.
+//
+// The offline converter compacts Anim chunks: the Saturn frames are half-size
+// after the 2x downscale, so leaving each one at its PSX offset wasted 38.7%
+// of every payload (952,656 B measured over R1.LVL) -- dead weight the
+// ResourceManager pays for twice, in the resident block AND in the contiguous
+// staging allocation. That padding is what wedged the no-cart configuration on
+// the R1P15 mine screen (hardware "LWRAM wedge" fatal, bt980). Compaction
+// repacks the payload and slides the frame-table region down as one block;
+// every other cross-reference is rewritten offline, but the table offsets
+// baked into kAnimRecords/kBgAnimRecords are compiled into THIS binary, so
+// they are translated here, at the only two doors into an animation.
+//
+// The payload carries its own fixup record at +8: 'TSAT', compiled table base,
+// actual table base (all u32 BE = native SH-2 loads). No record -> no
+// translation, so uncompacted chunks are untouched.
+//
+// IDEMPOTENT BY CONSTRUCTION, and it has to be: Abe.cpp:4523 and Elum.cpp:2104
+// feed field_18_frame_table_offset -- an ALREADY translated value -- straight
+// back into Set_Animation_Data_402A40. The converter only compacts when the
+// whole new payload ends at or below the compiled table base, so a translated
+// offset can never satisfy the `>= oldBase` test and passes through unchanged.
+// Reference implementation + the guard: tools/converter/anim.py
+// (fixup_table_offset / _compact_payload).
+static s32 Tethys_FixupFrameTable(const u8* pBlock, s32 off)
+{
+    // A misaligned or null block is an SH-2 address error waiting to happen;
+    // bail to the untranslated offset and let the bt955 firewall handle it.
+    if (!pBlock || (reinterpret_cast<u32>(pBlock) & 3u) || off < 0)
+    {
+        return off;
+    }
+    const u32* pFixup = reinterpret_cast<const u32*>(pBlock + 8);
+    if (pFixup[0] != 0x54534154u) // 'TSAT'
+    {
+        return off;
+    }
+    const u32 oldBase = pFixup[1];
+    const u32 newBase = pFixup[2];
+    if (static_cast<u32>(off) >= oldBase && oldBase >= newBase)
+    {
+        return off - static_cast<s32>(oldBase - newBase);
+    }
+    return off;
+}
+#endif
+
 s16 Animation::Set_Animation_Data_402A40(s32 frameTableOffset, u8** pAnimRes)
 {
     FrameTableOffsetExists(frameTableOffset, false);
@@ -824,6 +872,9 @@ s16 Animation::Set_Animation_Data_402A40(s32 frameTableOffset, u8** pAnimRes)
         return 0;
     }
 
+#ifdef TETHYS_SATURN
+    frameTableOffset = Tethys_FixupFrameTable(*field_20_ppBlock, frameTableOffset);
+#endif
     field_18_frame_table_offset = frameTableOffset;
 
     AnimationHeader* pAnimationHeader = reinterpret_cast<AnimationHeader*>(&(*field_20_ppBlock)[field_18_frame_table_offset]);
@@ -887,6 +938,14 @@ s16 Animation::Init_402D20(s32 frameTableOffset, DynamicArray* /*animList*/, Bas
         LOG_WARNING("Animation init failed because the resource wasn't loaded!");
         return 0;
     }
+
+#ifdef TETHYS_SATURN
+    // SATURN: bt982 -- see Tethys_FixupFrameTable above. Applied after the
+    // null check because it needs the block, and re-stored because field_18
+    // was written from the compiled value a few lines up.
+    frameTableOffset = Tethys_FixupFrameTable(*ppAnimData, frameTableOffset);
+    field_18_frame_table_offset = frameTableOffset;
+#endif
 
     field_94_pGameObj = pGameObj;
 
