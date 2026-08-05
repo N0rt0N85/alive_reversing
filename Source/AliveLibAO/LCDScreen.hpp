@@ -12,6 +12,16 @@ namespace AO {
 
 void SetLcdMessagesForLvl(const StringTable& msgs, LevelIds lvl, u32 pathId);
 
+#ifdef TETHYS_SATURN
+// SATURN (S8): install the localized (FR / ES) LCD marquee text.  `pTable`
+// and every string it points at must outlive the session -- src/main.cxx
+// (Tethys_LoadLcdMessages) keeps the whole LCDMSG.BIN pack in LWRAM and never
+// frees it.  A null table, a short count or a null entry all fall back to the
+// compiled US string, so a partial translation is fine.  Consulted by
+// LCDMessages::GetMessage AFTER the upstream Pxtd / StringTable path.
+extern "C" void Tethys_SetLcdMessageTable(const char* const* pTable, unsigned int count);
+#endif
+
 struct Path_LCDScreen final : public Path_TLV
 {
     s16 field_18_message_1_id;

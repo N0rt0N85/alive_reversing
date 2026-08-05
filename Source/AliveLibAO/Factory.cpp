@@ -2295,18 +2295,8 @@ EXPORT void Factory_GrenadeMachine_487860(Path_TLV* pTlv, Map* /*pMap*/, TlvItem
 
 EXPORT void Factory_LCD_481950(Path_TLV* pTlv, Map* /*pMap*/, TlvItemInfoUnion tlvOffsetLevelIdPathId, LoadMode loadMode)
 {
-#ifdef TETHYS_SATURN
-    // SATURN: deferred to S8 with the font pipeline. LCDFONT.FNT is still
-    // little-endian on the converted CD (tools/converter cli.py deferral):
-    // its dims fed vram_alloc as 30720 x -15616, and the LCDScreen's
-    // AliveFont FntP block came back null at construct (heap at peak) --
-    // RELIVE's unchecked *null sent DrawString polys into BIOS ROM (the S4
-    // "OTa 20000200" fatal). Display-only object: no load, no construct.
-    (void) pTlv;
-    (void) tlvOffsetLevelIdPathId;
-    (void) loadMode;
-    return;
-#endif
+    // SATURN: re-enabled at S8 (converter emits BE FNT; renderer composites
+    // text).
     if (loadMode == LoadMode::LoadResourceFromList_1 || loadMode == LoadMode::LoadResource_2)
     {
         ResourceManager::LoadResource_446C90("LCDFONT.FNT", ResourceManager::Resource_Font, AOResourceID::kLcdfontAOResID, loadMode);
@@ -2370,14 +2360,8 @@ EXPORT void Factory_Preloader_Null_4817A0(Path_TLV* /*pTlv*/, Map* /*pMap*/, Tlv
 
 EXPORT void Factory_StatusBoard_487AF0(Path_TLV* pTlv, Map* /*pMap*/, TlvItemInfoUnion tlvOffsetLevelIdPathId, LoadMode loadMode)
 {
-#ifdef TETHYS_SATURN
-    // SATURN: deferred to S8 with the font pipeline -- same rationale as
-    // Factory_LCD_481950 above (display-only, LCDFONT.FNT still LE).
-    (void) pTlv;
-    (void) tlvOffsetLevelIdPathId;
-    (void) loadMode;
-    return;
-#endif
+    // SATURN: re-enabled at S8 (converter emits BE FNT; renderer composites
+    // text) -- same as Factory_LCD_481950 above.
     if (loadMode == LoadMode::LoadResourceFromList_1 || loadMode == LoadMode::LoadResource_2)
     {
         ResourceManager::LoadResource_446C90("LCDFONT.FNT", ResourceManager::Resource_Font, AOResourceID::kLcdfontAOResID, loadMode);

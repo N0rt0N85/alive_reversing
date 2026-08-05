@@ -248,6 +248,95 @@ const Font_AtlasEntry sFont2Atlas_4C58B8[104] = {
 // SATURN: fonts whose FntP poly block failed to allocate (dead fonts) --
 // shown on the death screen / overlay (src/sys_saturn.cxx row 12 "F").
 extern "C" volatile u32 Tethys_gFontNullPolys = 0;
+
+// SATURN (S8): the localized (French / Spanish) atlas tables, extracted from
+// the shipped AbeWin.exe.  The Saturn build ships localized game data ONLY
+// (build.ps1 emits Tethys.bin from the FR install and Tethys_ES.bin from the
+// ES one), and the localized FONT SHEETS are laid out differently from the US
+// ones, so the US sFont*Atlas_* tables above are simply wrong for our data.
+#include "tethys_euro_atlas.inc"
+
+// SATURN: atlas index rule, ONE definition for the four call sites below.
+// The Euro tables push the control block from index 92 (US) to 145, so the
+// control bias goes 84 -> 137 and the printable ceiling 122 -> 175:
+//
+//   uc = (u8) c                          <- MUST be unsigned, see below
+//   uc <= 32 || uc > 175  ->  (uc < 8 || uc > 31) ? 1 (blank) : uc + 137
+//   otherwise             ->  uc - 31
+//
+// The (u8) cast is load-bearing: char_type is plain `char`
+// (AliveLibCommon/Types.hpp:7) and sh2eb-elf GCC makes plain char SIGNED, so
+// every CP437 accent (0x80..0xAF) is NEGATIVE here and would take the `<= 32`
+// control branch and render as a space -- a correct atlas rendered blank.
+enum : s32
+{
+    kTethysAtlasBlankIdx = 1, // entry 1 = the blank / fallback advance
+};
+
+static s32 Tethys_AtlasIndex(u8 uc)
+{
+    if (uc <= 32 || uc > kTethysEuroFontPrintableHi)
+    {
+        if (uc < 8 || uc > 31)
+        {
+            return kTethysAtlasBlankIdx;
+        }
+        return static_cast<s32>(uc) + kTethysEuroFontCtrlBias;
+    }
+    return static_cast<s32>(uc) - 31;
+}
+
+// SATURN: out-of-range atlas indices caught by Tethys_AtlasIndexChecked
+// (nonzero = a control code the loaded sheet has no glyph for -- font2 only
+// carries chars 8..19, so e.g. kAO_Or ("\x14") on an LCD screen lands here).
+extern "C" volatile u32 Tethys_gFontAtlasClamps = 0;
+
+// The two tables have DIFFERENT lengths (169 vs 157) and FontContext cannot
+// grow a count field (LCDScreen/LCDStatusBoard/GasCountDown/MainMenu all have
+// ALIVE_ASSERT_SIZEOF over it), so the length is re-derived from the resource
+// id that selected the table in LoadFontType_41C040.  An unchecked index into
+// a const array on SH-2 reads arbitrary .rodata -> arbitrary VRAM rects.
+static s32 Tethys_AtlasIndexChecked(const FontContext* pCtx, s32 idx)
+{
+    const s32 count = (pCtx->field_C_resource_id == 1)
+                          ? static_cast<s32>(ALIVE_COUNTOF(kTethysFont1AtlasEuro))
+                          : static_cast<s32>(ALIVE_COUNTOF(kTethysFont2AtlasEuro));
+    if (idx < 0 || idx >= count)
+    {
+        Tethys_gFontAtlasClamps = Tethys_gFontAtlasClamps + 1;
+        return kTethysAtlasBlankIdx;
+    }
+    return idx;
+}
+
+// SATURN: compiled font palettes (AO/LCDScreen.cpp:21-87,
+// AO/LCDStatusBoard.cpp sStatsSignFontPalette_4CD570, AO/GasCountDown.cpp
+// byte_4C5080, AO/PauseMenu.cpp byte_4C5EE8, AO/MainMenu.cpp sFontPal_4D0090)
+// are PSX u16s frozen as u8[32] LITTLE-endian byte pairs.  The Saturn
+// PalSetData (src/renderer_saturn.cxx:3784) assembles each entry BIG-endian
+// ((src[0] << 8) | src[1]) because every OTHER palette it sees comes from the
+// offline converter, which already emits CRAM-ready big-endian entries.  So
+// these compiled ones must be swapped -- and put through the project CRAM
+// value rule (tools/converter/common.py sat_cram): 0x0000 stays transparent,
+// anything else gets the Saturn opaque bit.  Entry 0 is {0,0} in every one of
+// these palettes, so transparency is preserved.
+void Tethys_PalSetCompiled(s16 palX, s16 palY, s16 depth, const u8* pPalette)
+{
+    u8 swapped[32];
+    s16 entries = depth;
+    if (entries > 16)
+    {
+        entries = 16; // compiled palettes are u8[32] = 16 entries, never more
+    }
+    for (s16 i = 0; i < entries; i++)
+    {
+        const u16 psx = static_cast<u16>(static_cast<u16>(pPalette[2 * i]) | (static_cast<u16>(pPalette[(2 * i) + 1]) << 8));
+        const u16 sat = (psx == 0) ? static_cast<u16>(0) : static_cast<u16>(0x8000u | (psx & 0x7FFFu));
+        swapped[2 * i] = static_cast<u8>(sat >> 8);
+        swapped[(2 * i) + 1] = static_cast<u8>(sat & 0xFF);
+    }
+    IRenderer::GetRenderer()->PalSetData(IRenderer::PalRecord{palX, palY, entries}, swapped);
+}
 #endif
 
 void CC FontContext::static_ctor_41C010()
@@ -278,10 +367,21 @@ void FontContext::LoadFontType_41C040(s16 resourceID)
     switch (resourceID)
     {
         case 1:
+#ifdef TETHYS_SATURN
+            // SATURN (S8): localized sheet -> localized table (see the
+            // tethys_euro_atlas.inc banner). field_C_resource_id, set above,
+            // is what Tethys_AtlasIndexChecked re-derives the length from.
+            field_8_atlas_array = kTethysFont1AtlasEuro;
+#else
             field_8_atlas_array = sFont1Atlas_4C56E8;
+#endif
             break;
         case 2:
+#ifdef TETHYS_SATURN
+            field_8_atlas_array = kTethysFont2AtlasEuro;
+#else
             field_8_atlas_array = sFont2Atlas_4C58B8;
+#endif
             break;
         default:
             ALIVE_FATAL("Unknown font resource ID !!!");
@@ -310,7 +410,14 @@ AliveFont* AliveFont::ctor_41C170(s32 maxCharLength, const u8* palette, FontCont
         LOG_ERROR("PalAlloc failed");
     }
 
+#ifdef TETHYS_SATURN
+    // SATURN: `palette` is always a compiled PSX little-endian u8[32] (every
+    // caller passes one: LCDScreen, LCDStatusBoard, GasCountDown, PauseMenu,
+    // MainMenu) -- swap it before it reaches the big-endian PalSetData.
+    Tethys_PalSetCompiled(rec.x, rec.y, rec.depth, palette);
+#else
     IRenderer::GetRenderer()->PalSetData(rec, palette);
+#endif
 
     field_28_palette_rect.x = rec.x;
     field_28_palette_rect.y = rec.y;
@@ -350,6 +457,18 @@ EXPORT u32 AliveFont::MeasureWidth_41C2B0(const char_type* text)
         const char_type c = text[i];
         s32 charIndex = 0;
 
+#ifdef TETHYS_SATURN
+        // SATURN (S8): one shared Euro rule + a bounds check (this site was
+        // already decompiled from a Euro build -- `c + 137` and `c < 7` --
+        // and so read up to 53 entries PAST the 104-entry US table).
+        charIndex = Tethys_AtlasIndex(static_cast<u8>(c));
+        if (charIndex == kTethysAtlasBlankIdx)
+        {
+            result += field_34_font_context->field_8_atlas_array[1].field_2_width;
+            continue;
+        }
+        charIndex = Tethys_AtlasIndexChecked(field_34_font_context, charIndex);
+#else
         if (c <= 32 || static_cast<u8>(c) > 175)
         {
             if (c < 7 || c > 31)
@@ -366,6 +485,7 @@ EXPORT u32 AliveFont::MeasureWidth_41C2B0(const char_type* text)
         {
             charIndex = c - 31;
         }
+#endif
 
         result += field_34_font_context->field_8_atlas_array[0].field_2_width;
         result += field_34_font_context->field_8_atlas_array[charIndex].field_2_width;
@@ -385,6 +505,15 @@ EXPORT s32 AliveFont::MeasureWidth_41C200(char_type character)
     s32 result = 0;
     s32 charIndex = 0;
 
+#ifdef TETHYS_SATURN
+    // SATURN (S8): shared Euro rule (+ 84 -> + 137) + bounds check.
+    charIndex = Tethys_AtlasIndex(static_cast<u8>(character));
+    if (charIndex == kTethysAtlasBlankIdx)
+    {
+        return field_34_font_context->field_8_atlas_array[1].field_2_width;
+    }
+    charIndex = Tethys_AtlasIndexChecked(field_34_font_context, charIndex);
+#else
     if (character <= 32 || character > 175)
     {
         if (character < 8 || character > 31)
@@ -397,11 +526,21 @@ EXPORT s32 AliveFont::MeasureWidth_41C200(char_type character)
     {
         charIndex = character - 31;
     }
+#endif
     result = field_34_font_context->field_8_atlas_array[charIndex].field_2_width;
 
     if (!sFontDrawScreenSpace_508BF4)
     {
+#ifdef TETHYS_SATURN
+        // SATURN (P10): no FPU on SH-2.  0.575 IS 23/40 -- the very PSX->PC x
+        // scale PCToPsxX applies (PsxDisplay.hpp:28), which the decompiler
+        // spelled as a double.  `result` is a u8 atlas width (<= 69 in either
+        // Euro table), and for 0 <= result <= 199 the integer form (r*23)/40
+        // is BIT-IDENTICAL to (s32)(r * 0.575) -- checked exhaustively.
+        result = PCToPsxX(result);
+#else
         result = static_cast<s32>(result * 0.575);
+#endif
     }
 
     return result;
@@ -411,7 +550,13 @@ EXPORT s32 AliveFont::MeasureWidth_41C200(char_type character)
 s32 AliveFont::MeasureWidth_41C280(const char_type* text, FP scale)
 {
     const FP width = FP_FromInteger(MeasureWidth_41C2B0(text));
+#ifdef TETHYS_SATURN
+    // SATURN (P10): FP_FromDouble(0.5) == FP_FromRaw(0x8000) exactly
+    // (0.5 * 0x10000 = 32768) -- same bits, no FPU.
+    return FP_GetExponent((width * scale) + FP_FromRaw(0x8000));
+#else
     return FP_GetExponent((width * scale) + FP_FromDouble(0.5));
+#endif
 }
 
 EXPORT s32 AliveFont::DrawString_41C360(PrimHeader** ppOt, const char_type* text, s16 x, s16 y, TPageAbr abr, s32 bSemiTrans, s32 blendMode, Layer layer, u8 r, u8 g, u8 b, s32 polyOffset, FP scale, s32 maxRenderWidth, s32 colorRandomRange)
@@ -446,6 +591,16 @@ EXPORT s32 AliveFont::DrawString_41C360(PrimHeader** ppOt, const char_type* text
 
         const u8 c = text[i];
 
+#ifdef TETHYS_SATURN
+        // SATURN (S8): shared Euro rule (+ 84 -> + 137) + bounds check.
+        charInfoIndex = Tethys_AtlasIndex(c);
+        if (charInfoIndex == kTethysAtlasBlankIdx)
+        {
+            offsetX += field_34_font_context->field_8_atlas_array[0].field_2_width + field_34_font_context->field_8_atlas_array[1].field_2_width;
+            continue;
+        }
+        charInfoIndex = Tethys_AtlasIndexChecked(field_34_font_context, charInfoIndex);
+#else
         if (c <= 32 || c > 175)
         {
             if (c < 8 || c > 31)
@@ -459,6 +614,7 @@ EXPORT s32 AliveFont::DrawString_41C360(PrimHeader** ppOt, const char_type* text
         {
             charInfoIndex = c - 31;
         }
+#endif
 
         const auto fContext = field_34_font_context;
         const auto atlasEntry = &fContext->field_8_atlas_array[charInfoIndex];
@@ -468,8 +624,17 @@ EXPORT s32 AliveFont::DrawString_41C360(PrimHeader** ppOt, const char_type* text
         const s8 texture_u = static_cast<s8>(atlasEntry->field_0_x + (4 * (fContext->field_0_rect.x & 0x3F)));
         const s8 texture_v = static_cast<s8>(atlasEntry->field_1_y + LOBYTE(fContext->field_0_rect.y));
 
+#ifdef TETHYS_SATURN
+        // SATURN (P10): SH-2 has no FPU -- 16.16 multiply instead of the
+        // decompiler's double.  For scale == FP_FromInteger(1) this is
+        // bit-exact: Math_FixedPoint_Multiply(w << 16, 0x10000) == w << 16,
+        // and FP_GetExponent divides that back to w, exactly like w * 1.0.
+        const s16 widthScaled = FP_GetExponent(FP_FromInteger(charWidth) * scale);
+        const s16 heightScaled = FP_GetExponent(FP_FromInteger(charHeight) * scale);
+#else
         const s16 widthScaled = static_cast<s16>(charWidth * FP_GetDouble(scale));
         const s16 heightScaled = static_cast<s16>(charHeight * FP_GetDouble(scale));
+#endif
 
         PolyFT4_Init(poly);
 
@@ -558,6 +723,13 @@ const char_type* AliveFont::SliceText_41C6C0(const char_type* text, s32 left, FP
             break;
         }
 
+#ifdef TETHYS_SATURN
+        // SATURN (S8): shared Euro rule + bounds check.  This site kept the
+        // US ceiling `> 122` while the three others already said `> 175`, so
+        // it treated EVERY accented byte as blank and mis-measured every
+        // French / Spanish line the word-wrapper looked at.
+        atlasIdx = Tethys_AtlasIndexChecked(field_34_font_context, Tethys_AtlasIndex(static_cast<u8>(character)));
+#else
         if (character <= 32 || character > 122)
         {
             atlasIdx = character < 8 || character > 31 ? 1 : character + 84;
@@ -566,8 +738,15 @@ const char_type* AliveFont::SliceText_41C6C0(const char_type* text, s32 left, FP
         {
             atlasIdx = character - 31;
         }
+#endif
 
+#ifdef TETHYS_SATURN
+        // SATURN (P10): 16.16 multiply, no FPU.  Bit-exact at scale == 1
+        // (the only scale LCDScreen::VUpdate_4341B0 ever passes).
+        xOff += FP_GetExponent(FP_FromInteger(field_34_font_context->field_8_atlas_array[atlasIdx].field_2_width) * scale) + field_34_font_context->field_8_atlas_array->field_2_width;
+#else
         xOff += static_cast<s32>(field_34_font_context->field_8_atlas_array[atlasIdx].field_2_width * FP_GetDouble(scale)) + field_34_font_context->field_8_atlas_array->field_2_width;
+#endif
         text = strPtr;
     }
 
