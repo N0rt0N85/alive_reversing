@@ -279,11 +279,36 @@ void Tethys_ForgetAbsentResources()
     sTethysAbsentOverflow = false;
 }
 
+// SATURN (bt993): the screen name the wedge fatal reports.
+// It CANNOT read sCameraBeingLoaded_507C98: Map.cpp:1628/1637 set that pointer,
+// run the whole synchronous load pass, then null it again at Map.cpp:1640 --
+// all before returning to the game loop, which is where LoadingFile::VUpdate
+// spins and where the wedge is detected. So the pointer was ALWAYS null there
+// and the forensic fatal always printed "LWRAM wedge ?" -- the instrument has
+// been inert since S7 round 6, and the field photo it exists for could not say
+// which camera overflowed. Latch the name at load time instead. 12 B of .bss;
+// both camera-load entry points are in this file (the Saturn streaming path and
+// the blocking one), so Map.cpp stays untouched.
+static char_type sTethysLoadingCam[12] = {};
+
+static void Tethys_NoteCamLoad(const char_type* pFileName)
+{
+    s32 i = 0;
+    if (pFileName)
+    {
+        for (; pFileName[i] && i < 11; i++)
+        {
+            sTethysLoadingCam[i] = pFileName[i];
+        }
+    }
+    sTethysLoadingCam[i] = 0;
+}
+
 // Wedge diagnostics (S7 round 6): a staging block that cannot fit is now a
 // GENUINE working-set overflow (post-round-5 the CAM no longer stages -- the
 // remaining wedges are factory BNDs like EXPLODE.BND on Slig+Mudokon+explosion
 // screens whose resident set exceeds the 1,024,000 B heap). Name the SCREEN
-// (sCameraBeingLoaded's .CAM) on the forensic fatal so a field photo says
+// (the latched .CAM above) on the forensic fatal so a field photo says
 // exactly which camera overflowed -- the input to deciding critical-path
 // (asset reduction) vs skippable. The stuck file's sector count is already on
 // overlay row 5 (q/st/sz), so it is not re-formatted here (keeps .text down).
@@ -295,8 +320,7 @@ static void Tethys_WedgeFatal()
     {
         *p++ = *s;
     }
-    Camera* pCam = sCameraBeingLoaded_507C98;
-    const char_type* nm = (pCam && pCam->field_1E_fileName[0]) ? pCam->field_1E_fileName : "?";
+    const char_type* nm = sTethysLoadingCam[0] ? sTethysLoadingCam : "?";
     for (const char_type* s = nm; *s && p < &msg[39]; s++)
     {
         *p++ = *s;
@@ -1502,6 +1526,7 @@ static void Tethys_CamStreamFatal(const char_type* pWhat, const char_type* pName
 
 void CC ResourceManager::Tethys_StreamCamFile(Camera* pCamera, bool bitsOnly)
 {
+    Tethys_NoteCamLoad(pCamera->field_1E_fileName); // bt993: name the screen for the wedge fatal
     LvlFileRecord* pRec = sLvlArchive_4FFD60.Find_File_Record_41BED0(pCamera->field_1E_fileName);
     if (!pRec)
     {
@@ -1836,6 +1861,13 @@ s16 CC ResourceManager::LoadResourceFileWrapper(const char_type* filename, Camer
 EXPORT s16 CC ResourceManager::LoadResourceFile_455270(const char_type* filename, Camera* pCam, BlockAllocMethod allocMethod)
 {
     // Note: None gPcOpenEnabled_508BF0 block not impl as never used
+
+#ifdef TETHYS_SATURN
+    if (pCam)
+    {
+        Tethys_NoteCamLoad(filename); // bt993: the blocking camera-load twin
+    }
+#endif
 
     ResourceManager::LoadingLoop_41EAD0(0);
 
