@@ -77,6 +77,16 @@ public:
 };
 ALIVE_ASSERT_SIZEOF(AliveFont, 0x38);
 
+#ifdef TETHYS_SATURN
+// SATURN (S8): byte-swap a compiled PSX little-endian u8[32] palette into the
+// Saturn CRAM form and push it through IRenderer::PalSetData (which assembles
+// big-endian).  Defined in Font.cpp; also used by LCDScreen::ctor_433F60 for
+// its second, directly-set palette.  Entry 0 ({0,0}) stays 0x0000.
+// (The Tethys_gFontAtlasClamps gauge follows the house convention and is
+// declared ad-hoc in src/ -- see Tethys_gFontNullPolys in src/sys_saturn.cxx.)
+void Tethys_PalSetCompiled(s16 palX, s16 palY, s16 depth, const u8* pPalette);
+#endif
+
 ALIVE_VAR_EXTERN(FontContext, sFontContext_4FFD68);
 ALIVE_VAR_EXTERN(s16, sDisableFontFlicker_5080E4);
 ALIVE_VAR_EXTERN(u8, sFontDrawScreenSpace_508BF4);

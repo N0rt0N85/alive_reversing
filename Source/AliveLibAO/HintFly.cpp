@@ -56,11 +56,24 @@ const char_type* gHintFlyMessages_4C6A10[] = {
     "THEY WONT CHASE WHAT THEY CANT SEE"};
 
 
+#ifndef TETHYS_SATURN
 static const StringTable* sPerLvlMessages[static_cast<u32>(LevelIds::eDesertEscape_15) + 1][99] = {};
+#endif
+// SATURN (S8): 6,336 B of HWRAM .bss below __heap_start -- i.e. out of the
+// ~30 KB ao_new pool -- that is provably always null on this port.  Exactly the
+// same reasoning as its twin in LCDScreen.cpp: the only writer is reached only
+// from a Resource_Pxtd chunk, which RELIVE adds to the LVLs it patches and
+// which our converted originals do not contain.
 
 void SetHintFlyMessagesForLvl(const StringTable& msgs, LevelIds lvl, u32 pathId)
 {
+#ifdef TETHYS_SATURN
+    (void) msgs;
+    (void) lvl;
+    (void) pathId;
+#else
     sPerLvlMessages[static_cast<u32>(lvl)][pathId] = &msgs;
+#endif
 }
 
 class HintFlyMessages final
@@ -68,6 +81,7 @@ class HintFlyMessages final
 public:
     const char_type* GetMessage(LevelIds lvlId, u32 pathId, u32 msgId) const
     {
+#ifndef TETHYS_SATURN
         const StringTable* pTable = sPerLvlMessages[static_cast<u32>(lvlId)][pathId];
         if (pTable)
         {
@@ -80,6 +94,10 @@ public:
                 LOG_WARNING("HintFly message out of bounds, using original game message for id: " << msgId);
             }
         }
+#else
+        (void) lvlId;
+        (void) pathId;
+#endif
 
         if (msgId < ALIVE_COUNTOF(gHintFlyMessages_4C6A10))
         {
