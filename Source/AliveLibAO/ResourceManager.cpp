@@ -187,6 +187,8 @@ static void Tethys_StickyMaterialize(u32 type, u32 id)
     }
 }
 
+void Tethys_ForgetAbsentResources(); // SATURN bt990: defined below
+
 // Level change: drop every permanent ref (the freed chunks then reclaim
 // normally) and forget everything. Wired in Map.cpp's level-change block.
 void Tethys_ReleaseStickyResources()
@@ -202,6 +204,79 @@ void Tethys_ReleaseStickyResources()
     }
     sTethysStickyHeldCount = 0;
     sTethysStickyPendingCount = 0;
+    Tethys_ForgetAbsentResources(); // SATURN bt990: names are per-LVL
+}
+
+// SATURN (bt990): NAMES THIS LEVEL'S LVL GENUINELY DOES NOT CONTAIN.
+// R1.LVL ships 209 file records and DOGBLOW.BAN is not one of them -- there are
+// no Slogs in RuptureFarms, so the PSX data never shipped the Slog gib
+// animation in this level. LoadRockTypes_454370 still asks for it on every
+// grenade path (ThrowableArray.cpp:49, unconditional -- no disable_resources
+// bit on that route), and so do Factory_TimedMine / Factory_SecurityOrb / the
+// mine and bomb factories whenever a TLV leaves its bit clear. The OG answers
+// with a silent nullptr here and a LOG_ERROR in CheckResourceIsLoaded, and
+// plays on; both were hardened into fatals on this port, which is what killed a
+// field run at fr295670 with "CD miss DOGBLOW.BAN".
+// This is a CLASS, not one file: of the 195 file names referenced by AliveLibAO,
+// 79 are absent from R1.LVL -- ELMBLOW.BAN and DOGKNFD.BAN sit on the very same
+// factory lines as DOGBLOW.BAN, and SLOG.BND / PARAMITE.BND / SCRAB.BND /
+// ELMSTART.BND come through the list loader. Fixing one name would just have
+// moved the fatal to the next screen.
+// The hardening still earns its keep for every OTHER miss -- a name that IS in
+// the index but never materializes is the .ctors bug that made
+// LoadResourcesFromList("SLIG.BND") a silent no-op at S4. So tolerate exactly
+// "not in the archive index", remember the (type,id) so the paired
+// CheckResourceIsLoaded stays quiet for it, and keep the fatal otherwise.
+// Visible, never silent: the count rides the AF row (rs) of the overlay, which
+// survives a fatal screen.
+static TethysStickyEntry sTethysAbsent[32] = {};
+static s32 sTethysAbsentCount = 0;
+static bool sTethysAbsentOverflow = false;
+extern "C" volatile s32 Tethys_gAbsentRes = 0; // overlay gauge: absent-name skips
+
+static bool Tethys_ArchiveHas(const char_type* pFileName)
+{
+    return sLvlArchive_4FFD60.Find_File_Record_41BED0(pFileName) != nullptr;
+}
+
+// Name-only route (LoadResourceFile_4551E0): nothing to remember but the count.
+static void Tethys_NoteAbsentFile()
+{
+    Tethys_gAbsentRes++;
+}
+
+static void Tethys_NoteAbsent(u32 type, u32 id)
+{
+    Tethys_gAbsentRes++;
+    if (Tethys_StickyIn(sTethysAbsent, sTethysAbsentCount, type, id))
+    {
+        return;
+    }
+    if (sTethysAbsentCount < 32)
+    {
+        sTethysAbsent[sTethysAbsentCount].type = type;
+        sTethysAbsent[sTethysAbsentCount].id = id;
+        sTethysAbsentCount++;
+    }
+    else
+    {
+        // A level referencing more than 32 absent names is data reality, not a
+        // fault; re-arming the fatal here would only move the crash. Go
+        // permanently tolerant and let rs say so.
+        sTethysAbsentOverflow = true;
+    }
+}
+
+static bool Tethys_IsAbsent(u32 type, u32 id)
+{
+    return sTethysAbsentOverflow
+        || Tethys_StickyIn(sTethysAbsent, sTethysAbsentCount, type, id);
+}
+
+void Tethys_ForgetAbsentResources()
+{
+    sTethysAbsentCount = 0;
+    sTethysAbsentOverflow = false;
 }
 
 // Wedge diagnostics (S7 round 6): a staging block that cannot fit is now a
@@ -809,6 +884,18 @@ void CC ResourceManager::LoadResource_446C90(const char_type* pFileName, u32 typ
         return;
     }
 
+#ifdef TETHYS_SATURN
+    // SATURN (bt990): the name is not in this level's archive index -- OG-legal
+    // (see the absent-name block). Remember the (type,id) so the factory's own
+    // CheckResourceIsLoaded, which runs on the LoadMode::LoadTlvs pass a moment
+    // later, does not fatal on the resource this request could never produce.
+    if (!Tethys_ArchiveHas(pFileName))
+    {
+        Tethys_NoteAbsent(type, resourceId);
+        return;
+    }
+#endif
+
     if (loadMode == LoadMode::LoadResourceFromList_1)
     {
         for (s32 i = 0; i < ObjList_5009E0->Size(); i++)
@@ -935,6 +1022,24 @@ void CC ResourceManager::LoadResourcesFromList_446E80(const char_type* pFileName
         }
         return;
     }
+
+#ifdef TETHYS_SATURN
+    // SATURN (bt990): whole BNDs are level-scoped too -- SLOG.BND, PARAMITE.BND,
+    // SCRAB.BND, ELMSTART.BND and ABEWELM.BND are referenced by factories yet
+    // absent from R1.LVL. Same contract as LoadResource_446C90: tolerate the
+    // index miss and remember every id in the list so their paired
+    // CheckResourceIsLoaded calls stay quiet. After the resident check above, so
+    // a list that IS already loaded still takes its refs.
+    if (!Tethys_ArchiveHas(pFileName))
+    {
+        for (s32 i = 0; i < pTypeAndIdList->field_0_count; i++)
+        {
+            Tethys_NoteAbsent(pTypeAndIdList->field_4_items[i].field_0_type,
+                              pTypeAndIdList->field_4_items[i].field_4_res_id);
+        }
+        return;
+    }
+#endif
 
     if (loadMode == LoadMode::LoadResourceFromList_1)
     {
@@ -1538,24 +1643,17 @@ LoadingFile* CC ResourceManager::LoadResourceFile_4551E0(const char_type* pFileN
     if (!pFileRec)
     {
 #ifdef TETHYS_SATURN
-        // SATURN: on this path (CAM + factory prefetch) every name must
-        // exist; the OG silent skip just defers the death to a later
-        // CheckResourceIsLoaded with the culprit's name lost. Name it now.
-        static char_type msg[32];
-        char_type* p = msg;
-        for (const char_type* s = "CD miss "; *s; s++)
-        {
-            *p++ = *s;
-        }
-        for (const char_type* s = pFileName; *s && p < &msg[31]; s++)
-        {
-            *p++ = *s;
-        }
-        *p = 0;
-        ALIVE_FATAL(msg);
-#else
-        return nullptr;
+        // SATURN (bt990): RESTORED TO THE OG SILENT SKIP. This used to fatal
+        // ("CD miss <name>") on the theory that every requested name must exist
+        // on this path -- it does not. LoadRockTypes_454370 asks every grenade
+        // path for DOGBLOW.BAN (ThrowableArray.cpp:49) and R1.LVL has no such
+        // record, because RuptureFarms has no Slogs; the PSX data is simply
+        // level-scoped and the engine is built to shrug. See the absent-name
+        // block above: 79 of the 195 names AliveLibAO references are not in
+        // R1.LVL. rs on the AF row counts the skips so this is never silent.
+        Tethys_NoteAbsentFile();
 #endif
+        return nullptr;
     }
 
     auto pLoadingFile = ao_new<LoadingFile>();
@@ -1896,7 +1994,17 @@ void ResourceManager::CheckResourceIsLoaded(u32 type, AOResourceID resourceId)
     {
         LOG_ERROR("Resource not loaded type " << type << " resource Id " << resourceId);
 #ifdef TETHYS_SATURN
-        // SATURN: the death screen is the only log -- name the culprit
+        // SATURN (bt990): the resource could never load -- its FILE is not in
+        // this level's archive index (DOGBLOW.BAN in R1 and 78 more). The OG
+        // stops at the LOG_ERROR above on exactly this case, so do the same;
+        // rs on the AF row already counted the skip. Every other miss is still
+        // a genuine fault and still fatal (it caught the S4 .ctors bug).
+        if (Tethys_IsAbsent(type, static_cast<u32>(resourceId)))
+        {
+            return;
+        }
+
+        // The death screen is the only log -- name the culprit
         // (type fourcc, low byte first + decimal id) in the fatal message.
         static char_type msg[40];
         char_type* p = msg;
