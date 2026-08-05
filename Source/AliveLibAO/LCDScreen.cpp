@@ -86,6 +86,21 @@ const u8 sLCDScreen_Palette2_4C7588[32] = {
     24u,
     216u};
 
+#if defined(TETHYS_SATURN) && !defined(TETHYS_LANG_ES)
+// SATURN (S8, bt997): the FRENCH disc REPLACES this table rather than falling
+// back to it, and that is a memory decision, not a stylistic one. A French
+// table sitting BESIDE this one as a fallback leaves every English literal
+// still referenced, so the linker drops none of them and the image pays for
+// both languages: measured, 4.0 KB of the ~30 KB ao_new pool instead of the
+// 2.4 KB the delta is actually worth. tethys_lcd_fr.inc is therefore MERGED --
+// French where the localized AbeWin.exe has a string, English elsewhere -- and
+// this array is compiled out, so the 37 superseded literals lose their last
+// referrer and go. The Spanish image builds the same tree with TETHYS_LANG_ES
+// (no Spanish executable exists to extract a table from) and keeps the English
+// text below, which is pure ASCII and always renders.
+#include "tethys_lcd_fr.inc"
+#define sLCDMessageTable_4C7420 kTethysLcdMsgs
+#else
 static const char_type* sLCDMessageTable_4C7420[90] = {
     "",
     "                               The profits justify the means.",
@@ -177,6 +192,7 @@ static const char_type* sLCDMessageTable_4C7420[90] = {
     "",
     "",
     ""};
+#endif // the FRENCH build replaced this whole array -- see the banner above
 
 #ifndef TETHYS_SATURN
 static const StringTable* sPerLvlMessages[static_cast<u32>(LevelIds::eDesertEscape_15) + 1][99] = {};
@@ -190,23 +206,6 @@ static const StringTable* sPerLvlMessages[static_cast<u32>(LevelIds::eDesertEsca
 // Our LVLs are converted from the original PSX/PC data by
 // tools/convert_assets.py and contain zero 'Pxtd' records (checked on R1.LVL).
 // The localized table below is this port's replacement for the mechanism.
-
-#ifdef TETHYS_SATURN
-// SATURN (S8): localized (FR / ES) LCD marquee text.  sLCDMessageTable_4C7420
-// above is the compiled US text; the Saturn build ships localized game data
-// only, so src/ installs the matching table (extracted offline by
-// tools/lcdmsg.py, CP437 like the sheets) once at boot via the setter below.
-// Null table / short table / null entry all fall through to the US text, so a
-// partial translation still renders something.
-static const char_type* const* sTethysLcdMsgs = nullptr;
-static unsigned int sTethysLcdMsgCount = 0;
-
-extern "C" void Tethys_SetLcdMessageTable(const char* const* pTable, unsigned int count)
-{
-    sTethysLcdMsgs = pTable;
-    sTethysLcdMsgCount = pTable ? count : 0;
-}
-#endif
 
 void SetLcdMessagesForLvl(const StringTable& msgs, LevelIds lvl, u32 pathId)
 {
@@ -242,15 +241,11 @@ public:
 #endif
 
 #ifdef TETHYS_SATURN
-        // SATURN (S8): the Pxtd / StringTable path above is compiled out (it
-        // can only return null here), so the localized table is the first
-        // lookup and the compiled US table stays the fallback.
+        // SATURN (S8): the Pxtd / StringTable path above is compiled out -- it
+        // can only return null here. What remains is ONE table, already in this
+        // disc's language (see the banner where the array is declared).
         (void) lvlId;
         (void) pathId;
-        if (sTethysLcdMsgs && msgId < sTethysLcdMsgCount && sTethysLcdMsgs[msgId])
-        {
-            return sTethysLcdMsgs[msgId];
-        }
 #endif
 
         if (msgId < ALIVE_COUNTOF(sLCDMessageTable_4C7420))
