@@ -1450,7 +1450,7 @@ void CC ResourceManager::Tethys_StreamCamFile(Camera* pCamera, bool bitsOnly)
 
         if (hdr.field_8_type == Resource_Bits)
         {
-            // Payload = u16 w | u16 h | 256 x u16 CRAM | 320*224 8bpp indices.
+            // Payload = u16 w | u16 h | 256 x u16 CRAM | 320*240 8bpp indices.
             if (payloadLen < 4u + 512u) // underflow guard for pixLen below
             {
                 Tethys_CamStreamFatal("CAM stream: short Bits ", pCamera->field_1E_fileName);
@@ -1459,13 +1459,13 @@ void CC ResourceManager::Tethys_StreamCamFile(Camera* pCamera, bool bitsOnly)
             rd.Read(wh, 4);
             const u32 w = (static_cast<u32>(wh[0]) << 8) | wh[1];
             const u32 h = (static_cast<u32>(wh[2]) << 8) | wh[3];
-            if (w != 320 || h != 224)
+            if (w != 320 || h != 240) // SATURN bt989: 320x240 native vertical
             {
                 Tethys_CamStreamFatal("CAM stream: bad Bits hdr ", pCamera->field_1E_fileName);
             }
             rd.Read(palBuf, 512);
             Tethys_CamStreamPalette(palBuf);
-            rd.Pixels(0, payloadLen - 4u - 512u); // 71,680 -> VDP2, never heaped
+            rd.Pixels(0, payloadLen - 4u - 512u); // 76,800 -> VDP2, never heaped
             if (bitsOnly)
             {
                 // SATURN (bt817): respawn background refresh. The Bits chunk is

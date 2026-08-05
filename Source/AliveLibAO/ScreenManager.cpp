@@ -13,7 +13,7 @@
 // SATURN: VDP2 CAM upload, defined in src/renderer_saturn.cxx (global
 // namespace). The converted Bits payload is one Saturn-native blob
 // (tools/converter/cam.py): u16 BE w=320, u16 BE h=224, 256 x u16 BE Saturn
-// CRAM entries (0x0000 transparent, else |0x8000), then 320*224 8bpp indices.
+// CRAM entries (0x0000 transparent, else |0x8000), then 320*240 8bpp indices.
 // Must consume the blob synchronously: it lives in the resource heap and
 // Reclaim_Memory_455660 memmoves heap chunks.
 void Tethys_UploadCamBlob(const u8* pBlob);
