@@ -54,9 +54,28 @@ EXPORT s32 CC Vram_Is_Area_Free_4958F0(PSX_RECT* pRect, s32 depth)
                 return 1;
             }
 
-#ifdef TETHYS_SATURN
-            // SATURN bt999: jump past EVERY current blocker at once, not just
-            // the first one in index order. Same answer, far fewer iterations.
+#if 0 // SATURN bt1003: REVERTED -- this made hardware load times ~80% WORSE.
+            // Measured on real hardware across FIVE screens matched on both the
+            // flip index and the occupancy vn: n13 3267->5741 ms, n14
+            // 4028->7284, n15 3998->7293, n16 3568->6146, n17 3962->7289.
+            // Five controlled comparisons, all +72% to +84%. Not noise.
+            //
+            // WHY IT BACKFIRED, and the lesson is the useful part. The proof
+            // below is correct: the ANSWER is identical and the ITERATION COUNT
+            // does drop. What it never established is the cost of one iteration.
+            // The stock loop EARLY-EXITS at the first blocker -- typically index
+            // 0 or 1 -- so its scan is a handful of tests. This version scans all
+            // N every single iteration, and N reaches 55 in the field. Trading a
+            // ~2-deep scan for a 55-deep one costs more than the saved
+            // iterations return. I proved equivalence of RESULT and then claimed
+            // a gain in SPEED; they are different claims and only one was
+            // checked. A complexity bound is not a measurement.
+            //
+            // If this is ever revisited: the real win is not a better scan, it
+            // is not scanning -- an occupancy structure (row interval list, or a
+            // per-64-column skyline) that answers "what blocks x" without
+            // touching every rect. Measure with gauge `l` on HARDWARE; Ymir does
+            // not model CD timing and cannot judge a load-time change at all.
             //
             // WHY IT MATTERS HERE AND NOT ON PSX. This function is called once
             // per candidate y by Vram_alloc_block, and once per FG1 chunk plus
