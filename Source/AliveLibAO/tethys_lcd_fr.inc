@@ -3,22 +3,26 @@
 //
 //  Regenerate with:  python tools/lcdmsg.py <AbeWin.exe> <out.bin> --inc <this>
 //
-//  The Rupture Farms LCD marquee table, MERGED: the French string from the
-//  localized AbeWin.exe where it has one, RELIVE's English otherwise. It
+//  The Rupture Farms LCD marquee table, MERGED: the localized string from
+//  the localized AbeWin.exe where it has one, RELIVE's English otherwise. It
 //  REPLACES sLCDMessageTable_4C7420 -- LCDScreen.cpp compiles its own array
 //  out when this file is included, so the English literals this table
 //  supersedes lose their last referrer and the linker drops them. Included
-//  inside namespace AO, under TETHYS_SATURN and NOT TETHYS_LANG_ES.
+//  inside namespace AO under TETHYS_SATURN: the _fr table when TETHYS_LANG_ES
+//  is NOT defined, the _es table when it is.
 //
+//  language : FR
 //  source   : AbeWin.exe
 //  table at : file 0x0C6298 (VA 0x004C7698)
-//  slots    : 37 French, 53 English (of which all are the empty string --
+//  slots    : 37 localized, 53 English (of which all are the empty string --
 //             the localized executable leaves exactly the slots RELIVE
 //             leaves empty)
 //  encoding : CP437, emitted as octal escapes so the bytes survive any
-//             editor's idea of what this file's charset is. The eight high
-//             bytes used are 0x82 0x85 0x87 0x88 0x8A 0x90 0x93 0x96, and the
-//             Euro font atlas covers all of them.
+//             editor's idea of what this file's charset is. High bytes used:
+//             0x82 0x85 0x87 0x88 0x8A 0x93 0x96
+//             All of them must be <= 0xAF, which is the Euro font atlas's
+//             printable ceiling (AO/Font.cpp kTethysEuroFontPrintableHi);
+//             validate() refuses to emit a table that exceeds it.
 // ===========================================================================
 
 static const char_type* const kTethysLcdMsgs[90] = {

@@ -86,18 +86,28 @@ const u8 sLCDScreen_Palette2_4C7588[32] = {
     24u,
     216u};
 
-#if defined(TETHYS_SATURN) && !defined(TETHYS_LANG_ES)
-// SATURN (S8, bt997): the FRENCH disc REPLACES this table rather than falling
-// back to it, and that is a memory decision, not a stylistic one. A French
-// table sitting BESIDE this one as a fallback leaves every English literal
-// still referenced, so the linker drops none of them and the image pays for
-// both languages: measured, 4.0 KB of the ~30 KB ao_new pool instead of the
-// 2.4 KB the delta is actually worth. tethys_lcd_fr.inc is therefore MERGED --
-// French where the localized AbeWin.exe has a string, English elsewhere -- and
-// this array is compiled out, so the 37 superseded literals lose their last
-// referrer and go. The Spanish image builds the same tree with TETHYS_LANG_ES
-// (no Spanish executable exists to extract a table from) and keeps the English
-// text below, which is pure ASCII and always renders.
+// SATURN (S8, bt997): the LOCALIZED disc REPLACES this table rather than
+// falling back to it, and that is a memory decision, not a stylistic one. A
+// localized table sitting BESIDE this one as a fallback leaves every English
+// literal still referenced, so the linker drops none of them and the image pays
+// for both languages: measured, 4.0 KB of the ~30 KB ao_new pool instead of the
+// 2.4 KB the delta is actually worth. tethys_lcd_<lang>.inc is therefore
+// MERGED -- localized where the shipped AbeWin.exe has a string, English
+// elsewhere -- and this array is compiled out, so the superseded literals lose
+// their last referrer and go.
+//
+// SATURN (bt1000): ONE PER LANGUAGE, PRESENT OR NOT. Each image extracts its
+// table from ITS OWN executable (build.ps1: assets/pc/AbeWin.exe for the FR
+// pass, assets/pc_es/AbeWin.exe for the ES one), so the include is chosen by
+// TETHYS_LANG_ES and gated on __has_include: a language whose executable the
+// user has not supplied simply keeps the compiled English below, which is pure
+// ASCII and always renders. That is the honest degradation -- English text is
+// wrong for a Spanish disc, but it is text; a missing file must never be a
+// build failure, and must never silently ship the OTHER language's strings.
+#if defined(TETHYS_SATURN) && defined(TETHYS_LANG_ES) && __has_include("tethys_lcd_es.inc")
+#include "tethys_lcd_es.inc"
+#define sLCDMessageTable_4C7420 kTethysLcdMsgs
+#elif defined(TETHYS_SATURN) && !defined(TETHYS_LANG_ES) && __has_include("tethys_lcd_fr.inc")
 #include "tethys_lcd_fr.inc"
 #define sLCDMessageTable_4C7420 kTethysLcdMsgs
 #else
