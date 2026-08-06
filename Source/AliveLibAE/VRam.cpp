@@ -54,6 +54,60 @@ EXPORT s32 CC Vram_Is_Area_Free_4958F0(PSX_RECT* pRect, s32 depth)
                 return 1;
             }
 
+#ifdef TETHYS_SATURN
+            // SATURN bt999: jump past EVERY current blocker at once, not just
+            // the first one in index order. Same answer, far fewer iterations.
+            //
+            // WHY IT MATTERS HERE AND NOT ON PSX. This function is called once
+            // per candidate y by Vram_alloc_block, and once per FG1 chunk plus
+            // once per Animation::Init -- and FG1 dies and is rebuilt on EVERY
+            // camera flip, so a screen change pays a batch of ~20 allocations.
+            // The stock scan takes the FIRST overlapping rect by index and steps
+            // x left to just past it, so a position blocked by k rects costs k
+            // separate scans of the table. Cost is therefore superlinear in
+            // OCCUPANCY, not in the allocation count. Measured in the field
+            // (bt998 captures, gauge `l` against gauge `vn`): flip time tracked
+            // occupancy from 3802 ms at vn13 to 6728 ms at vn49 -- +2.9 s of
+            // load time bought by nothing. An offline re-implementation seeded
+            // with the real boot reservations and the real AnimResources
+            // dimensions put one FG1 batch at 1.4 ms on a fresh screen and
+            // 5.7 ms nine screens in, and had single allocations reaching
+            // 20,000-30,000 overlap tests near 50% occupancy.
+            //
+            // WHY THE ANSWER IS IDENTICAL, not merely close. Let S be the set of
+            // rects overlapping the candidate at x, and let m = min over S of
+            // (rect.x - w). For any x'' with m < x'' <= x, the argmin rect j*
+            // still overlaps at x'': x'' <= x < j*.x + j*.w keeps the right
+            // edge condition, and x'' > m = j*.x - w keeps the left. So every
+            // position the stock loop would visit between m and x is blocked
+            // anyway -- taking the minimum skips only positions that were going
+            // to fail. The trade is a full table scan per iteration instead of
+            // an early-exit one, against a bound of one iteration per distinct
+            // blocking set: worst case N*N rather than 1024*N.
+            //
+            // Guarded because AliveLibAE/VRam.cpp carries gmock tests that pin
+            // the stock walk; the PC build keeps byte-for-byte stock behaviour.
+            s32 bestX = 0x7FFFFFFF;
+            for (s32 i = 0; i < sVramNumberOfAllocations_5CC888; i++)
+            {
+                if (Vram_rects_overlap_4959E0(pRect, &sVramAllocations_5CB888[i]))
+                {
+                    const s32 nx = sVramAllocations_5CB888[i].x - pRect->w + 1;
+                    if (nx < bestX)
+                    {
+                        bestX = nx;
+                    }
+                }
+            }
+            if (bestX == 0x7FFFFFFF)
+            {
+                return 1; // nothing overlaps here -- the stock scan's exit
+            }
+            if (bestX < pRect->x)
+            {
+                pRect->x = static_cast<s16>(bestX);
+            }
+#else
             s32 i = 0;
             while (!Vram_rects_overlap_4959E0(pRect, &sVramAllocations_5CB888[i]))
             {
@@ -70,6 +124,7 @@ EXPORT s32 CC Vram_Is_Area_Free_4958F0(PSX_RECT* pRect, s32 depth)
             {
                 pRect->x = newX;
             }
+#endif
         }
 
         if (--pRect->x < 0)
