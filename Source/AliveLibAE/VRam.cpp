@@ -170,15 +170,16 @@ EXPORT s32 CC Vram_Is_Area_Free_4958F0(PSX_RECT* pRect, s32 depth)
 // with one pair of timer reads instead of one per candidate row. Direct
 // Is_Area_Free callers are therefore NOT counted, which is the right scope --
 // FG1 and Animation::Init both come through here.
-extern "C" u32 Tethys_gVaMsAccum;
-u32 SYS_GetTicks();
+extern "C" u32 Tethys_gVaRawAccum;
+extern "C" u32 Tethys_RawTicks(); // raw ~208/ms ticks: bt1020's ms clock
+                                  // rounded every sub-ms call to zero (bt1021)
 
 namespace {
 struct VaTimer
 {
     u32 t0;
-    VaTimer() : t0(SYS_GetTicks()) {}
-    ~VaTimer() { Tethys_gVaMsAccum += SYS_GetTicks() - t0; }
+    VaTimer() : t0(Tethys_RawTicks()) {}
+    ~VaTimer() { Tethys_gVaRawAccum += Tethys_RawTicks() - t0; }
 };
 } // namespace
 #endif
