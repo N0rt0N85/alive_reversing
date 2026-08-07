@@ -1395,38 +1395,52 @@ extern "C" void Tethys_CamStreamEnd();
 // new background is DMA'd to VDP2, so the old screen's foreground disappears
 // FIRST (user request, 3rd ask). Renderer-side; see Tethys_ClearForegroundAndPresent.
 extern "C" void Tethys_ClearForegroundAndPresent();
-// EXACTLY 2,560 B of HWRAM scratch (bt978: the 71,680 B latch-only sCamPix
-// is GONE -- the renderer keeps only this small dedicated buffer): [0..2047]
-// is the CD sector bounce (4-aligned, HWRAM -> the seam's fast path),
-// [2048..2559] assembles the 512 B palette for the one-shot CRAM write.
-// HARD CONTRACT: never read/write past [2559] -- the renderer's live CAM
-// palette staging (sCamClut) sits in the adjacent .bss. The boot-time
-// ACTORPAL.R1 read (src/main.cxx) borrows [0..2047] too, capped at one
-// sector by cd_saturn.cxx.
+// EXACTLY 2,048 B of HWRAM scratch (bt978 replaced the 71,680 B latch-only
+// sCamPix with a small dedicated buffer; bt1019 shrank it from 2,560 by moving
+// BOTH CAM-stream duties -- sector bounce and palette assembly -- into the
+// LWRAM bulk block below). Its remaining user is the boot-time ACTORPAL.R1
+// read (src/main.cxx), capped at one sector by cd_saturn.cxx. HARD CONTRACT
+// unchanged in kind: never read/write past the end -- the renderer's live CAM
+// palette staging (sCamClut) sits in the adjacent .bss.
 extern "C" u8* Tethys_CamStreamScratch();
+// SATURN (bt1019): the bulk CD bounce -- 32 KB of LWRAM plus a 512 B palette
+// tail, returning the sector capacity through pSectors. See the long note at
+// Tethys_CamStreamBulk (src/renderer_saturn.cxx) for why it is not .bss, why
+// LWRAM is a legal CD destination here, and why it is fatal rather than
+// falling back.
+extern "C" u8* Tethys_CamStreamBulk(u32* pSectors);
 
 namespace {
-// Forward, sector-at-a-time reader over one CD file record. Re-seeks before
+// Forward, chunk-at-a-time reader over one CD file record. Re-seeks before
 // every read (the seam cursor is a single global -- LvlArchive.cpp precedent)
 // and treats only a FileIOWait of -1 as a hard error (the Saturn seam returns
 // 0 for "done", never 1). A failed read leaves the cursor unmoved, so the
 // bounded retry re-seeks (OpenArchive precedent).
+//
+// SATURN (bt1019): reads secCap sectors per round-trip instead of one. This
+// reader used to cost one GFS_Seek + one blocking GFS_Fread PER SECTOR, so a
+// 72-111 KB .CAM meant 40-55 drive round-trips per screen flip -- the bulk of
+// the transition stall. With a 16-sector bounce it is 3-4. Note for whoever
+// reads the gauges next: Tethys_gCdReads counts SEAM CALLS, so it drops by the
+// same factor; that is the fix landing, not reads going missing.
 struct CamSectorReader
 {
-    u8*  sec;       // 2048 B bounce (renderer scratch slice, HWRAM 4-aligned)
+    u8*  sec;       // bounce buffer, 4-aligned, secCap sectors (Tethys_CamStreamBulk)
     s32  basePos;   // file-relative start sector of the record
     s32  numSec;    // sectors in the record
     s32  nextSec;   // next sector index to fetch
+    s32  secCap;    // sectors the bounce holds = max sectors per round-trip
     u32  bufOff;    // bytes consumed within sec
     u32  bufLen;    // valid bytes in sec (0 => none loaded yet)
     bool bad;
 
-    void Init(u8* bounce, s32 base, s32 count)
+    void Init(u8* bounce, s32 base, s32 count, s32 cap)
     {
         sec = bounce;
         basePos = base;
         numSec = count;
         nextSec = 0;
+        secCap = cap > 0 ? cap : 1;
         bufOff = 0;
         bufLen = 0;
         bad = false;
@@ -1439,17 +1453,30 @@ struct CamSectorReader
             bad = true;
             return false;
         }
+        s32 want = numSec - nextSec;
+        if (want > secCap)
+        {
+            want = secCap;
+        }
         for (s32 attempt = 0; attempt < 8; attempt++)
         {
+            // SATURN (bt1019): de-escalate to a single sector after two failed
+            // wide attempts. A wide read can fail STRUCTURALLY rather than
+            // transiently -- the seam demands the full numSectors<<11 bytes, and
+            // a record ending on the last, partial sector of the .LVL returns
+            // fewer -- so retrying the same width eight times would spend eight
+            // round-trips to fail anyway. One sector always fits inside the
+            // record and restores the pre-bt1019 behaviour exactly.
+            const s32 n = (attempt < 2) ? want : 1;
             CdlLOC loc;
             PSX_Pos_To_CdLoc_49B340(basePos + nextSec, &loc);
             if (PSX_CD_File_Seek_49B670(2, &loc)
-                && PSX_CD_File_Read_49B8B0(1, sec)
+                && PSX_CD_File_Read_49B8B0(n, sec)
                 && PSX_CD_FileIOWait_49B900(0) != -1)
             {
-                nextSec++;
+                nextSec += n;
                 bufOff = 0;
-                bufLen = 2048;
+                bufLen = static_cast<u32>(n) << 11;
                 return true;
             }
         }
@@ -1546,11 +1573,18 @@ void CC ResourceManager::Tethys_StreamCamFile(Camera* pCamera, bool bitsOnly)
     // buffer -- no ordering constraint between them remains).
     Tethys_CamStreamBegin();
 
-    u8* scratch = Tethys_CamStreamScratch();
-    u8* palBuf = scratch + 2048;
+    // SATURN (bt1019): one LWRAM block -- the sector bounce, then 512 B of
+    // palette assembly immediately past it. The palette MUST NOT alias the
+    // bounce (Read copies out of the bounce into it), which is what sitting
+    // past the sector area guarantees; deriving its address from the sector
+    // count means there is no second symbol to keep in sync with the renderer.
+    u32 bulkSectors = 0;
+    u8* bounce = Tethys_CamStreamBulk(&bulkSectors);
+    u8* palBuf = bounce + (bulkSectors << 11);
 
     CamSectorReader rd;
-    rd.Init(scratch, sLvlArchive_4FFD60.field_4_cd_pos + pRec->field_C_start_sector, pRec->field_10_num_sectors);
+    rd.Init(bounce, sLvlArchive_4FFD60.field_4_cd_pos + pRec->field_C_start_sector,
+            pRec->field_10_num_sectors, static_cast<s32>(bulkSectors));
 
     // Walk the BE chunk chain (Bits, [FG1], [Anim], End!) by header size. The
     // ONLY clean exit is the End! sentinel; a truncated read (rd.bad -- 8-retry
