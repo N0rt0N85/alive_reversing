@@ -40,6 +40,17 @@
 
 namespace AO {
 
+#ifdef TETHYS_SATURN
+// SATURN (bt1012): tick-phase accumulators, defined in src/sys_saturn.cxx and
+// reset there on every screen change, so they share the scope of lt/tt and
+// divide by tt for per-tick figures. See the long note at the first timer in
+// the main loop below for why the tick had to be cut this finely.
+extern "C" u32 Tethys_gPhUpd;
+extern "C" u32 Tethys_gPhAnim;
+extern "C" u32 Tethys_gPhRend;
+static u32 tPhase0 = 0;
+#endif
+
 DynamicArrayT<BaseGameObject>* gLoadingFiles = nullptr;
 
 // TODO: Move these few funcs to correct location
@@ -478,12 +489,39 @@ EXPORT void CC Game_Loop_437630()
 
         GetGameAutoPlayer().SyncPoint(SyncPoints::ObjectsUpdateEnd);
 
+#ifdef TETHYS_SATURN
+        // SATURN (bt1012): PHASE TIMERS. src/sys_saturn.cxx split the tick into
+        // po (outside PSX_VSync) and pi (inside), and src/renderer_saturn.cxx
+        // then carved pw (the OT walk) out of po. The field answer, marginal
+        // between two captures of one elevator visit: pw 8.2 ms a tick and FLAT,
+        // pi 8.9 and flat, but po - pw = 54.7 ms against a 33 ms budget. So the
+        // cost is in this loop body, and the six mechanisms measured before it
+        // (accumulation, sr's fill, the palette hash, VDP1 fill, the submission
+        // path, the SCSP key-on wait) are all out. The W row rules out volume
+        // too: OT prims 354 -> 316 and upload KB 8 -> 7 while the cost rose.
+        //
+        // Three phases run between the VSync that just returned and the DrawOTag
+        // below, and they have different owners:
+        //   pu = the two VUpdate loops above -- game AI and physics, pure RELIVE
+        //   pa = AnimateAll -- animation stepping, where cel UPLOADS happen
+        //   pv = the VRender loop below -- prim building, our seam per drawable
+        // pu + pa + pv should account for nearly all of po - pw; whatever is
+        // missing is the destruction loop and ScreenChange further down.
+        Tethys_gPhUpd += SYS_GetTicks() - tPhase0;
+        tPhase0 = SYS_GetTicks();
+#endif
+
         // Animate everything
         if (sNumCamSwappers_507668 <= 0)
         {
             GetGameAutoPlayer().SyncPoint(SyncPoints::AnimateAll);
             AnimationBase::AnimateAll_4034F0(gObjList_animations_505564);
         }
+
+#ifdef TETHYS_SATURN
+        Tethys_gPhAnim += SYS_GetTicks() - tPhase0;
+        tPhase0 = SYS_GetTicks();
+#endif
 
         // Render objects
         PrimHeader** ppOt = gPsxDisplay_504C78.field_C_drawEnv[gPsxDisplay_504C78.field_A_buffer_index].field_70_ot_buffer;
@@ -514,8 +552,18 @@ EXPORT void CC Game_Loop_437630()
         pScreenManager_4FF7C8->VRender(ppOt);
         SYS_EventsPump_44FF90();
 
+#ifdef TETHYS_SATURN
+        Tethys_gPhRend += SYS_GetTicks() - tPhase0; // SATURN (bt1012)
+#endif
+
         GetGameAutoPlayer().SyncPoint(SyncPoints::RenderOT);
         gPsxDisplay_504C78.PSX_Display_Render_OT_40DD20();
+
+#ifdef TETHYS_SATURN
+        // Re-armed AFTER the OT render, so the next lap's pu measures only the
+        // update loops and never the walk (pw already owns that).
+        tPhase0 = SYS_GetTicks(); // SATURN (bt1012)
+#endif
 
         GetGameAutoPlayer().SyncPoint(SyncPoints::RenderStart);
 
