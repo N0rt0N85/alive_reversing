@@ -48,7 +48,28 @@ namespace AO {
 extern "C" u32 Tethys_gPhUpd;
 extern "C" u32 Tethys_gPhAnim;
 extern "C" u32 Tethys_gPhRend;
+extern "C" u32 Tethys_gCurCam; // bt1014: overlay readout, so a photo names its
+                               // own screen and A/Bs stop needing a route
 static u32 tPhase0 = 0;
+
+// SATURN (bt1014): DEBUG BOOT TELEPORT. The measurement protocol needs the
+// SAME screen in the SAME state across builds, and walking there by hand does
+// not give that -- the bt1013 A/B was read against bt1012 captures taken 200
+// ticks apart in a different action state, which is most of why it says so
+// little. TETHYS_START_CAM (Makefile) jumps there on boot.
+//
+// It replays DDCheat::Teleport_409CE0 EXACTLY, flying included. The flying is
+// not optional: SetActiveCam moves the camera and nothing else, so Abe stays at
+// his C01 world position and ends up off-screen -- which is precisely why the
+// cheat turns it on. Doing it any other way would mean placing Abe ourselves,
+// with a stale collision-line binding, and no way to test it from here.
+// Replaying the cheat adds NO failure mode the manual route does not already
+// have. CAVEAT FOR MEASUREMENT: flying changes Abe's physics, so pu is not
+// comparable until it is switched back off from the pad-2 cheat menu.
+#if defined(TETHYS_START_CAM) && TETHYS_START_CAM > 0
+static u16 sStartJumpLaps = 0;
+static u8 sStartJumpDone = 0;
+#endif
 #endif
 
 DynamicArrayT<BaseGameObject>* gLoadingFiles = nullptr;
@@ -509,6 +530,24 @@ EXPORT void CC Game_Loop_437630()
         // missing is the destruction loop and ScreenChange further down.
         Tethys_gPhUpd += SYS_GetTicks() - tPhase0;
         tPhase0 = SYS_GetTicks();
+        Tethys_gCurCam = static_cast<u32>(gMap_507BA8.field_4_current_camera);
+#if defined(TETHYS_START_CAM) && TETHYS_START_CAM > 0
+        // Wait for the first screen to be fully up before jumping -- the same
+        // state the cheat menu would be used from. These laps do not run until
+        // the load returns, so 120 of them is well past it even at the 6-11.5 s
+        // hardware load figures.
+        if (!sStartJumpDone && ++sStartJumpLaps > 120)
+        {
+            sStartJumpDone = 1;
+            if (gMap_507BA8.field_0_current_level == LevelIds::eRuptureFarms_1)
+            {
+                sDDCheat_FlyingEnabled_50771C = 1;
+                gMap_507BA8.SetActiveCam_444660(
+                    LevelIds::eRuptureFarms_1, TETHYS_START_PATH,
+                    TETHYS_START_CAM, CameraSwapEffects::eInstantChange_0, 0, 0);
+            }
+        }
+#endif
 #endif
 
         // Animate everything
