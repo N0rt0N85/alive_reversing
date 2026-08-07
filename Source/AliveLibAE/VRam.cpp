@@ -153,8 +153,42 @@ EXPORT s32 CC Vram_Is_Area_Free_4958F0(PSX_RECT* pRect, s32 depth)
     }
 }
 
+#ifdef TETHYS_SATURN
+// SATURN (bt1020): price the ALLOCATOR half of a screen change, so the 6-11.5 s
+// stall stops being attributed by argument.
+//
+// Two mechanisms can each explain seconds: the CD reader's drive round-trips
+// (Tethys_gCdMsAccum, cd_saturn.cxx) and this scan, whose cost is superlinear in
+// vram_alloc OCCUPANCY -- bt998 field captures had flip time tracking vn from
+// 3802 ms at vn13 to 6728 ms at vn49. bt999 then "fixed" the scan without ever
+// pricing one iteration and made hardware 80% WORSE. So this build measures and
+// changes NOTHING: the allocator below is byte-for-byte stock, and one photo
+// will now split `l` into l = lc + la + the rest instead of a fourth guess.
+//
+// Placed on Vram_alloc_block rather than on Vram_Is_Area_Free: the block search
+// is the caller that iterates y, so it captures the whole descent in one bracket
+// with one pair of timer reads instead of one per candidate row. Direct
+// Is_Area_Free callers are therefore NOT counted, which is the right scope --
+// FG1 and Animation::Init both come through here.
+extern "C" u32 Tethys_gVaMsAccum;
+u32 SYS_GetTicks();
+
+namespace {
+struct VaTimer
+{
+    u32 t0;
+    VaTimer() : t0(SYS_GetTicks()) {}
+    ~VaTimer() { Tethys_gVaMsAccum += SYS_GetTicks() - t0; }
+};
+} // namespace
+#endif
+
 EXPORT s32 CC Vram_alloc_block_4957B0(PSX_RECT* pRect, s32 depth)
 {
+#ifdef TETHYS_SATURN
+    // Scoped so every one of this function's five returns is covered.
+    VaTimer vaTimer;
+#endif
     if (pRect->w > 1024 || pRect->h > 512)
     {
         return 0;
