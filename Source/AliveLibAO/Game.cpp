@@ -48,6 +48,13 @@ namespace AO {
 extern "C" u32 Tethys_gPhUpd;
 extern "C" u32 Tethys_gPhAnim;
 extern "C" u32 Tethys_gPhRend;
+#if defined(TETHYS_START_CAM) && TETHYS_START_CAM > 0
+// The buffer lives in SaveGame.cpp as an ALIVE_VAR with no header declaration;
+// Abe.cpp:68 declares it the same way for the same reason.
+ALIVE_VAR_EXTERN(SaveData, gSaveBuffer_505668);
+static u16 sStartSpawnLaps = 0; // bt1017: see the boot-spawn note in the loop
+static u8 sStartSpawnDone = 0;
+#endif
 extern "C" u32 Tethys_gAbeX;   // bt1016: world position, for the boot-spawn
 extern "C" u32 Tethys_gAbeY;   // coordinates -- read, never invented
 extern "C" u32 Tethys_gCurCam; // bt1014: overlay readout, so a photo names its
@@ -544,6 +551,34 @@ EXPORT void CC Game_Loop_437630()
             Tethys_gAbeX = static_cast<u32>(FP_GetExponent(sActiveHero_507678->field_A8_xpos));
             Tethys_gAbeY = static_cast<u32>(FP_GetExponent(sActiveHero_507678->field_AC_ypos));
         }
+#if defined(TETHYS_START_CAM) && TETHYS_START_CAM > 0
+        // SATURN (bt1017): DEBUG BOOT SPAWN, through the game's OWN respawn.
+        // Not a camera jump -- bt1014 tried that and the map chased an
+        // out-of-bounds Abe screen by screen, because SetActiveCam moves the
+        // camera and nothing else. This seeds gSaveBuffer_505668 (already
+        // populated at boot by Tethys_SeedSaveBuffer, so every other field is
+        // valid) and runs the same LoadFromMemory_459970 that death runs. That
+        // path sets Motion_62_LoadedSaveSpawn, which places Abe at the saved
+        // x/y, RAYCASTS +-60 to bind a collision line, and calls
+        // MapFollowMe_401D30(TRUE) -- the piece bt1014 lacked. If the raycast
+        // misses, Abe falls and the map still follows him.
+        //
+        // The coordinates are MEASURED, not derived: 15/4 at (6434, 213) read
+        // off Abe standing on the possession screen via the bt1016 ax/ay
+        // readout. Deriving them from the camera-cell geometry is exactly what
+        // broke bt1014. Set TETHYS_START_CAM=0 in the Makefile to disable.
+        if (!sStartSpawnDone && ++sStartSpawnLaps > 120 && sActiveHero_507678
+            && gMap_507BA8.field_0_current_level == LevelIds::eRuptureFarms_1)
+        {
+            sStartSpawnDone = 1;
+            gSaveBuffer_505668.field_234_current_level = LevelIds::eRuptureFarms_1;
+            gSaveBuffer_505668.field_236_current_path = TETHYS_START_PATH;
+            gSaveBuffer_505668.field_238_current_camera = TETHYS_START_CAM;
+            gSaveBuffer_505668.field_224_xpos = TETHYS_START_X;
+            gSaveBuffer_505668.field_228_ypos = TETHYS_START_Y;
+            SaveGame::LoadFromMemory_459970(&gSaveBuffer_505668, 1);
+        }
+#endif
 #endif
 
         // Animate everything
