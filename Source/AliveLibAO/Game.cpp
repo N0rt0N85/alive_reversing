@@ -48,6 +48,8 @@ namespace AO {
 extern "C" u32 Tethys_gPhUpd;
 extern "C" u32 Tethys_gPhAnim;
 extern "C" u32 Tethys_gPhRend;
+extern "C" u32 Tethys_gAbeX;   // bt1016: world position, for the boot-spawn
+extern "C" u32 Tethys_gAbeY;   // coordinates -- read, never invented
 extern "C" u32 Tethys_gCurCam; // bt1014: overlay readout, so a photo names its
                                // own screen and A/Bs stop needing a route
 static u32 tPhase0 = 0;
@@ -530,6 +532,18 @@ EXPORT void CC Game_Loop_437630()
         Tethys_gPhUpd += SYS_GetTicks() - tPhase0;
         tPhase0 = SYS_GetTicks();
         Tethys_gCurCam = static_cast<u32>(gMap_507BA8.field_4_current_camera);
+        // SATURN (bt1016): Abe's WORLD position, for the overlay's ax/ay.
+        // The boot-spawn hook needs real coordinates and I am not inventing
+        // them again -- bt1014 died of exactly that. LoadFromMemory_459970
+        // hands Motion_62_LoadedSaveSpawn a saved x/y, which raycasts +-60 for
+        // a collision line and then calls MapFollowMe_401D30(TRUE); that last
+        // call is the piece bt1014's SetActiveCam path did not have, and its
+        // absence is why the map chased an out-of-bounds Abe screen by screen.
+        if (sActiveHero_507678)
+        {
+            Tethys_gAbeX = static_cast<u32>(FP_GetExponent(sActiveHero_507678->field_A8_xpos));
+            Tethys_gAbeY = static_cast<u32>(FP_GetExponent(sActiveHero_507678->field_AC_ypos));
+        }
 #endif
 
         // Animate everything
