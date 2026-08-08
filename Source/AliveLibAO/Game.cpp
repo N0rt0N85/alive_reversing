@@ -56,7 +56,7 @@ extern "C" u32 Tethys_gPhRend;
 // long", and a per-type accumulator could not: 250 objects x a u32 is .bss the
 // HWRAM pre-flight has no room for, and a sum would hide a single 20 ms call
 // inside a big total exactly the way the per-screen means hid this spike.
-extern "C" void Tethys_NoteVUpdate(s16 typeId, u32 rawTicks);
+extern "C" void Tethys_NoteVUpdate(u32 vptr, u32 rawTicks);
 extern "C" u32 Tethys_RawTicks();
 #if defined(TETHYS_START_CAM) && TETHYS_START_CAM > 0
 // The buffer lives in SaveGame.cpp as an ALIVE_VAR with no header declaration;
@@ -509,7 +509,15 @@ EXPORT void CC Game_Loop_437630()
                         // not be.
                         const u32 tObj0 = Tethys_RawTicks();
                         pObjIter->VUpdate();
-                        Tethys_NoteVUpdate(static_cast<s16>(pObjIter->field_4_typeId),
+                        // bt1031: the VPTR, not field_4_typeId. typeId eNone_0
+                        // is the BaseGameObject ctor DEFAULT and at least eight
+                        // classes keep it (LightEffect, DoorFlame, DoorLight,
+                        // GasEmitter, BulletShell, MusicController/Trigger,
+                        // CheatController), so ut000 -- the most expensive
+                        // VUpdate of the bt1030 captures -- named a set, not an
+                        // object. The vtable pointer is unique per class and
+                        // resolves in build/Tethys.map.
+                        Tethys_NoteVUpdate(*reinterpret_cast<const u32*>(pObjIter),
                                            Tethys_RawTicks() - tObj0);
 #else
                         pObjIter->VUpdate();
@@ -533,8 +541,8 @@ EXPORT void CC Game_Loop_437630()
 #ifdef TETHYS_SATURN
                     const u32 tObj0 = Tethys_RawTicks(); // SATURN (bt1030)
                     pObjIter->VUpdate();
-                    Tethys_NoteVUpdate(static_cast<s16>(pObjIter->field_4_typeId),
-                                       Tethys_RawTicks() - tObj0);
+                    Tethys_NoteVUpdate(*reinterpret_cast<const u32*>(pObjIter),
+                                       Tethys_RawTicks() - tObj0); // bt1031 vptr
 #else
                     pObjIter->VUpdate();
 #endif
