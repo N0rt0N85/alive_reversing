@@ -48,6 +48,16 @@ namespace AO {
 extern "C" u32 Tethys_gPhUpd;
 extern "C" u32 Tethys_gPhAnim;
 extern "C" u32 Tethys_gPhRend;
+// SATURN (bt1030): pu owns the possession spike -- 25 ms of a 47 ms worst
+// tick against 4 ms quiet -- and pu is one number over the whole object list.
+// These three split it WITHOUT summing anything: the single most expensive
+// VUpdate of the tick, that object's typeId, and how many VUpdates ran. That
+// combination is what separates "one object got expensive" from "the list got
+// long", and a per-type accumulator could not: 250 objects x a u32 is .bss the
+// HWRAM pre-flight has no room for, and a sum would hide a single 20 ms call
+// inside a big total exactly the way the per-screen means hid this spike.
+extern "C" void Tethys_NoteVUpdate(s16 typeId, u32 rawTicks);
+extern "C" u32 Tethys_RawTicks();
 #if defined(TETHYS_START_CAM) && TETHYS_START_CAM > 0
 // The buffer lives in SaveGame.cpp as an ALIVE_VAR with no header declaration;
 // Abe.cpp:68 declares it the same way for the same reason.
@@ -488,7 +498,22 @@ EXPORT void CC Game_Loop_437630()
                     }
                     else
                     {
+#ifdef TETHYS_SATURN
+                        // SATURN (bt1030). RAW ticks, not SYS_GetTicks: at ~250
+                        // calls a tick almost every one is sub-millisecond, and
+                        // bt1021 already lost a whole capture round to exactly
+                        // that quantisation (la read 0 on six photos because it
+                        // accumulated per call in whole ms). SRL::Timer::Capture
+                        // is an on-chip FRT read -- no bus access -- so paying it
+                        // twice per object is affordable where a B-bus read would
+                        // not be.
+                        const u32 tObj0 = Tethys_RawTicks();
                         pObjIter->VUpdate();
+                        Tethys_NoteVUpdate(static_cast<s16>(pObjIter->field_4_typeId),
+                                           Tethys_RawTicks() - tObj0);
+#else
+                        pObjIter->VUpdate();
+#endif
                     }
                 }
             }
@@ -505,7 +530,14 @@ EXPORT void CC Game_Loop_437630()
                 }
                 else
                 {
+#ifdef TETHYS_SATURN
+                    const u32 tObj0 = Tethys_RawTicks(); // SATURN (bt1030)
                     pObjIter->VUpdate();
+                    Tethys_NoteVUpdate(static_cast<s16>(pObjIter->field_4_typeId),
+                                       Tethys_RawTicks() - tObj0);
+#else
+                    pObjIter->VUpdate();
+#endif
                 }
             }
 
