@@ -173,6 +173,8 @@ EXPORT s32 CC Vram_Is_Area_Free_4958F0(PSX_RECT* pRect, s32 depth)
 extern "C" u32 Tethys_gVaRawAccum;
 extern "C" u32 Tethys_RawTicks(); // raw ~208/ms ticks: bt1020's ms clock
                                   // rounded every sub-ms call to zero (bt1021)
+// SATURN (bt1041): next row worth probing after a failed one -- src/vram_placer.cxx.
+extern "C" s16 Tethys_VphNextRow(s16 yFailed);
 
 namespace {
 struct VaTimer
@@ -240,7 +242,24 @@ EXPORT s32 CC Vram_alloc_block_4957B0(PSX_RECT* pRect, s32 depth)
         {
             if (!Vram_Is_Area_Free_4958F0(pRect, depth))
             {
+#ifdef TETHYS_SATURN
+                // SATURN (bt1041): SKIP THE ROWS THAT CANNOT BE THE ANSWER.
+                // This ++ is the entire defect: a late ascending search runs it
+                // 2*(256-h) = 470 times for a 21-tall chant orb, and ONE such
+                // call measured 3948 raw ticks = 19.0 ms (bt1040 gauge av, with
+                // uv resolving to AO::OrbWhirlWind). Theorem: if row y failed
+                // and row y+k succeeds, some rect's BOTTOM EDGE lies at y+k --
+                // a row can only improve on the one below it by losing a
+                // blocker, and a blocker leaves exactly at its bottom edge. So
+                // every row between here and the next bottom edge is provably
+                // not the answer. Everything else stays stock: x, the overlap
+                // test, both legality guards and all three exits, including the
+                // terminator right below. Deliberately NOT bt999, which edited
+                // Is_Area_Free's inner scan and cost hardware 80%.
+                pRect->y = Tethys_VphNextRow(pRect->y);
+#else
                 pRect->y++;
+#endif
                 if (pRect->y >= 512 - pRect->h)
                 {
                     return 0;
