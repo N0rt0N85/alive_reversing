@@ -34,6 +34,44 @@
 // which GoTo_Camera phase and which TLV factory were live at fatal time.
 extern "C" volatile s32 Tethys_gBootPhase;
 extern "C" volatile s32 Tethys_gLastTlvType;
+
+// SATURN (bt1044): `lo` -- THE HALF OF A SCREEN CHANGE THAT NOTHING MEASURES.
+// The flip bracket `l` opens at Tethys_OnScreenChange and CLOSES the moment the
+// .CAM stream ends, which happens inside GoTo_Camera's FIRST Load_Path_Items.
+// Everything after that -- the loading loop, object construction for the other
+// four cameras, Loader_446590's full TLV pass and Create_FG1s -- is outside
+// every gauge we own, and it is exactly where the survey puts the expensive
+// work (each Animation::Init is a vram_alloc, FG1 is a batch of them, and the
+// TLV pass dereferences resource blocks that live in the slow A-bus cart).
+// So `l` has always been a LOWER BOUND on a screen change, quoted as if it were
+// the whole thing. One number, latched per flip, ends that.
+extern "C" u32 Tethys_RawTicks();           // ~208/ms; ms would round this to 0 (bt1021)
+extern "C" volatile u32 Tethys_gFlipPostMs; // renderer_saturn.cxx, next to l/lc
+// bt1046: THE GAP THAT bt1044'S OWN BANNER DENIED. `l` is latched in FlipEnd,
+// which fires from Tethys_CamStreamEnd inside Tethys_StreamCamFile -- called at
+// line 1634 below as the FIRST act of Load_Path_Items. That function then runs
+// the entire LoadResourceFromList_1 TLV pass at line 1644 before returning, and
+// lo used to open only after the return. So "l + lo is the screen change end to
+// end" was false and 2342 ms [Ymir] was a LOWER BOUND. lo's T0 is stamped in
+// FlipEnd now (gFlipPostRaw0), at the instant l closes, which is what the
+// sentence claimed. No local epoch here any more -- a local could only ever
+// start after the gap.
+extern "C" u32 Tethys_gFlipPostRaw0;
+extern "C" u32 Tethys_gCdRawAccum;          // cd_saturn.cxx, zeroed at T0
+extern "C" volatile u32 Tethys_gFlipCdMs;   // `lc`, latched over the WHOLE flip
+// bt1047: and its split, same window. lc is 71% of a camera flip and 84% of a
+// path transition [Ymir], so everything now hangs on whether that time is
+// seeks, drive rate, or our own SH-2 copy under GFS_TMODE_CPU.
+extern "C" u32 Tethys_gCdSeekRaw;
+extern "C" u32 Tethys_gCdBytes;
+extern "C" volatile u32 Tethys_gFlipSeekMs; // `ls`
+extern "C" volatile u32 Tethys_gFlipKb;     // `lk`
+// bt1046: `la` is RETIRED WITH ITS VERDICT WRITTEN DOWN. Measured over the whole
+// flip it read 14 ms with the row-skip OFF and 3 ms with it ON, against a 2342 ms
+// screen change -- 0.6%. vram_alloc is not part of load time, the bt1041/bt1044
+// skips are correct and irrelevant here, and the column pays for lh. The house
+// rule: a gauge that has answered is deleted WITH its verdict in a comment, not
+// left running (see the kp/ko/pw/pi retirements).
 #endif
 
 namespace AO {
@@ -1874,6 +1912,13 @@ void Map::GoTo_Camera_445050()
         // this level's Slig set.
         extern void Tethys_ReleaseStickyResources();
         Tethys_ReleaseStickyResources();
+        // SATURN (bt1053): and forget the absent-name memo, which is per-LVL.
+        // This used to happen inside the call above, which was right for THIS
+        // caller and wrong for its other one -- the wedge pressure release runs
+        // mid-flip and wiping the memo there turns a survivable stall into a
+        // "Res missing" fatal. See the note at the end of that function.
+        extern void Tethys_ForgetAbsentResources();
+        Tethys_ForgetAbsentResources();
 #endif
 
         // Free all cameras
@@ -2096,6 +2141,12 @@ void Map::GoTo_Camera_445050()
 
 #ifdef TETHYS_SATURN
     Tethys_gBootPhase = 5;
+    // bt1046's lh mark stood here and has ANSWERED: 280 ms of a 1443 ms camera
+    // flip, with the .CAM stream 557 and the tail 606. The CPU is spread, there
+    // is no head hotspot, and Reclaim_Memory -- which five of six source readers
+    // nominated -- is bounded by that 280 because it is the whole phase. The
+    // answer that mattered came from the column beside it: lc 1030 of 1443.
+    // THE SCREEN CHANGE IS 71% CD, so lh's column goes to splitting lc.
 #endif
     Load_Path_Items_445DA0(field_34_camera_array[0], LoadMode::ConstructObject_0);
 #ifdef TETHYS_SATURN
@@ -2115,6 +2166,9 @@ void Map::GoTo_Camera_445050()
         field_34_camera_array[0]->field_30_flags &= ~2; // consume the respawn marker
     }
 #endif
+    // bt1044's T0 stamp stood here and it was WRONG -- see the gap banner at the
+    // top of this file. lo now starts in FlipEnd, so the LoadResourceFromList_1
+    // TLV pass that runs inside the call above is inside lo instead of nowhere.
     ResourceManager::LoadingLoop_41EAD0(bShowLoadingIcon);
 #ifdef TETHYS_SATURN
     Tethys_gBootPhase = 6;
@@ -2152,6 +2206,28 @@ void Map::GoTo_Camera_445050()
     }
 
     Create_FG1s_4447D0();
+
+#ifdef TETHYS_SATURN
+    // SATURN (bt1044): T1 of `lo`. Closed after Create_FG1s and BEFORE the FMV /
+    // eUnknown_11 branches below, which are rare, unrelated to the ordinary
+    // screen change, and would make the number mean two different things
+    // depending on the screen. One division per flip, like the others (bt1021).
+    Tethys_gFlipPostMs = (Tethys_RawTicks() - Tethys_gFlipPostRaw0) / 208u;
+    // bt1046: and lc closes HERE too, so it covers the whole flip's CD instead
+    // of the .CAM half only. The tail's CD -- the resource TLV pass, LoadingLoop's
+    // drain, four more cameras -- was entirely invisible, and it is the biggest
+    // named term in lo. Free: the accumulator was already zeroed at T0.
+    Tethys_gFlipCdMs = Tethys_gCdRawAccum / 208u;
+    Tethys_gFlipSeekMs = Tethys_gCdSeekRaw / 208u; // bt1047: ls/lk, same window
+    Tethys_gFlipKb = Tethys_gCdBytes >> 10;
+    // bt1051: kc RETIRED, verdict in place -- lk minus kc read 104, 106 and
+    // 108 KB across three hardware screens (kc itself 92, 92, 154), so the
+    // non-.CAM traffic is ~105 KB on EVERY flip and near-constant. Its text
+    // pays for this build's four CPU reductions under the pre-flight floor.
+    // bt1045 latched `la` here and bt1046 RETIRES IT, verdict first: widened to
+    // the whole flip it read 14 ms with the row-skip OFF and 3 ms ON, against a
+    // 2342 ms screen change. 0.6%. vram_alloc is not load time.
+#endif
 
     if (field_10_screenChangeEffect == CameraSwapEffects::ePlay1FMV_5)
     {

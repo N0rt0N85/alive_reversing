@@ -114,16 +114,82 @@ struct TethysStickyEntry
     u32 type;
     u32 id;
 };
+// bt1052: HELD grows 20 -> 32, PENDING stays 20, and the asymmetry is the
+// point. Both tables silently DROP past their cap, and a dropped entry is a
+// file that quietly keeps being re-read -- the exact symptom this build
+// exists to remove, made invisible. But they fill differently: Held
+// ACCUMULATES for the whole level (base ~9 pairs plus whatever the seven
+// prefixes match), while Pending is transient -- an entry lives there only
+// between the request and On_Loaded, and only a handful are ever in flight.
+// Widening both cost 320 B of .bss and the HWRAM pre-flight floor refused
+// it; widening the one that actually accumulates costs 96 B and fits.
 static TethysStickyEntry sTethysStickyPending[20] = {};
 static s32 sTethysStickyPendingCount = 0;
-static TethysStickyEntry sTethysStickyHeld[20] = {};
+static TethysStickyEntry sTethysStickyHeld[32] = {};
 static s32 sTethysStickyHeldCount = 0;
+
+// SATURN (bt1052) -- THE LIST GROWS, AND IT IS GATED ON MEMORY, NOT ON TASTE.
+//
+// Measured on hardware: a screen change reads ~200 KB, of which the .CAM is
+// 92-154 KB and the REST is 104, 106, 108 KB across three different screens.
+// That ~105 KB of non-.CAM traffic is near-constant, and at the measured drive
+// rate it is about a second of EVERY screen change spent re-reading files the
+// previous screen already had. Sticky is the primitive that stops it: one extra
+// permanent ref, dropped at level change, no eviction policy to get wrong.
+//
+// WHY PREFIXES. The originals mixed strncmp and strcmp; one table of prefixes
+// does both jobs ("SLIG" covers SLIG.BND and SLIGZ.BND, "ABEBSIC" covers
+// ABEBSIC.BAN and ABEBSIC1.BAN) and costs less text than a chain of calls --
+// which matters, the HWRAM pre-flight floor is what the retired vp knob paid for.
+//
+// WHY THE GATE IS ARITHMETIC. Sticky refs are permanent until the level changes,
+// so the list is bounded by free heap. In cart mode the heap is 3.94 MB and the
+// measured peak is 0.96 MB -- 3 MB spare, room to be generous. WITHOUT a cart
+// the heap is 995,328 B and that same peak is 962,580: 97% FULL, ~33 KB of
+// headroom. There is no 105 KB to find there, so the extended entries are simply
+// not eligible. The cart IMPROVES this; it does not gate the game.
+//
+// bt1053 RETRACTS THE WIDE LIST. bt1052 added Abe's motion sets on the theory
+// that they are requested by the CAMERA's resource list and so die with it. THE
+// THEORY WAS WRONG, and checking it at source cost nothing next to the hardware
+// slot it would have wasted: Abe::ctor_420770 (Abe.cpp:877-916) already calls
+// GetLoadedResource_4554F0(..., addUseCount = 1, ...) on kAbebasic, kAbebsic1,
+// kAbeedge, kAbeknbk and more, Abe carries eSurviveDeathReset_Bit9 and is built
+// once per level, and a resident resource costs no CD read. Four of the five
+// entries were therefore permanent no-ops -- 285,480 B of the 324,460 B the list
+// could name was ALREADY pinned. ABETHROW could not match at all: it is
+// requested through LoadResourceFile_4551E0/_455270, neither of which is one of
+// the two sticky hook sites. Only ABEHOIST.BAN (38,980 B) was ever in play, and
+// nobody established that it is freed per camera either.
+//
+// So the ~105 KB of per-flip non-.CAM traffic -- which is real, measured, and
+// near-constant across three hardware screens -- IS STILL UNEXPLAINED, and the
+// honest next step is a gauge that NAMES the biggest re-read file rather than a
+// second guess at it. The A/B knob is gone too: it gated ACQUISITION only, so
+// refs already held survived the toggle and the OFF photo would have read "the
+// fix does nothing" whatever the truth was -- a false negative dressed as a
+// measurement, which is the bt823/824 shape with a new variable.
+//
+// The base list stays: it was measured in S7 against a specific wedge and it
+// does its job.
+static const char_type* const kTethysStickyBase[] = {"SLG", "SLIG"};
+
+static bool Tethys_StickyMatch(const char_type* pFileName,
+                               const char_type* const* pTable, s32 count)
+{
+    for (s32 i = 0; i < count; i++)
+    {
+        const char_type* a = pFileName;
+        const char_type* b = pTable[i];
+        while (*b && *a == *b) { a++; b++; }
+        if (!*b) { return true; }
+    }
+    return false;
+}
 
 static bool Tethys_StickyName(const char_type* pFileName)
 {
-    return strncmp(pFileName, "SLG", 3) == 0
-        || strcmp(pFileName, "SLIG.BND") == 0
-        || strcmp(pFileName, "SLIGZ.BND") == 0;
+    return Tethys_StickyMatch(pFileName, kTethysStickyBase, 2);
 }
 
 static bool Tethys_StickyIn(const TethysStickyEntry* pTable, s32 count, u32 type, u32 id)
@@ -148,14 +214,20 @@ static void Tethys_StickyRequest(const char_type* pFileName, u32 type, u32 id)
     {
         return;
     }
+    // SATURN (bt1053): CAPACITY FIRST, THEN THE REF. The ref used to be taken
+    // inside the `if` and recorded only when the table had room, so a full table
+    // meant a permanent ref that nothing was tracking and nothing would ever
+    // release -- the block stayed pinned past level change. Never acquire what
+    // you cannot record.
+    if (sTethysStickyHeldCount >= 32)
+    {
+        return;
+    }
     if (ResourceManager::GetLoadedResource_4554F0(type, id, 1, 0)) // the permanent ref
     {
-        if (sTethysStickyHeldCount < 20)
-        {
-            sTethysStickyHeld[sTethysStickyHeldCount].type = type;
-            sTethysStickyHeld[sTethysStickyHeldCount].id = id;
-            sTethysStickyHeldCount++;
-        }
+        sTethysStickyHeld[sTethysStickyHeldCount].type = type;
+        sTethysStickyHeld[sTethysStickyHeldCount].id = id;
+        sTethysStickyHeldCount++;
         return;
     }
     if (!Tethys_StickyIn(sTethysStickyPending, sTethysStickyPendingCount, type, id)
@@ -174,8 +246,13 @@ static void Tethys_StickyMaterialize(u32 type, u32 id)
     {
         if (sTethysStickyPending[i].type == type && sTethysStickyPending[i].id == id)
         {
-            if (ResourceManager::GetLoadedResource_4554F0(type, id, 1, 0) // the permanent ref
-                && sTethysStickyHeldCount < 20)
+            // SATURN (bt1053): capacity FIRST -- && short-circuits left to
+            // right, so the old order took the permanent ref and then discarded
+            // it untracked when the table was full, and the line below then
+            // dropped the Pending entry so it was never retried. Same leak as
+            // in Tethys_StickyRequest, same fix.
+            if (sTethysStickyHeldCount < 32
+                && ResourceManager::GetLoadedResource_4554F0(type, id, 1, 0)) // the permanent ref
             {
                 sTethysStickyHeld[sTethysStickyHeldCount].type = type;
                 sTethysStickyHeld[sTethysStickyHeldCount].id = id;
@@ -204,7 +281,17 @@ void Tethys_ReleaseStickyResources()
     }
     sTethysStickyHeldCount = 0;
     sTethysStickyPendingCount = 0;
-    Tethys_ForgetAbsentResources(); // SATURN bt990: names are per-LVL
+    // SATURN (bt1053): Tethys_ForgetAbsentResources() USED TO BE CALLED HERE AND
+    // IT COULD KILL THE GAME. This function has TWO callers: Map.cpp's level
+    // change, where forgetting the absent-name memo is right because the names
+    // are per-LVL, and the wedge pressure release at :509 below, which fires
+    // MID-FLIP from LoadingFile::VUpdate. The memo is filled at request time and
+    // consumed by CheckResourceIsLoaded during Loader_446590(ConstructObject_0);
+    // wiping it between those two points makes a genuinely-absent name (79 of
+    // 195 AO names are not in R1.LVL -- DOGBLOW.BAN and friends) hit
+    // ALIVE_FATAL("Res missing") instead of being skipped. The wedge RECOVERY
+    // turned a survivable stall into a death screen. The call now sits with the
+    // level change that actually needs it.
 }
 
 // SATURN (bt990): NAMES THIS LEVEL'S LVL GENUINELY DOES NOT CONTAIN.
@@ -1387,6 +1474,7 @@ ResourceManager::ResourceHeapItem* ResourceManager::Split_block(ResourceManager:
 // Begin latches VDP2 VRAM + CRAM bank on first call; Palette writes the CAM's
 // 256 CRAM entries; Pixels CPU-copies a run of the 320x224 plane into VDP2
 // (row-stride remap 320->512 inside); End stamps the flip timer.
+
 extern "C" void Tethys_CamStreamBegin();
 extern "C" void Tethys_CamStreamPalette(const u8* pal512);
 extern "C" void Tethys_CamStreamPixels(u32 absOff, const u8* src, u32 len);
@@ -1498,9 +1586,29 @@ struct CamSectorReader
             {
                 take = n;
             }
-            for (u32 i = 0; i < take; i++)
+            // SATURN (bt1051): hoist the source out of the struct and move
+            // longwords. `sec` and `bufOff` are members, so the stock body
+            // re-derives the address on every byte; this runs over every
+            // non-pixel byte of every .CAM. Alignment is TESTED rather than
+            // argued -- the byte tail below is the stock loop and takes over
+            // whenever the test fails, so the change cannot be wrong, only
+            // sometimes ineffective.
+            const u8* pSrc = &sec[bufOff];
+            u32 i = 0;
+            if (((reinterpret_cast<u32>(dst) | reinterpret_cast<u32>(pSrc)) & 3u) == 0)
             {
-                dst[i] = sec[bufOff + i];
+                u32* pD = reinterpret_cast<u32*>(dst);
+                const u32* pS = reinterpret_cast<const u32*>(pSrc);
+                const u32 words = take >> 2;
+                for (u32 k = 0; k < words; k++)
+                {
+                    pD[k] = pS[k];
+                }
+                i = words << 2;
+            }
+            for (; i < take; i++)
+            {
+                dst[i] = pSrc[i];
             }
             dst += take;
             bufOff += take;
@@ -1560,13 +1668,35 @@ void CC ResourceManager::Tethys_StreamCamFile(Camera* pCamera, bool bitsOnly)
         Tethys_CamStreamFatal("CAM stream: CD miss ", pCamera->field_1E_fileName);
     }
 
+    // SATURN (bt1049) counted this file's bytes here as `kc`; bt1051 RETIRES it
+    // with the answer. On hardware, lk - kc read 104, 106 and 108 KB across
+    // three screens while kc itself was 92, 92 and 154 -- so the non-.CAM
+    // traffic is ~105 KB on EVERY flip, near-constant, into a resource heap
+    // that is 3.94 MB and 23% full. That is ~1 s of every screen change spent
+    // re-reading what memory we already have could simply keep.
+
     // SATURN (bt872): the foreground must vanish BEFORE the background swaps.
     // Present one blank-foreground frame now, while VDP2 still shows the OLD
     // background, so the old screen's sprites are gone the instant the new
     // Bits land (otherwise the frozen VDP1 buffer paints them over the new bg
     // for the whole synchronous stall). The sprite list was already emptied by
     // Tethys_OnScreenChange at the top of ScreenChange_4444D0; this commits it.
-    Tethys_ClearForegroundAndPresent();
+    // SATURN (bt1051): DELETED, and this one is the only change in the build
+    // that can be seen rather than measured -- read the next paragraph before
+    // restoring it.
+    //   Tethys_ClearForegroundAndPresent() stood here. It costs a whole vblank
+    // (16.7 ms) because it Synchronizes, and it was written in bt872 when
+    // Tethys_OnScreenChange only EMPTIED the sprite list without presenting it.
+    // bt947 then added a present at T0 itself, for the same symptom, and this
+    // call became a second one: by the time it runs sFrameSpriteCount is 0 and
+    // sSpritesBlanked is 1, so FlushSprites submits nothing and the vblank buys
+    // an identical frame. Self-verifying if it is ever doubted -- Tethys_gFgClears
+    // counts these and drops from 2 to 1 per flip.
+    //   THE RISK IS VISUAL, NOT NUMERIC. The bug both presents exist to prevent
+    // is the OLD screen's foreground lingering over the NEW background for the
+    // whole synchronous load. If that ever comes back, this line is the first
+    // suspect and restoring it is a one-line revert. It is deliberately in the
+    // Ymir build BEFORE the hardware build so the flip can be watched once.
 
     // Latch VDP2 first (Begin's one-time LoadBitmap + re-blank; bt978: its
     // DMA source is a fake HWRAM span, the scratch is a separate dedicated

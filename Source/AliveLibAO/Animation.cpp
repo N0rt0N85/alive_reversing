@@ -1054,10 +1054,49 @@ s16 Animation::Init_402D20(s32 frameTableOffset, DynamicArray* /*animList*/, Bas
         }
     }
 
+#ifdef TETHYS_SATURN
+    // SATURN (bt1044): GIVE BACK WHAT THIS CALL TOOK BEFORE BAILING OUT.
+    //
+    // Three of Init's failure exits below return 0 AFTER vram_alloc (and, on
+    // two of them, PalAlloc) already succeeded, and they release neither. On
+    // PSX that is a slow bleed nobody notices; here the VRAM model is the
+    // scarce resource whose OCCUPANCY drives allocator cost superlinearly, so
+    // a leaked rect is not just lost space, it makes every later placement
+    // slower -- the exact quantity bt1041/bt1044 exist to cut.
+    //
+    // The caller cannot clean up for us. Gibs is the proven case: on a failed
+    // part it does `field_5C4_parts_used_count = i` (Gibs.cpp:141/:161), so its
+    // dtor frees parts [0, i) and part i -- the one that got a rect and then
+    // failed -- is never touched again. Init took it, Init returns it.
+    //
+    // Ownership is tracked with locals, never by inspecting the fields: an
+    // Animation may be re-Init'd, so a non-zero field_84_vram_rect.w can be a
+    // PREVIOUS owner's rect and freeing that would hand the model a live
+    // allocation. Only what THIS call allocated is released. Both clears mirror
+    // vCleanUp's idempotency guards, so a later vCleanUp is a no-op.
+    const bool bOwnsVram = (bAllocateVRam != 0) && (bVramAllocOK != 0);
+    const bool bOwnsPal = (pal_depth > 0) && (bVramAllocOK != 0) && bPalAllocOK;
+    auto tethysReleaseSpoils = [&]() {
+        if (bOwnsVram && field_84_vram_rect.w > 0)
+        {
+            Vram_free_450CE0({field_84_vram_rect.x, field_84_vram_rect.y}, {field_84_vram_rect.w, field_84_vram_rect.h});
+            field_84_vram_rect.w = 0;
+        }
+        if (bOwnsPal && field_90_pal_depth > 0)
+        {
+            IRenderer::GetRenderer()->PalFree(IRenderer::PalRecord{field_8C_pal_vram_xy.field_0_x, field_8C_pal_vram_xy.field_2_y, field_90_pal_depth});
+            field_90_pal_depth = 0;
+        }
+    };
+#endif
+
     const bool bOk = bVramAllocOK && bPalAllocOK;
     if (!bOk)
     {
         LOG_WARNING("Animation init failed because the vram or pal alloc failed!");
+#ifdef TETHYS_SATURN
+        tethysReleaseSpoils(); // SATURN (bt1044): PalAlloc failed AFTER vram_alloc took a rect
+#endif
         return 0;
     }
 
@@ -1070,6 +1109,9 @@ s16 Animation::Init_402D20(s32 frameTableOffset, DynamicArray* /*animList*/, Bas
         if (!field_24_dbuf)
         {
             LOG_WARNING("Animation init failed because it couldn't alloc a new resource!");
+#ifdef TETHYS_SATURN
+            tethysReleaseSpoils(); // SATURN (bt1044): rect AND palette both taken by now
+#endif
             return 0;
         }
     }
@@ -1079,6 +1121,9 @@ s16 Animation::Init_402D20(s32 frameTableOffset, DynamicArray* /*animList*/, Bas
     if (!result)
     {
         LOG_ERROR("gObjList_animations_505564->Push_Back(this) returned 0 but shouldn't");
+#ifdef TETHYS_SATURN
+        tethysReleaseSpoils(); // SATURN (bt1044): the decompression buffer is reaped by vCleanUp; the rect was not
+#endif
         return 0;
     }
 
