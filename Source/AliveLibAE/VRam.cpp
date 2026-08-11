@@ -173,8 +173,10 @@ EXPORT s32 CC Vram_Is_Area_Free_4958F0(PSX_RECT* pRect, s32 depth)
 extern "C" u32 Tethys_gVaRawAccum;
 extern "C" u32 Tethys_RawTicks(); // raw ~208/ms ticks: bt1020's ms clock
                                   // rounded every sub-ms call to zero (bt1021)
-// SATURN (bt1041): next row worth probing after a failed one -- src/vram_placer.cxx.
+// SATURN (bt1041/bt1044): next row worth probing after a failed one, one per
+// walk direction -- src/vram_placer.cxx carries both proofs.
 extern "C" s16 Tethys_VphNextRow(s16 yFailed);
+extern "C" s16 Tethys_VphNextRowDown(s16 yFailed, s16 h);
 
 namespace {
 struct VaTimer
@@ -212,6 +214,23 @@ EXPORT s32 CC Vram_alloc_block_4957B0(PSX_RECT* pRect, s32 depth)
                 {
                     return 1;
                 }
+#ifdef TETHYS_SATURN
+                // SATURN (bt1044): the bt1041 skip, mirrored onto the branch
+                // that carries the BIG rects -- FG1 blocks, actor sheets, and
+                // the Slog/Elum/Meat/Rock gibs -- i.e. the bulk of a screen
+                // change. Same theorem (proof in src/vram_placer.cxx): going
+                // down, a row can only improve on the one above it by a blocker
+                // falling out of range, and a blocker falls out exactly at
+                // r.y - h, so every row between here and the largest such edge
+                // below us is provably not the answer.
+                //   The `continue` is load-bearing: the helper returns the next
+                // CANDIDATE, and the loop's own --pRect->y at the bottom would
+                // step one row past it. Everything else stays stock -- x, the
+                // overlap test, the legality guard, and the `y >= 0` terminator
+                // that this continue re-tests and that ends an exhausted search.
+                pRect->y = Tethys_VphNextRowDown(pRect->y, pRect->h);
+                continue;
+#endif
             }
             else
             {
