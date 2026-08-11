@@ -483,43 +483,6 @@ void LCDScreen::VRender_434400(PrimHeader** ppOt)
         const s32 screenY = endY / 2 - FP_GetExponent(camPos->field_4_y - FP_FromInteger(pScreenManager_4FF7C8->field_16_ypos)) - 7;
         const s32 maxWidth = FP_GetExponent(FP_FromInteger(endX) - camPos->field_0_x);
 
-#ifdef TETHYS_SATURN
-        // SATURN (bt1056): DO NOT BUILD PRIMS FOR A PANEL THAT IS NOT ON SCREEN.
-        //
-        // Every LCDScreen in the loaded PATH renders every frame, not just the
-        // ones on the current camera -- AO leans on the PSX GPU to throw the
-        // off-screen ones away. The Saturn seam throws them away too, but only
-        // AFTER they have been built and walked, and the tester's bt1054 captures
-        // priced that: W p (OT prims walked, last frame) swings 201 <-> 315 with
-        // the marquee, i.e. ~114 prims, while tg says only 27 of them ever become
-        // pixels. So ~87 glyphs per frame pay PolyFT4_Init, three
-        // Math_RandomRange calls for the flicker, an OrderingTable_Add, and then
-        // in the renderer a FindSlotByKey linear scan of 96 slots -- to be
-        // discarded at the strip's extent test.
-        //
-        // The test is the same geometry DrawString already uses: it starts at
-        // PsxToPCX(screenX,11) - field_2B0_x_offset and breaks at
-        // PsxToPCX(maxWidth,11) (Font.cpp:577,:587). If that span does not meet
-        // the display, nothing it emits can survive. The vertical bound is the
-        // 48-px clip box this function builds below (clipRect2.h).
-        //
-        // Deliberately conservative -- an off-by-a-few here costs a few prims, an
-        // off-by-a-few the other way deletes visible text. No counter: W p IS the
-        // measurement, and it is already on the overlay. Expect p to fall from
-        // ~315 to ~230 with a marquee on screen, and tb/tg to be untouched -- if
-        // tg moves, this guard is wrong and it is eating live glyphs.
-        {
-            const s32 textLeft = PsxToPCX(screenX, 11) - field_2B0_x_offset;
-            const s32 textRight = PsxToPCX(maxWidth, 11);
-            const s32 dispW = gPsxDisplay_504C78.field_0_width;
-            const s32 dispH = gPsxDisplay_504C78.field_2_height;
-            if (textRight <= 0 || textLeft >= dispW || screenY >= dispH || (screenY + 48) <= 0)
-            {
-                return;
-            }
-        }
-#endif
-
         PSX_RECT clipRect = {
             0,
             0,
