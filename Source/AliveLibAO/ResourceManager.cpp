@@ -1626,7 +1626,7 @@ extern "C" u8* Tethys_CamStreamBulk(u32* pSectors);
 // one of them is a no-op returning null/nothing without a cartridge, so the
 // no-cart path is byte-identical to bt1053.
 extern "C" u8* Tethys_CamCacheFind(const char_type* name, u32 sectors);
-extern "C" u8* Tethys_CamCacheClaim(const char_type* name, u32 sectors);
+extern "C" u8* Tethys_CamCacheClaim(const char_type* name, u32 sectors, u32* pFilled);
 extern "C" void Tethys_CamCacheCommit(u8* claimed);
 // SATURN (bt1064): the .CAM LZ4 container. Decoder in src/lz4_saturn.cxx,
 // staging carved off the bulk block in src/renderer_saturn.cxx.
@@ -1652,7 +1652,8 @@ struct CamSectorReader
 {
     // ================= raw layer: sectors, from CD or from the cart cache ===
     u8*  bounce;    // CD destination, the LWRAM bulk block
-    const u8* mem;  // bt1061 cache HIT: the whole record already in cart RAM
+    const u8* mem;  // bt1061 cache HIT: record bytes already in cart RAM
+    u32  memSec;    // bt1068: HOW MANY of them are valid -- see the note below
     u8*  mirror;    // bt1061 cache FILL: copy each CD read here on the way past
     s32  basePos;   // file-relative start sector of the record
     s32  numSec;    // sectors in the record
@@ -1684,6 +1685,7 @@ struct CamSectorReader
     {
         bounce = pBounce;
         mem = nullptr;
+        memSec = 0;
         mirror = nullptr;
         basePos = base;
         numSec = count;
@@ -1712,12 +1714,23 @@ struct CamSectorReader
             bad = true;
             return false;
         }
-        if (mem)
+        // bt1068: THE PREFIX MAY BE SHORTER THAN THE RECORD. Until now `mem` was
+        // all-or-nothing -- a cache hit meant the whole record, so this branch
+        // consumed everything left and never returned. A prefetch that the player
+        // outran was therefore thrown away whole and the flip re-read the entire
+        // background from CD, which is the worst possible moment to discard work:
+        // the slot already held the first half of exactly the file about to be
+        // streamed. Now `memSec` says how much of the slot is real, this serves
+        // that prefix, and the loop falls through to the CD path below for the
+        // tail -- which mirrors into the SAME slot at the SAME offsets, so the
+        // record ends up complete and gets committed like any other fill.
+        if (mem && static_cast<u32>(nextSec) < memSec)
         {
+            const s32 upTo = (memSec < static_cast<u32>(numSec)) ? static_cast<s32>(memSec) : numSec;
             rsec = mem + (static_cast<u32>(nextSec) << 11);
             rOff = 0;
-            rLen = static_cast<u32>(numSec - nextSec) << 11;
-            nextSec = numSec;
+            rLen = static_cast<u32>(upTo - nextSec) << 11;
+            nextSec = upTo;
             return true;
         }
         s32 want = numSec - nextSec;
@@ -2042,6 +2055,10 @@ void CC ResourceManager::Tethys_StreamCamFile(Camera* pCamera, bool bitsOnly)
     // the whole of the no-cart behaviour: byte-identical to bt1053.
     const u32 camSectors = static_cast<u32>(pRec->field_10_num_sectors);
     rd.mem = Tethys_CamCacheFind(pCamera->field_1E_fileName, camSectors);
+    if (rd.mem)
+    {
+        rd.memSec = camSectors; // a Find hit is complete by definition
+    }
     // Only a FULL walk may fill a slot. The bitsOnly path (bt817 respawn
     // background refresh) stops after the Bits chunk, so it would leave a
     // partial record behind -- and a partial slot committed as valid streams a
@@ -2049,7 +2066,20 @@ void CC ResourceManager::Tethys_StreamCamFile(Camera* pCamera, bool bitsOnly)
     // just as valid there, it simply stops early.
     if (!rd.mem && !bitsOnly)
     {
-        rd.mirror = Tethys_CamCacheClaim(pCamera->field_1E_fileName, camSectors);
+        // SATURN (bt1068): a miss may still be a PARTIAL hit. If the prefetch was
+        // interrupted on this very record -- which is what happens whenever the
+        // player outwalks it -- the slot already holds `filled` sectors, and the
+        // reader serves those from RAM and reads only the tail from CD. mem and
+        // mirror deliberately point at the SAME slot: the prefix is read out of
+        // it and the tail is written into it, so the record completes in place
+        // and the End! sentinel commits it exactly like a fresh fill.
+        u32 filled = 0;
+        rd.mirror = Tethys_CamCacheClaim(pCamera->field_1E_fileName, camSectors, &filled);
+        if (rd.mirror && filled != 0)
+        {
+            rd.mem = rd.mirror;
+            rd.memSec = filled;
+        }
     }
 
     // SATURN (bt1064): decide raw-or-container before the walk. This MUST come
