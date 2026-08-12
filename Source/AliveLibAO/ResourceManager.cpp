@@ -444,6 +444,28 @@ static u32 sFlipTopBytes = 0;
 static u32 sFlipTopSector = 0;
 static u32 sFlipRecBytes = 0;
 
+// bt1065: `lz` -- the SH-2 cost of bt1064's LZ4 decode, over the same T0 window
+// as lc/lk/ck. Shipped because the number I quoted for it was an ESTIMATE and I
+// said so: ~22-27 ms per screen change, derived from the real streams (55.7%
+// literal bytes, 44.3% match bytes, 38.4 tokens per 1000 output bytes) and the
+// hardware-measured LWRAM 2.1x bus tax, but never measured on target. The whole
+// compression case rests on decode being small against the ~216 ms of CD it
+// buys back, and "small" was the one term nobody had weighed.
+//
+// RAW TICKS, DIVIDED ONCE at the read. bt1021's lesson exactly: the decode runs
+// ~12 times per screen at ~2 ms each, and a millisecond clock accumulating per
+// call would round several of those to zero and report a comfortable lie.
+//
+// IT COSTS NO OVERLAY ARITY. Row 9 drops `s` (the top record's start sector) to
+// make room -- that field found ABEHOIST.BAN, the fix landed in bt1063, and ck
+// has read 10 ever since. ck is the one worth keeping: it is the number that
+// MOVES if the resource dossier ever reopens, and `s` only says who, which is
+// one line away whenever ck says there is a who. Arity is what Debug::Print
+// bills for (628 B for two rows going 6->7/8 args), so a swap is free and an
+// addition is not.
+static u32 sFlipLzRaw = 0;
+extern "C" u32 Tethys_RawTicks(); // src/sys_saturn.cxx, ~208 ticks/ms
+
 static void Tethys_NoteFlipRecord(const char_type* pName, u32 bytes, u32 startSector)
 {
     // Skip .CAM records so ck is directly comparable to lk minus the background.
@@ -474,6 +496,7 @@ extern "C" void Tethys_FlipRecordReset()
     sFlipTopBytes = 0;
     sFlipTopSector = 0;
     sFlipRecBytes = 0;
+    sFlipLzRaw = 0;
 }
 
 extern "C" u32 Tethys_FlipTopSector()
@@ -484,6 +507,11 @@ extern "C" u32 Tethys_FlipTopSector()
 extern "C" u32 Tethys_FlipRecKb()
 {
     return sFlipRecBytes >> 10;
+}
+
+extern "C" u32 Tethys_FlipLzMs()
+{
+    return sFlipLzRaw / 208u;
 }
 
 // Wedge diagnostics (S7 round 6): a staging block that cannot fit is now a
@@ -1600,6 +1628,12 @@ extern "C" u8* Tethys_CamStreamBulk(u32* pSectors);
 extern "C" u8* Tethys_CamCacheFind(const char_type* name, u32 sectors);
 extern "C" u8* Tethys_CamCacheClaim(const char_type* name, u32 sectors);
 extern "C" void Tethys_CamCacheCommit(u8* claimed);
+// SATURN (bt1064): the .CAM LZ4 container. Decoder in src/lz4_saturn.cxx,
+// staging carved off the bulk block in src/renderer_saturn.cxx.
+extern "C" u32 Tethys_Lz4Decode(const u8* src, u32 srcLen, u8* dst, u32 dstCap);
+extern "C" const u32 Tethys_kLz4Block;
+extern "C" u8* Tethys_CamStreamZOut();
+extern "C" u8* Tethys_CamStreamZIn();
 
 namespace {
 // Forward, chunk-at-a-time reader over one CD file record. Re-seeks before
@@ -1616,56 +1650,73 @@ namespace {
 // same factor; that is the fix landing, not reads going missing.
 struct CamSectorReader
 {
-    u8*  sec;       // bounce buffer, 4-aligned, secCap sectors (Tethys_CamStreamBulk)
+    // ================= raw layer: sectors, from CD or from the cart cache ===
+    u8*  bounce;    // CD destination, the LWRAM bulk block
+    const u8* mem;  // bt1061 cache HIT: the whole record already in cart RAM
+    u8*  mirror;    // bt1061 cache FILL: copy each CD read here on the way past
     s32  basePos;   // file-relative start sector of the record
     s32  numSec;    // sectors in the record
     s32  nextSec;   // next sector index to fetch
     s32  secCap;    // sectors the bounce holds = max sectors per round-trip
-    u32  bufOff;    // bytes consumed within sec
-    u32  bufLen;    // valid bytes in sec (0 => none loaded yet)
-    bool bad;
-    // SATURN (bt1061): the two cache modes. EXACTLY ONE is ever non-null.
-    //   mem    -- HIT: the whole record is already in cart RAM, so Fill serves
-    //             it in place and this reader issues ZERO CD operations.
-    //   mirror -- MISS: the CD path runs unchanged and every filled bounce is
-    //             ALSO copied here, so the next visit to this screen is a hit.
-    // Deliberately fields on the reader rather than a second reader class: the
-    // chunk walk, the palette assembly and the VDP2 pixel route are identical
-    // in both modes, and duplicating them is how the two paths would drift.
-    const u8* mem;
-    u8*  mirror;
+    const u8* rsec; // current raw buffer
+    u32  rOff;      // bytes consumed within it
+    u32  rLen;      // valid bytes in it
 
-    void Init(u8* bounce, s32 base, s32 count, s32 cap)
+    // ============ output layer: what Read/Pixels consume ====================
+    // In pass-through this IS the raw buffer, no copy. In container mode it is
+    // the decoded block. EVERYTHING ABOVE THIS STRUCT IS UNCHANGED by
+    // compression -- the chunk walk, the palette assembly, the VDP2 pixel route
+    // and the FG1/Anim heap fabrication all just consume bytes, and that is the
+    // whole reason the container wraps the RECORD rather than each chunk.
+    const u8* sec;
+    u32  bufOff;
+    u32  bufLen;
+
+    // ================= bt1064 container =====================================
+    u8*  zOut;      // 8,192 B decoded block
+    u8*  zIn;       // 8,240 B compressed block (LZ4 incompressible bound)
+    u32  zRemain;   // uncompressed bytes still owed by the header
+    bool z;
+
+    bool bad;
+
+    void Init(u8* pBounce, s32 base, s32 count, s32 cap)
     {
-        sec = bounce;
+        bounce = pBounce;
+        mem = nullptr;
+        mirror = nullptr;
         basePos = base;
         numSec = count;
         nextSec = 0;
         secCap = cap > 0 ? cap : 1;
+        rsec = nullptr;
+        rOff = 0;
+        rLen = 0;
+        sec = nullptr;
         bufOff = 0;
         bufLen = 0;
+        zOut = nullptr;
+        zIn = nullptr;
+        zRemain = 0;
+        z = false;
         bad = false;
-        mem = nullptr;
-        mirror = nullptr;
     }
 
-    bool Fill()
+    // Pull the next raw buffer: the whole remainder on a cache hit (it is RAM,
+    // so slicing it would buy nothing), else one CD round trip of up to secCap
+    // sectors.
+    bool RawFill()
     {
         if (nextSec >= numSec)
         {
             bad = true;
             return false;
         }
-        // SATURN (bt1061): cache hit. Hand out the WHOLE remainder at once --
-        // it is RAM, so slicing it into secCap-sized pieces would buy nothing
-        // and cost a loop. No copy either: the consumers below read `sec` in
-        // place, and Tethys_CamStreamPixels is CPU stores (renderer_saturn.cxx)
-        // so a cart source is legal where a DMA source would not be.
         if (mem)
         {
-            sec = const_cast<u8*>(mem) + (static_cast<u32>(nextSec) << 11);
-            bufOff = 0;
-            bufLen = static_cast<u32>(numSec - nextSec) << 11;
+            rsec = mem + (static_cast<u32>(nextSec) << 11);
+            rOff = 0;
+            rLen = static_cast<u32>(numSec - nextSec) << 11;
             nextSec = numSec;
             return true;
         }
@@ -1687,18 +1738,18 @@ struct CamSectorReader
             CdlLOC loc;
             PSX_Pos_To_CdLoc_49B340(basePos + nextSec, &loc);
             if (PSX_CD_File_Seek_49B670(2, &loc)
-                && PSX_CD_File_Read_49B8B0(n, sec)
+                && PSX_CD_File_Read_49B8B0(n, bounce)
                 && PSX_CD_FileIOWait_49B900(0) != -1)
             {
                 // SATURN (bt1061): mirror into the cache slot BEFORE nextSec
                 // advances, so the destination offset is this fill's own start
-                // sector. Longwords: `sec` is the 4-aligned bounce and the slot
-                // base is sector-aligned, so both ends are aligned by
-                // construction here (unlike Read/Pixels, whose callers hand in
-                // arbitrary offsets and which therefore test at runtime).
+                // sector. Longwords: the bounce is 4-aligned and the slot base
+                // is sector-aligned, so both ends are aligned by construction
+                // here (unlike Read/Pixels, whose callers hand in arbitrary
+                // offsets and which therefore test at runtime).
                 if (mirror)
                 {
-                    const u32* pS = reinterpret_cast<const u32*>(sec);
+                    const u32* pS = reinterpret_cast<const u32*>(bounce);
                     u32* pD = reinterpret_cast<u32*>(mirror + (static_cast<u32>(nextSec) << 11));
                     const u32 words = (static_cast<u32>(n) << 11) >> 2;
                     for (u32 k = 0; k < words; k++)
@@ -1707,8 +1758,9 @@ struct CamSectorReader
                     }
                 }
                 nextSec += n;
-                bufOff = 0;
-                bufLen = static_cast<u32>(n) << 11;
+                rsec = bounce;
+                rOff = 0;
+                rLen = static_cast<u32>(n) << 11;
                 return true;
             }
         }
@@ -1716,7 +1768,129 @@ struct CamSectorReader
         return false;
     }
 
-    // Copy n bytes forward into dst, spanning sector refills as needed.
+    // Copy n RAW bytes forward, spanning refills. Used only by the container
+    // path (block lengths and compressed blocks); pass-through never calls it.
+    void RawRead(u8* dst, u32 n)
+    {
+        while (n && !bad)
+        {
+            if (rOff >= rLen && !RawFill())
+            {
+                return;
+            }
+            u32 take = rLen - rOff;
+            if (take > n)
+            {
+                take = n;
+            }
+            const u8* pSrc = &rsec[rOff];
+            u32 i = 0;
+            if (((reinterpret_cast<u32>(dst) | reinterpret_cast<u32>(pSrc)) & 3u) == 0)
+            {
+                u32* pD = reinterpret_cast<u32*>(dst);
+                const u32* pS = reinterpret_cast<const u32*>(pSrc);
+                const u32 words = take >> 2;
+                for (u32 k = 0; k < words; k++)
+                {
+                    pD[k] = pS[k];
+                }
+                i = words << 2;
+            }
+            for (; i < take; i++)
+            {
+                dst[i] = pSrc[i];
+            }
+            dst += take;
+            rOff += take;
+            n -= take;
+        }
+    }
+
+    // SATURN (bt1064): decide the record's format ONCE, by PEEKING rather than
+    // consuming -- a raw .CAM has no header to skip, and rewinding a CD cursor
+    // mid-record is exactly the kind of state nobody would ever test. RawFill
+    // hands back at least one whole sector, so the 8-byte container header is
+    // always contiguous at the start of it. Both forms stay legal on disc,
+    // which is what lets a half-converted cd/data still boot.
+    bool Open()
+    {
+        if (!RawFill())
+        {
+            return false;
+        }
+        if (rLen >= 8u && rsec[0] == 'C' && rsec[1] == 'Z' && rsec[2] == '4' && rsec[3] == 1)
+        {
+            z = true;
+            zRemain = (static_cast<u32>(rsec[4]) << 24) | (static_cast<u32>(rsec[5]) << 16)
+                    | (static_cast<u32>(rsec[6]) << 8) | static_cast<u32>(rsec[7]);
+            rOff = 8;
+            zOut = Tethys_CamStreamZOut();
+            zIn = Tethys_CamStreamZIn();
+            return true;
+        }
+        // Raw record: hand the buffer we just peeked straight to the output
+        // layer rather than dropping it, and mark the raw layer spent.
+        sec = rsec;
+        bufOff = 0;
+        bufLen = rLen;
+        rOff = rLen;
+        return true;
+    }
+
+    bool Fill()
+    {
+        if (!z)
+        {
+            if (!RawFill())
+            {
+                return false;
+            }
+            sec = rsec;
+            bufOff = 0;
+            bufLen = rLen;
+            rOff = rLen;
+            return true;
+        }
+        if (zRemain == 0u)
+        {
+            bad = true; // the walk wants more than the header promised
+            return false;
+        }
+        u8 hdr[2];
+        RawRead(hdr, 2);
+        if (bad)
+        {
+            return false;
+        }
+        const u32 clen = (static_cast<u32>(hdr[0]) << 8) | static_cast<u32>(hdr[1]);
+        if (clen == 0u || clen > 8240u) // the converter's own u16 / worst-case bound
+        {
+            bad = true;
+            return false;
+        }
+        RawRead(zIn, clen);
+        if (bad)
+        {
+            return false;
+        }
+        const u32 want = (zRemain < Tethys_kLz4Block) ? zRemain : Tethys_kLz4Block;
+        const u32 tLz0 = Tethys_RawTicks();
+        const u32 got = Tethys_Lz4Decode(zIn, clen, zOut, want);
+        sFlipLzRaw += Tethys_RawTicks() - tLz0; // bt1065: `lz`, decode only
+
+        if (got != want) // short or long is corruption; malformed input returns 0
+        {
+            bad = true;
+            return false;
+        }
+        zRemain -= got;
+        sec = zOut;
+        bufOff = 0;
+        bufLen = got;
+        return true;
+    }
+
+    // Copy n bytes forward into dst, spanning refills as needed.
     void Read(u8* dst, u32 n)
     {
         while (n && !bad)
@@ -1876,6 +2050,18 @@ void CC ResourceManager::Tethys_StreamCamFile(Camera* pCamera, bool bitsOnly)
     if (!rd.mem && !bitsOnly)
     {
         rd.mirror = Tethys_CamCacheClaim(pCamera->field_1E_fileName, camSectors);
+    }
+
+    // SATURN (bt1064): decide raw-or-container before the walk. This MUST come
+    // after mem/mirror are set -- it issues the record's first read, and that
+    // read is the one a cache hit serves and a cache fill mirrors.
+    //   The cache therefore stores the record EXACTLY AS IT SITS ON DISC, i.e.
+    // compressed. That is the right way round: the slots hold more screens, and
+    // a hit still pays the ~27 ms of decode rather than the ~700 ms of CD it
+    // replaces.
+    if (!rd.Open())
+    {
+        Tethys_CamStreamFatal("CAM stream: open ", pCamera->field_1E_fileName);
     }
 
     // Walk the BE chunk chain (Bits, [FG1], [Anim], End!) by header size. The
