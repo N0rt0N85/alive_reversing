@@ -67,6 +67,11 @@ extern "C" u32 Tethys_gCdBytes;
 extern "C" volatile u32 Tethys_gFlipSeekMs; // `ls`
 extern "C" volatile u32 Tethys_gFlipKb;     // `lk`
 extern "C" void Tethys_CamCacheReset();     // bt1061: src/cam_cache.cxx, level-scoped
+// bt1067: the predictive prefetch, src/cam_cache.cxx. Declared at namespace
+// scope because a linkage-specification is illegal inside a function body --
+// the same trip bt1061 already took with Tethys_CamCacheReset.
+extern "C" void Tethys_PrefetchAbort();
+extern "C" void Tethys_PrefetchBegin(const char* name, s32 pos, u32 sectors);
 // bt1046: `la` is RETIRED WITH ITS VERDICT WRITTEN DOWN. Measured over the whole
 // flip it read 14 ms with the row-skip OFF and 3 ms with it ON, against a 2342 ms
 // screen change -- 0.6%. vram_alloc is not part of load time, the bt1041/bt1044
@@ -1156,6 +1161,104 @@ static bool Tethys_GridHasCamera(Map* pMap, s32 dx, s32 dy)
         &(*ppPathRes)[sizeof(CameraName) * (xpos + pMap->field_24_max_cams_x * ypos)]);
     return pCamName->name[0] != 0;
 }
+
+// SATURN (bt1067): arm the prefetch for the screen the player is most likely to
+// enter next.
+//
+// THE PREDICTOR IS THE CROSSING THAT JUST HAPPENED. Coming from the left means
+// walking right, so speculate right. It costs two s16 and it is the only lead
+// signal available for free: the obvious candidate -- the "in the right void and
+// moving right" test in MapFollowMe -- IS the flip trigger, calling
+// SetActiveCameraDelayed in the same statement, so hooking it would start the
+// read after the crossing had already been requested. A genuinely early signal
+// needs a new, wider band inside the cell plus a velocity sign, i.e. a change to
+// Abe's motion path, and that is not free enough to ship on a guess.
+//
+// WITH NO HISTORY -- boot, level change, respawn -- it guesses RIGHT, which is
+// where an Oddworld level generally goes.
+//
+// NEIGHBOUR EXISTENCE USES THE NAME GRID, never the Camera objects: Saturn nulls
+// field_34_camera_array[1..4] deliberately, so every neighbour looks absent
+// through GetCamera(). Numbering cannot substitute either -- R1's paths skip
+// numbers (P16 has no C08, P18 jumps C11 -> C20), so "the next camera" is a grid
+// position and never Cnn+1.
+//
+// EVERY POINTER IS CONSUMED BEFORE IT CAN MOVE. Find_File_Record returns a
+// pointer INTO the .LVL header block and the name grid is a resource handle;
+// Reclaim_Memory memmoves both and rewrites the handles, and it runs immediately
+// before every flip. So the name is copied into a local and the two sector
+// numbers into s32/u32 values right here, and nothing below this function ever
+// holds a resource pointer across a frame.
+static s16 sPfPrevX = -1;
+static s16 sPfPrevY = -1;
+
+static void Tethys_ArmPrefetch(Map* pMap)
+{
+    const s32 cx = pMap->field_20_camX_idx;
+    const s32 cy = pMap->field_22_camY_idx;
+    s32 dx = (sPfPrevX >= 0) ? (cx - static_cast<s32>(sPfPrevX)) : 0;
+    s32 dy = (sPfPrevY >= 0) ? (cy - static_cast<s32>(sPfPrevY)) : 0;
+    sPfPrevX = static_cast<s16>(cx);
+    sPfPrevY = static_cast<s16>(cy);
+
+    // Clamp to one cell: a path change or a respawn can move the indices by more
+    // than one, and "kept going the same way" is the only claim being made.
+    dx = (dx > 0) ? 1 : ((dx < 0) ? -1 : 0);
+    dy = (dy > 0) ? 1 : ((dy < 0) ? -1 : 0);
+    if (dx != 0 && dy != 0)
+    {
+        dy = 0; // an edge flip is never diagonal; prefer the horizontal reading
+    }
+    if (dx == 0 && dy == 0)
+    {
+        dx = 1;
+    }
+    if (!Tethys_GridHasCamera(pMap, dx, dy))
+    {
+        dx = 1;
+        dy = 0;
+        if (!Tethys_GridHasCamera(pMap, dx, dy))
+        {
+            dx = -1;
+        }
+        if (!Tethys_GridHasCamera(pMap, dx, dy))
+        {
+            return; // dead end: nothing worth speculating on
+        }
+    }
+
+    u8** ppPathRes = pMap->GetPathResourceBlockPtr(pMap->field_2_current_path);
+    if (!ppPathRes || !*ppPathRes)
+    {
+        return;
+    }
+    const CameraName* pCamName = reinterpret_cast<const CameraName*>(
+        &(*ppPathRes)[sizeof(CameraName) * ((cx + dx) + pMap->field_24_max_cams_x * (cy + dy))]);
+
+    // Same construction as Create_Camera_445BE0: up to 8 name chars, then ".CAM".
+    // CameraName::name is NOT null-terminated, so the bound is the loop's job.
+    char_type fileName[18];
+    s32 n = 0;
+    while (n < 8 && pCamName->name[n])
+    {
+        fileName[n] = pCamName->name[n];
+        n++;
+    }
+    fileName[n + 0] = '.';
+    fileName[n + 1] = 'C';
+    fileName[n + 2] = 'A';
+    fileName[n + 3] = 'M';
+    fileName[n + 4] = '\0';
+
+    LvlFileRecord* pRec = sLvlArchive_4FFD60.Find_File_Record_41BED0(fileName);
+    if (!pRec)
+    {
+        return;
+    }
+    Tethys_PrefetchBegin(fileName,
+                         sLvlArchive_4FFD60.field_4_cd_pos + pRec->field_C_start_sector,
+                         static_cast<u32>(pRec->field_10_num_sectors));
+}
 #endif
 
 s16 Map::SetActiveCameraDelayed_444CA0(MapDirections direction, BaseAliveGameObject* pObj, s16 swapEffect)
@@ -1840,6 +1943,15 @@ void Map::GoTo_Camera_445050()
 {
 #ifdef TETHYS_SATURN
     Tethys_gBootPhase = 1;
+    // SATURN (bt1067): CANCEL THE PREFETCH FIRST, before anything in this
+    // function touches the CD. Not at Tethys_CamCacheReset further down, which
+    // is already too late: the first LoadingLoop runs before it, the level's CD
+    // file is closed and REOPENED after it, and a slice landing anywhere in
+    // there is reading sectors that belong to an archive that is no longer the
+    // one on the drive. Cancelling costs nothing -- the slot was never published
+    // -- and the player has just left the screen the prefetch was speculating
+    // from, so its subject is stale by definition.
+    Tethys_PrefetchAbort();
 #endif
     s16 bShowLoadingIcon = FALSE;
 
@@ -2228,6 +2340,11 @@ void Map::GoTo_Camera_445050()
     Tethys_gFlipCdMs = Tethys_gCdRawAccum / 208u;
     Tethys_gFlipSeekMs = Tethys_gCdSeekRaw / 208u; // bt1047: ls/lk, same window
     Tethys_gFlipKb = Tethys_gCdBytes >> 10;
+    // bt1067: ARM THE NEXT SPECULATION, after the flip's numbers are latched so
+    // nothing it does can land inside lc/lk. From here the pump owns it, one
+    // bounded slice per game tick, and it is cancelled at the top of the next
+    // GoTo_Camera. A no-op unless the START+R toggle is on.
+    Tethys_ArmPrefetch(this);
     // bt1051: kc RETIRED, verdict in place -- lk minus kc read 104, 106 and
     // 108 KB across three hardware screens (kc itself 92, 92, 154), so the
     // non-.CAM traffic is ~105 KB on EVERY flip and near-constant. Its text
