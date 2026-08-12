@@ -56,8 +56,8 @@ extern "C" u32 Tethys_gPhRend;
 // long", and a per-type accumulator could not: 250 objects x a u32 is .bss the
 // HWRAM pre-flight has no room for, and a sum would hide a single 20 ms call
 // inside a big total exactly the way the per-screen means hid this spike.
-extern "C" void Tethys_NoteVUpdate(u32 vptr, u32 rawTicks);
-extern "C" u32 Tethys_RawTicks();
+// bt1061: both declarations go with the bracket they served -- Tethys_RawTicks
+// had no other caller in this TU.
 #if defined(TETHYS_START_CAM) && TETHYS_START_CAM > 0
 // The buffer lives in SaveGame.cpp as an ALIVE_VAR with no header declaration;
 // Abe.cpp:68 declares it the same way for the same reason.
@@ -498,30 +498,21 @@ EXPORT void CC Game_Loop_437630()
                     }
                     else
                     {
-#ifdef TETHYS_SATURN
-                        // SATURN (bt1030). RAW ticks, not SYS_GetTicks: at ~250
-                        // calls a tick almost every one is sub-millisecond, and
-                        // bt1021 already lost a whole capture round to exactly
-                        // that quantisation (la read 0 on six photos because it
-                        // accumulated per call in whole ms). SRL::Timer::Capture
-                        // is an on-chip FRT read -- no bus access -- so paying it
-                        // twice per object is affordable where a B-bus read would
-                        // not be.
-                        const u32 tObj0 = Tethys_RawTicks();
+                        // SATURN (bt1061): the bt1030/bt1031 per-object VUpdate
+                        // bracket is REMOVED, verdict first. It answered in
+                        // bt1040 -- the possession-screen spike was ONE object
+                        // (OrbWhirlWind, via the vptr) and not a crowd -- and
+                        // bt1041 then closed the follow-up by measuring u as
+                        // 86-98% VUpdate on four captures. Its display was
+                        // retired at bt1054; what stayed behind was the WORK:
+                        // two FRT captures and a call for EVERY object, EVERY
+                        // tick, feeding statics that nothing printed.
+                        //   ~250 objects x 2 reads x 60 Hz of pure dead weight,
+                        // and its .text is what pays this build's pre-flight
+                        // floor. THIS IS THE HOUSE RULE APPLIED LATE: a gauge
+                        // that has answered is deleted WITH its verdict, and
+                        // deleting the row is not deleting the gauge.
                         pObjIter->VUpdate();
-                        // bt1031: the VPTR, not field_4_typeId. typeId eNone_0
-                        // is the BaseGameObject ctor DEFAULT and at least eight
-                        // classes keep it (LightEffect, DoorFlame, DoorLight,
-                        // GasEmitter, BulletShell, MusicController/Trigger,
-                        // CheatController), so ut000 -- the most expensive
-                        // VUpdate of the bt1030 captures -- named a set, not an
-                        // object. The vtable pointer is unique per class and
-                        // resolves in build/Tethys.map.
-                        Tethys_NoteVUpdate(*reinterpret_cast<const u32*>(pObjIter),
-                                           Tethys_RawTicks() - tObj0);
-#else
-                        pObjIter->VUpdate();
-#endif
                     }
                 }
             }
@@ -538,14 +529,7 @@ EXPORT void CC Game_Loop_437630()
                 }
                 else
                 {
-#ifdef TETHYS_SATURN
-                    const u32 tObj0 = Tethys_RawTicks(); // SATURN (bt1030)
-                    pObjIter->VUpdate();
-                    Tethys_NoteVUpdate(*reinterpret_cast<const u32*>(pObjIter),
-                                       Tethys_RawTicks() - tObj0); // bt1031 vptr
-#else
-                    pObjIter->VUpdate();
-#endif
+                    pObjIter->VUpdate(); // bt1061: bracket removed, see above
                 }
             }
 
