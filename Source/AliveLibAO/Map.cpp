@@ -66,6 +66,7 @@ extern "C" u32 Tethys_gCdSeekRaw;
 extern "C" u32 Tethys_gCdBytes;
 extern "C" volatile u32 Tethys_gFlipSeekMs; // `ls`
 extern "C" volatile u32 Tethys_gFlipKb;     // `lk`
+extern "C" void Tethys_CamCacheReset();     // bt1061: src/cam_cache.cxx, level-scoped
 // bt1046: `la` is RETIRED WITH ITS VERDICT WRITTEN DOWN. Measured over the whole
 // flip it read 14 ms with the row-skip OFF and 3 ms with it ON, against a 2342 ms
 // screen change -- 0.6%. vram_alloc is not part of load time, the bt1041/bt1044
@@ -1919,6 +1920,13 @@ void Map::GoTo_Camera_445050()
         // "Res missing" fatal. See the note at the end of that function.
         extern void Tethys_ForgetAbsentResources();
         Tethys_ForgetAbsentResources();
+        // SATURN (bt1061): and drop the .CAM cache, which is level-scoped for
+        // two independent reasons -- record names are only unique WITHIN an
+        // archive, and the archive's base sector moves. Neither would produce a
+        // clean failure: a stale hit streams the wrong screen's background.
+        // (Declared at namespace scope up top: a linkage-specification is not
+        // legal at block scope, unlike the plain externs above it.)
+        Tethys_CamCacheReset();
 #endif
 
         // Free all cameras

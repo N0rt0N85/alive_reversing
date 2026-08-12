@@ -172,7 +172,20 @@ static s32 sTethysStickyHeldCount = 0;
 //
 // The base list stays: it was measured in S7 against a specific wedge and it
 // does its job.
-static const char_type* const kTethysStickyBase[] = {"SLG", "SLIG"};
+//
+// bt1063 ADDS ABEHOIST, AND THIS TIME THE ENTRY COMES FROM A MEASUREMENT.
+// bt1061's census, on hardware, two consecutive flips: ck50 with s153 and ck54
+// with s153. Sector 153 resolves in cd/data/R1.LVL to ABEHOIST.BAN, 40,960 B --
+// so ONE file is ~80% of all the non-.CAM traffic on both flips, and it is
+// re-read every time because the hoist screens each request it and camera
+// teardown frees it in between.
+//   WHY THIS IS NOT bt1052 REPEATED. That list was 88% no-op because Abe::ctor
+// already pinned what it named (Abe.cpp:877-916, addUseCount=1). ABEHOIST.BAN is
+// NOT in that list -- Abe's own pins are BSIC/BSIC1/EDGE/KNFD/OMM/KNBK -- and the
+// difference between the two cases is exactly that this one was measured by an
+// instrument instead of reasoned from a plausible story. 40 KB held permanently
+// against a heap at 28% of 2,719,744 B is not a memory question.
+static const char_type* const kTethysStickyBase[] = {"SLG", "SLIG", "ABEHOIST"};
 
 static bool Tethys_StickyMatch(const char_type* pFileName,
                                const char_type* const* pTable, s32 count)
@@ -189,7 +202,7 @@ static bool Tethys_StickyMatch(const char_type* pFileName,
 
 static bool Tethys_StickyName(const char_type* pFileName)
 {
-    return Tethys_StickyMatch(pFileName, kTethysStickyBase, 2);
+    return Tethys_StickyMatch(pFileName, kTethysStickyBase, 3);
 }
 
 static bool Tethys_StickyIn(const TethysStickyEntry* pTable, s32 count, u32 type, u32 id)
@@ -389,6 +402,88 @@ static void Tethys_NoteCamLoad(const char_type* pFileName)
         }
     }
     sTethysLoadingCam[i] = 0;
+}
+
+// ==========================================================================
+// SATURN (bt1061): THE GAUGE THAT NAMES THE 105 KB.
+//
+// THE OPEN QUESTION IT ANSWERS. bt1050 measured, on three hardware screens,
+// lk - kc = 104, 106 and 108 KB: every screen change reads ~105 KB that is
+// NOT the .CAM, near-constant regardless of which screen, into a resource
+// heap that is 3.94 MB and 23% full. At the measured hardware rate that is
+// ~1 s of every flip. I guessed once (Abe's motion banks) and the guess was
+// refuted at source -- Abe::ctor already pins them (Abe.cpp:877-916). So this
+// build ships an instrument instead of a second guess.
+//
+// WHY NAME + COUNT + TOTAL, and not just a total. The three shapes the 105 KB
+// could have need different fixes and a single number cannot tell them apart:
+//   one big file      -> top name IS the answer, and pinning it is the fix
+//   a few medium ones -> top name + count locate them in two captures
+//   a long tail       -> count is large and top is small; the fix is a
+//                        resource-level cache, not a pin
+// The total is here as a CROSS-CHECK, not decoration: it must land on lk - kc
+// from the same flip. If it comes up short, the missing bytes are read by a
+// path that is not one of the two record readers, and that discrepancy would
+// itself be the finding.
+//
+// .CAM records are excluded so the number is directly comparable to lk - kc.
+// Both record-level readers are instrumented (the async LoadResourceFile_4551E0
+// and the blocking LoadResourceFile_455270) -- there is no third one; every
+// other CD path in the build goes through one of them or through the .CAM
+// streamer.
+//
+// IT REPORTS A START SECTOR, NOT A NAME, and that is a deliberate trade. A
+// name is up to 12 columns on a 40-column row that already carries five live
+// gauges, and it costs a %s instantiation of the variadic Debug::Print. The
+// record's start sector identifies it just as uniquely in four digits, and
+// the offline side of the lookup is free -- tools read cd/data/R1.LVL's
+// directory directly. Photo-legible beats self-describing when the photo is
+// the only channel.
+// ==========================================================================
+static u32 sFlipTopBytes = 0;
+static u32 sFlipTopSector = 0;
+static u32 sFlipRecBytes = 0;
+
+static void Tethys_NoteFlipRecord(const char_type* pName, u32 bytes, u32 startSector)
+{
+    // Skip .CAM records so ck is directly comparable to lk minus the background.
+    // Scanned to the terminator rather than length-indexed because the record
+    // name field is NOT null-guaranteed at 12 chars (LvlArchive.hpp:9).
+    s32 n = 0;
+    while (pName && pName[n])
+    {
+        n++;
+    }
+    if (n >= 4 && pName[n - 4] == '.' && pName[n - 3] == 'C' && pName[n - 2] == 'A' && pName[n - 1] == 'M')
+    {
+        return;
+    }
+    sFlipRecBytes += bytes;
+    if (bytes > sFlipTopBytes)
+    {
+        sFlipTopBytes = bytes;
+        sFlipTopSector = startSector;
+    }
+}
+
+// Reset at T0 (Tethys_OnScreenChange), like every other flip gauge. bt1045's
+// lesson, paid for twice: a counter cleared AFTER the work it counts reports
+// zero forever, and the reset must share its window's boundary exactly.
+extern "C" void Tethys_FlipRecordReset()
+{
+    sFlipTopBytes = 0;
+    sFlipTopSector = 0;
+    sFlipRecBytes = 0;
+}
+
+extern "C" u32 Tethys_FlipTopSector()
+{
+    return sFlipTopSector;
+}
+
+extern "C" u32 Tethys_FlipRecKb()
+{
+    return sFlipRecBytes >> 10;
 }
 
 // Wedge diagnostics (S7 round 6): a staging block that cannot fit is now a
@@ -1497,6 +1592,14 @@ extern "C" u8* Tethys_CamStreamScratch();
 // LWRAM is a legal CD destination here, and why it is fatal rather than
 // falling back.
 extern "C" u8* Tethys_CamStreamBulk(u32* pSectors);
+// SATURN (bt1061): the raw .CAM cache in cart RAM (src/cam_cache.cxx). Find
+// returns a complete record or null; Claim reserves a slot to mirror a CD read
+// into; Commit publishes it only once the End! sentinel has been seen. Every
+// one of them is a no-op returning null/nothing without a cartridge, so the
+// no-cart path is byte-identical to bt1053.
+extern "C" u8* Tethys_CamCacheFind(const char_type* name, u32 sectors);
+extern "C" u8* Tethys_CamCacheClaim(const char_type* name, u32 sectors);
+extern "C" void Tethys_CamCacheCommit(u8* claimed);
 
 namespace {
 // Forward, chunk-at-a-time reader over one CD file record. Re-seeks before
@@ -1521,6 +1624,16 @@ struct CamSectorReader
     u32  bufOff;    // bytes consumed within sec
     u32  bufLen;    // valid bytes in sec (0 => none loaded yet)
     bool bad;
+    // SATURN (bt1061): the two cache modes. EXACTLY ONE is ever non-null.
+    //   mem    -- HIT: the whole record is already in cart RAM, so Fill serves
+    //             it in place and this reader issues ZERO CD operations.
+    //   mirror -- MISS: the CD path runs unchanged and every filled bounce is
+    //             ALSO copied here, so the next visit to this screen is a hit.
+    // Deliberately fields on the reader rather than a second reader class: the
+    // chunk walk, the palette assembly and the VDP2 pixel route are identical
+    // in both modes, and duplicating them is how the two paths would drift.
+    const u8* mem;
+    u8*  mirror;
 
     void Init(u8* bounce, s32 base, s32 count, s32 cap)
     {
@@ -1532,6 +1645,8 @@ struct CamSectorReader
         bufOff = 0;
         bufLen = 0;
         bad = false;
+        mem = nullptr;
+        mirror = nullptr;
     }
 
     bool Fill()
@@ -1540,6 +1655,19 @@ struct CamSectorReader
         {
             bad = true;
             return false;
+        }
+        // SATURN (bt1061): cache hit. Hand out the WHOLE remainder at once --
+        // it is RAM, so slicing it into secCap-sized pieces would buy nothing
+        // and cost a loop. No copy either: the consumers below read `sec` in
+        // place, and Tethys_CamStreamPixels is CPU stores (renderer_saturn.cxx)
+        // so a cart source is legal where a DMA source would not be.
+        if (mem)
+        {
+            sec = const_cast<u8*>(mem) + (static_cast<u32>(nextSec) << 11);
+            bufOff = 0;
+            bufLen = static_cast<u32>(numSec - nextSec) << 11;
+            nextSec = numSec;
+            return true;
         }
         s32 want = numSec - nextSec;
         if (want > secCap)
@@ -1562,6 +1690,22 @@ struct CamSectorReader
                 && PSX_CD_File_Read_49B8B0(n, sec)
                 && PSX_CD_FileIOWait_49B900(0) != -1)
             {
+                // SATURN (bt1061): mirror into the cache slot BEFORE nextSec
+                // advances, so the destination offset is this fill's own start
+                // sector. Longwords: `sec` is the 4-aligned bounce and the slot
+                // base is sector-aligned, so both ends are aligned by
+                // construction here (unlike Read/Pixels, whose callers hand in
+                // arbitrary offsets and which therefore test at runtime).
+                if (mirror)
+                {
+                    const u32* pS = reinterpret_cast<const u32*>(sec);
+                    u32* pD = reinterpret_cast<u32*>(mirror + (static_cast<u32>(nextSec) << 11));
+                    const u32 words = (static_cast<u32>(n) << 11) >> 2;
+                    for (u32 k = 0; k < words; k++)
+                    {
+                        pD[k] = pS[k];
+                    }
+                }
                 nextSec += n;
                 bufOff = 0;
                 bufLen = static_cast<u32>(n) << 11;
@@ -1716,6 +1860,24 @@ void CC ResourceManager::Tethys_StreamCamFile(Camera* pCamera, bool bitsOnly)
     rd.Init(bounce, sLvlArchive_4FFD60.field_4_cd_pos + pRec->field_C_start_sector,
             pRec->field_10_num_sectors, static_cast<s32>(bulkSectors));
 
+    // SATURN (bt1061): THE CACHE. A hit removes this screen's .CAM from the
+    // flip entirely -- 92-154 KB of the 196-262 KB a flip reads, against a
+    // screen change that is 72-74% CD [HW]. A miss runs the identical CD path
+    // and mirrors it into a slot on the way past, so the SECOND visit is free.
+    // Both calls are best-effort and return null without a cartridge, which is
+    // the whole of the no-cart behaviour: byte-identical to bt1053.
+    const u32 camSectors = static_cast<u32>(pRec->field_10_num_sectors);
+    rd.mem = Tethys_CamCacheFind(pCamera->field_1E_fileName, camSectors);
+    // Only a FULL walk may fill a slot. The bitsOnly path (bt817 respawn
+    // background refresh) stops after the Bits chunk, so it would leave a
+    // partial record behind -- and a partial slot committed as valid streams a
+    // torn background forever after. It still READS from the cache: a hit is
+    // just as valid there, it simply stops early.
+    if (!rd.mem && !bitsOnly)
+    {
+        rd.mirror = Tethys_CamCacheClaim(pCamera->field_1E_fileName, camSectors);
+    }
+
     // Walk the BE chunk chain (Bits, [FG1], [Anim], End!) by header size. The
     // ONLY clean exit is the End! sentinel; a truncated read (rd.bad -- 8-retry
     // CD fault or short record) or a malformed size means a torn background and
@@ -1820,8 +1982,14 @@ void CC ResourceManager::Tethys_StreamCamFile(Camera* pCamera, bool bitsOnly)
 
     if (!sawEnd)
     {
+        // SATURN (bt1061): a torn fill needs no explicit abandon -- the slot was
+        // never published, so it stays invalid and is simply re-claimed later.
         Tethys_CamStreamFatal("CAM stream: torn ", pCamera->field_1E_fileName);
     }
+    // SATURN (bt1061): publish only now -- past the End! sentinel, past the
+    // torn check. Null when nothing was claimed (cache hit, no cart, oversized
+    // record), and Commit ignores null, so this needs no guard of its own.
+    Tethys_CamCacheCommit(rd.mirror);
     pCamera->field_30_flags |= 1u; // camera resources ready (no field_C_ppBits: Bits live in VDP2)
 }
 #endif
@@ -1844,6 +2012,15 @@ LoadingFile* CC ResourceManager::LoadResourceFile_4551E0(const char_type* pFileN
 #endif
         return nullptr;
     }
+
+#ifdef TETHYS_SATURN
+    // bt1061: counted HERE, at the request, not at the drain. The LoadingFile
+    // this creates is read later inside LoadingLoop, but it is read on THIS
+    // flip and by this flip's decision, which is what the census is about.
+    Tethys_NoteFlipRecord(pFileName,
+                          static_cast<u32>(pFileRec->field_10_num_sectors) << 11,
+                          static_cast<u32>(pFileRec->field_C_start_sector));
+#endif
 
     auto pLoadingFile = ao_new<LoadingFile>();
     if (pLoadingFile)
@@ -2042,6 +2219,11 @@ EXPORT s16 CC ResourceManager::LoadResourceFile_455270(const char_type* filename
     }
 
     const s32 size = pFileRec->field_10_num_sectors << 11;
+#ifdef TETHYS_SATURN
+    // bt1061: the blocking twin
+    Tethys_NoteFlipRecord(filename, static_cast<u32>(size),
+                          static_cast<u32>(pFileRec->field_C_start_sector));
+#endif
     u8** ppRes = ResourceManager::Allocate_New_Block_454FE0(size, allocMethod);
     if (!ppRes)
     {
