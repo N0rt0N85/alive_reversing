@@ -1259,6 +1259,31 @@ static void Tethys_ArmPrefetch(Map* pMap)
                          sLvlArchive_4FFD60.field_4_cd_pos + pRec->field_C_start_sector,
                          static_cast<u32>(pRec->field_10_num_sectors));
 }
+
+// SATURN (bt1067 fix): ARM ON THE TOGGLE EDGE TOO, and the first Ymir capture is
+// why. Arming lived only at the end of GoTo_Camera, so pressing START+R while
+// standing on a screen did nothing at all until the player crossed -- and the
+// natural way to run an A/B is to press the button and look at the same screen.
+// The capture read pf1000 (toggle ON, nothing preloaded) and the honest reading
+// of that photo is "the feature never got a chance", not "the feature does not
+// work". A knob whose effect only begins after an unrelated event is a knob that
+// will be reported broken.
+//   Safe from the toggle handler even though it can run inside a flip: this does
+// no CD I/O at all. It reads the grid, resolves a record and claims a slot, and
+// the `busy` flag is precisely what stops the foreground stealing that slot back.
+extern "C" void Tethys_PrefetchArmNow()
+{
+    // The crossing history is SAVED AND RESTORED around this call. ArmPrefetch
+    // republishes prev = current as its last act, which is right when a flip
+    // called it and wrong here: a mid-screen press would erase the direction the
+    // player actually arrived from, and a second press would then read dx = 0 and
+    // fall back to guessing right. Two s16 on the stack keep the predictor honest.
+    const s16 px = sPfPrevX;
+    const s16 py = sPfPrevY;
+    Tethys_ArmPrefetch(&gMap_507BA8);
+    sPfPrevX = px;
+    sPfPrevY = py;
+}
 #endif
 
 s16 Map::SetActiveCameraDelayed_444CA0(MapDirections direction, BaseAliveGameObject* pObj, s16 swapEffect)
