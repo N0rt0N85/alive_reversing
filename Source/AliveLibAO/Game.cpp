@@ -45,7 +45,6 @@ namespace AO {
 // reset there on every screen change, so they share the scope of lt/tt and
 // divide by tt for per-tick figures. See the long note at the first timer in
 // the main loop below for why the tick had to be cut this finely.
-extern "C" void Tethys_PrefetchPump(); // bt1067: src/cam_cache.cxx, one slice/tick
 extern "C" u32 Tethys_gPhUpd;
 extern "C" u32 Tethys_gPhAnim;
 extern "C" u32 Tethys_gPhRend;
@@ -688,20 +687,6 @@ EXPORT void CC Game_Loop_437630()
         bPauseMenuObjectFound = false;
 
         gMap_507BA8.ScreenChange_4444D0();
-#ifdef TETHYS_SATURN
-        // SATURN (bt1067): one prefetch slice per game tick, HERE and nowhere
-        // else. This is the only site that is genuinely once per lap and
-        // genuinely outside the flip: ScreenChange returns immediately when its
-        // state is eInactive, so on an ordinary lap the slice owns the lap, and
-        // on a flip lap it runs AFTER GoTo_Camera has returned -- so the camera
-        // indices already point at the NEW cell and there is no stale-index case.
-        //   The obvious-looking alternative, PSX_VSync, is a trap: LoadingLoop
-        // calls it once per drain iteration for as long as files are pending,
-        // i.e. an unbounded number of times per screen change, from inside
-        // GoTo_Camera and specifically BETWEEN two LoadingFile VUpdate laps --
-        // inside the flip, inside the seek->read window, and inside lc.
-        Tethys_PrefetchPump();
-#endif
         Input().Update(GetGameAutoPlayer());
 
         if (sNumCamSwappers_507668 == 0)
