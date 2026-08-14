@@ -5,11 +5,6 @@
 #include "ResourceManager.hpp"
 #include "Math.hpp"
 
-#ifdef TETHYS_SATURN
-// SATURN (bt1072): defined in src/sys_saturn.cxx, toggled by pad-1 START+R.
-extern "C" volatile u8 Tethys_gParticleCap;
-#endif
-
 namespace AO {
 
 Particle* CC New_DestroyOrCreateObject_Particle_419D00(FP xpos, FP ypos, FP scale)
@@ -43,22 +38,6 @@ Particle* CC New_DestroyOrCreateObject_Particle_419D00(FP xpos, FP ypos, FP scal
 
 void CC New_Smoke_Particles_419A80(FP xpos, FP ypos, FP scale, s16 count, s16 type)
 {
-#ifdef TETHYS_SATURN
-    // SATURN (bt1072): PARTICLE BUDGET A/B, pad-1 START+R, DEFAULT OFF.
-    // Unlike Blood, smoke is the BAD shape: each puff is its own ao_new'd
-    // Particle (0xE8 B out of a ~30 KB HWRAM pool) with its own Animation, hence
-    // its own vram_alloc rect, its own TexSlot and its own upload of texels that
-    // are byte-identical to its two siblings' -- they share one refcounted ppRes
-    // and spawn on the same tick at the same frame. Renderer-side dedup of those
-    // uploads was designed and REJECTED for bt1072 (it re-opens the bt972 tear
-    // through the double buffer, loses the maxIdx8 the bt945 CRAM classifier is
-    // built from, and collides with in-place decimation), so the honest lever is
-    // to spawn fewer. 3 per bullet impact, Bullet.cpp:124 and :212.
-    if (Tethys_gParticleCap && count > 1)
-    {
-        count = static_cast<s16>(count / 2);
-    }
-#endif
     FP velYCounter = {};
     for (s32 i = 0; i < count; i++)
     {
