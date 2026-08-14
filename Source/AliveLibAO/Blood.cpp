@@ -14,11 +14,6 @@
 #undef min
 #undef max
 
-#ifdef TETHYS_SATURN
-// SATURN (bt1072): defined in src/sys_saturn.cxx, toggled by pad-1 START+R.
-extern "C" volatile u8 Tethys_gParticleCap;
-#endif
-
 namespace AO {
 
 void Blood_ForceLink()
@@ -26,22 +21,6 @@ void Blood_ForceLink()
 
 Blood* Blood::ctor_4072B0(FP xpos, FP ypos, FP xOff, FP yOff, FP scale, s16 count)
 {
-#ifdef TETHYS_SATURN
-    // SATURN (bt1072): PARTICLE BUDGET A/B, pad-1 START+R, DEFAULT OFF.
-    // Blood is already the good shape on the texture side -- one field_10_anim,
-    // N BloodParticle carrying only position and velocity, so N sprites come off
-    // ONE upload. What it is not budgeted for is the Saturn's 60-sprite ceiling:
-    // a single bullet hitting a Slig calls this twice, count 12 then count 8
-    // (Slig.cpp:913,929), so ONE bullet asks for 20 of the 60 slots. The tester's
-    // capture reads s66 offered, dr453 dropped, and the LCD sign blinking.
-    // Halving is the crudest of the three levers in bt1072 and the only one that
-    // makes the frame cheaper instead of choosing who loses -- hence a chord and
-    // not a decision. Clamped here, once, rather than at the ten call sites.
-    if (Tethys_gParticleCap && count > 2)
-    {
-        count = static_cast<s16>(count / 2);
-    }
-#endif
     ctor_417C10();
 
     SetVTable(this, 0x4BA248);
