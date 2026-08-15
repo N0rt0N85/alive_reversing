@@ -5,12 +5,6 @@
 #include "../AliveLibAE/Psx.hpp" // AE lib hack
 #include <assert.h>
 
-#ifdef TETHYS_SATURN
-// SATURN (bt1079): the one-shot CD read-pattern probe, defined in
-// src/cd_saturn.cxx beside the seam it measures.
-extern "C" void Tethys_CdProbe();
-#endif
-
 namespace AO {
 
 ALIVE_VAR(1, 0x4FFD60, LvlArchive, sLvlArchive_4FFD60, {});
@@ -118,16 +112,10 @@ EXPORT bool LvlArchive::OpenArchive(const char_type* fileName, s32 pos)
 
     // Set ref count to 1 so ResourceManager won't kill it
     pHeader->field_4_ref_count = 1;
-
-#ifdef TETHYS_SATURN
-    // SATURN (bt1079): the only moment in the run when the CD is provably idle
-    // -- archive open, header in, no LoadingFile constructed yet. The probe
-    // times three read patterns to separate head travel from fixed command
-    // cost; see the block over Tethys_CdProbe in src/cd_saturn.cxx. It saves
-    // and restores the seam cursor, and runs once per power-on.
-    Tethys_CdProbe();
-#endif
-
+    // SATURN (bt1080): bt1079 hung a one-shot CD read-pattern probe here, on
+    // the only moment in the run when the CD is provably idle. It answered --
+    // 110 ms fixed per read, ~304 KiB/s, head travel free -- so it is gone and
+    // this file is verbatim again. The measurement lives in src/cd_saturn.cxx.
     return true;
 }
 
