@@ -11,7 +11,39 @@ const FmvInfo knullptrFmvInfo = {};
 const CollisionInfo KnullCollision = {};
 const PathData kNullPathData = {};
 
-const u32 kMaxPaths = 99;
+// SATURN (bt1082): 99 -> 24, AND IT IS THE BIGGEST SINGLE .data SAVING IN THE
+// PROJECT.  The 46 arrays below are declared [kMaxPaths] and land in HWRAM
+// .data because their initializers are non-zero -- 97.1 KB measured in the map
+// file, on a machine whose whole ao_new pool is 82 KB.  The pre-flight guard
+// has named this lever since bt1061 and estimated it at 64.6 KB; the map says
+// 97.1, and the note called it a linker job when it is one constant.
+//
+// 78 OF EVERY 99 ENTRIES ARE ZERO PADDING.  Counted, per array: the largest
+// tables in the whole game are R1's and R2's at 21 entries, i.e. indices 0..20,
+// and every other level stops between 2 and 12.  gMapData_4CAB58 agrees
+// independently -- its field_18_num_paths reads 20 for R2, 11 for D2, 9 for
+// F2, 6 for R6 -- and the ORIGINAL Path_Get_Num_Paths returned exactly that
+// per-level count (the line is still there, commented out, below).  RELIVE
+// stubbed it to kMaxPaths as a blanket upper bound; that is what made 99 look
+// load-bearing when it is only a ceiling.
+//
+// 24 gives three spare over the worst level in the game.  R1 -- the only level
+// this disc ships -- uses paths 15, 16, 18, 19 and 20, read straight out of
+// R1.LVL, so it clears the used range by four.
+//
+// WHY THE ARRAYS CAN SHRINK SAFELY.  PathData and CollisionInfo are never
+// indexed by a runtime path number: the PathBlyRec initializers take their
+// addresses at COMPILE time (&g_S1_Paths_4E4AF0[1] and friends), and the
+// highest such index is 20.  The one runtime index is
+// Path_Get_Bly_Record_434650(level, path), and it now carries a named guard
+// (see below).  The only other data-driven path index, PathDataExtensions'
+// pExt->mPathId, cannot run here at all: Game.cpp:804 puts
+// Path_Set_NewData_FromLvls in the non-TETHYS_SATURN branch.
+//
+// It also makes four flip-path loops cheaper for free -- Map.cpp:935, 991,
+// 1788 and 1809 iterate to Path_Get_Num_Paths and were walking 99 entries to
+// look at 21.
+const u32 kMaxPaths = 24;
 // SATURN: every {..., kObjectFactory} initializer below became {..., &kObjectFactory}
 // (field_1C_object_funcs is a pointer now -- see PathData.hpp).
 
@@ -815,8 +847,25 @@ static PathRootContainer gMapData_4CAB58 = {
      {g_F2_Paths_4C8DE0, g_F2_Fmvs_4C8A70, g_F2_SoundBlock_4C8E80, "F2SEQ.BSQ", 23, 6, "F4", 9, 0, 23, "\\F4.LVL;1", 22, "\\F4.OVL;1", 21, "\\F2.MOV;1", "F2.IDX", "F4PATH.BND"},
      {g_D2_Paths_4C95E0, g_D2_Fmvs_4C9270, g_D2_SoundBlock_4C96A0, "D2SEQ.BSQ", 23, 1, "D7", 11, 0, 35, "\\D7.LVL;1", 34, "\\D7.OVL;1", 33, "\\D2.MOV;1", "D2.IDX", "D7PATH.BND"}}};
 
+#ifdef TETHYS_SATURN
+extern "C" [[noreturn]] void Tethys_Fatal(const char_type* msg); // SATURN bt1082
+#endif
+
 const PathBlyRec* CC Path_Get_Bly_Record_434650(LevelIds level, u16 path)
 {
+#ifdef TETHYS_SATURN
+    // SATURN (bt1082): the ONE place a runtime path number indexes a
+    // [kMaxPaths] array, and kMaxPaths is now 24 instead of 99.  The evidence
+    // says the ceiling is 20 (see the note over kMaxPaths), so this can only
+    // fire if that reading is wrong -- and then it must fire LOUDLY, because
+    // the alternative is a silent read into the next level's table that
+    // returns a plausible-looking record.  A named death screen beats data
+    // that is wrong in a way nothing checks.
+    if (path >= kMaxPaths)
+    {
+        Tethys_Fatal("path index over kMaxPaths");
+    }
+#endif
     return &gMapData_4CAB58.paths[static_cast<s32>(level)].field_0_pBlyArrayPtr[path];
 }
 
