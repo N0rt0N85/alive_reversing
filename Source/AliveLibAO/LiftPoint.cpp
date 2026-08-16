@@ -195,7 +195,12 @@ LiftPoint* LiftPoint::ctor_434710(Path_LiftPoint* pTlv, Map* pPath, s32 tlvInfo)
         field_134_pRope2->field_F2_bottom = FP_GetExponent((FP_FromInteger(25) * field_BC_sprite_scale) + FP_FromInteger(field_120_pCollisionLine->field_0_rect.y));
         field_138_pRope1->field_F2_bottom = FP_GetExponent((FP_FromInteger(25) * field_BC_sprite_scale) + FP_FromInteger(field_120_pCollisionLine->field_0_rect.y));
 
-        const FP v29 = FP_FromRaw(FP_GetExponent((field_AC_ypos * FP_FromDouble(1.5)) * field_BC_sprite_scale) % FP_FromInteger(field_134_pRope2->field_E6_rope_length).fpValue);
+        // SATURN: same dead modulo as in the update path below -- see the long
+        // note there. This one only seeds the phase at construction, so it was
+        // the less visible half of the same defect.
+        const FP v29 = FP_FromInteger(
+            FP_GetExponent((field_AC_ypos * FP_FromDouble(1.5)) * field_BC_sprite_scale)
+            % field_134_pRope2->field_E6_rope_length);
         field_134_pRope2->field_AC_ypos = FP_NoFractional(field_AC_ypos + v29 + (FP_FromInteger(25) * field_BC_sprite_scale) + FP_FromInteger(field_134_pRope2->field_E6_rope_length));
         field_138_pRope1->field_AC_ypos = FP_NoFractional(field_AC_ypos + v29 - (FP_FromInteger(25) * field_BC_sprite_scale) + FP_FromInteger(field_138_pRope1->field_E6_rope_length));
 
@@ -525,8 +530,25 @@ void LiftPoint::VUpdate_434D10()
         pRope1->field_EE_top = FP_GetExponent(pulley_ypos + FP_m19xScale);
     }
 
+    // SATURN: the counter-rotating chain scroll was DEAD ARITHMETIC, and the
+    // bug is upstream's, not ours -- AliveTeam beta carries the identical line
+    // 1783 commits later (LiftPoint.cpp:507 there). It is a decompilation slip:
+    //     FP_FromRaw(FP_GetExponent(x) % FP_FromInteger(len).fpValue)
+    // FP_GetExponent returns an s16 INTEGER (FixedPoint_common.hpp:100) whose
+    // magnitude can never reach FP_FromInteger(15).fpValue == 983040, so the
+    // modulo is a total no-op; FP_FromRaw then reinterprets that integer as a
+    // RAW 16.16 value, giving at most 32767/65536 = 0.4999; and the
+    // FP_NoFractional on each assignment below truncates that away. So
+    // remaining_rope was ALWAYS EXACTLY ZERO, both ropes got the same offset,
+    // and the chain tracked the lift as a rigid body -- the tester's report
+    // that it "stays static while the lift moves, when in the original the left
+    // side descends and the right side ascends".
+    // The intent is an INTEGER pixel phase in [0, rope_length): with it,
+    // rope2's phase advances at 2.5x the lift and rope1's at -0.5x, which is
+    // exactly the opposed motion the original shows.
     const FP new_ypos = (field_AC_ypos * FP_FromDouble(1.5));
-    const FP remaining_rope = FP_FromRaw(FP_GetExponent(new_ypos * field_BC_sprite_scale) % rope2_rope_length.fpValue);
+    const FP remaining_rope = FP_FromInteger(
+        FP_GetExponent(new_ypos * field_BC_sprite_scale) % pRope2->field_E6_rope_length);
 
     pRope2->field_AC_ypos = FP_NoFractional((field_AC_ypos + remaining_rope) + (FP_25xScale + rope2_rope_length));
     pRope1->field_AC_ypos = FP_NoFractional((field_AC_ypos + FP_25xScale) + (rope1_rope_length - remaining_rope));
