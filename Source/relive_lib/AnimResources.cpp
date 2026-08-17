@@ -1862,6 +1862,127 @@ constexpr CombinedAnimRecord kAnimRecords[1027] = {
     { AnimId::BG_PinkFlame2, kNullAnimDetails, {"R2P12C03.CAM", 10164, 61, 46, 6015, PalId::Default }, true },
 };
 
+#ifdef TETHYS_SATURN
+// SATURN: kAnimRecords is 1027 x 48 = 49,296 bytes of .rodata, and on this
+// target .rodata is HWRAM -- the 1 MB that also holds .text and .data, with the
+// SGL work area immediately above it.  The link had 224 bytes of usable margin
+// over its 8 KB floor, which is to say the next feature of any size could not be
+// added at all.
+//
+// WHAT THE SATURN BUILD ACTUALLY READS FROM THOSE 49 KB, enumerated by reading
+// every caller rather than by assuming (AliveLibAO is deliberately not compiled
+// here, and relive_lib/data_conversion is dropped whole -- tools/ae/ae_saturn.sh
+// lines 211 and 231 -- so those call sites are not in this binary):
+//
+//   Door.cpp:258             AnimRec(id).mFrameTableOffset == 0   -- ONE BIT
+//   Gibs.cpp:149             AnimRec(id).mPalOverride             -- ONE PalId
+//   BackgroundAnimation.cpp  BgAnimRec(resId).mId                 -- 116 rows
+//
+// mBanName, mMaxW, mMaxH and the whole AO half are never read: this port does
+// not load animations out of .BAN files at all, it reads pre-converted packs
+// keyed by AnimId out of TETHYS.PAK.  So the table costs 49 KB to deliver a
+// bitmap, three palette overrides and a small map.
+//
+// WHY A DERIVED constexpr TABLE AND NOT A GENERATED HEADER.  A table emitted by
+// a script beside the one it copies is a table that drifts, and this file is
+// upstream's -- it will change under us.  Deriving at COMPILE TIME keeps exactly
+// one source of truth: kAnimRecords stays written as upstream writes it, the
+// compact form cannot disagree with it, and a new row is picked up by rebuilding.
+//
+// The elision is the load-bearing part, so it was measured before this was
+// written rather than hoped for: a 1027-row stand-in of the same shape, compiled
+// -O2 for sh2eb-elf, emitted 1,055 bytes of .text+.rodata in total -- the source
+// array and every one of its string literals gone, only the derived table left.
+// kAnimRecords has internal linkage, so once no runtime code names it the
+// compiler is free to drop it, and it does.
+//
+// If a future caller needs mBanName or the geometry, this block must grow to
+// carry it -- the fields those callers would read are zero here, not stale.
+constexpr u32 kSatAnimCount = 1027;
+
+struct SatAnimFacts final
+{
+    // bit 0    -- the AE slot has a frame table (mFrameTableOffset != 0)
+    // bits 1-7 -- PalId, which is why the static_assert below is not decoration
+    u8 mFlags[kSatAnimCount];
+};
+
+struct SatBgAnim final
+{
+    s32 mResourceId;
+    AnimId mId;
+};
+
+struct SatBgTable final
+{
+    SatBgAnim mRows[128];
+    u32 mCount;
+};
+
+constexpr SatAnimFacts MakeSatAnimFacts()
+{
+    SatAnimFacts t{};
+    bool written[kSatAnimCount] = {};
+    for (const auto& entry : kAnimRecords)
+    {
+        const u32 idx = static_cast<u32>(entry.mId);
+        if (idx >= kSatAnimCount || written[idx])
+        {
+            // First row wins, because AnimRec's linear search returned the
+            // first match.  It changes nothing today -- the array is declared
+            // [1027] and initialised with 1023 rows, so the tail is
+            // value-initialised and those rows all carry mId None, which row 0
+            // already covers with the same zeros -- but the rule costs a
+            // compile-time bool array that is never emitted, and assuming a
+            // difference does not matter is how this port has lost time before.
+            continue;
+        }
+        written[idx] = true;
+        u8 f = (entry.mAEData.mFrameTableOffset != 0) ? 1u : 0u;
+        f |= static_cast<u8>(static_cast<u32>(entry.mAEData.mPalOverride) << 1);
+        t.mFlags[idx] = f;
+    }
+    return t;
+}
+
+constexpr SatBgTable MakeSatBgTable()
+{
+    SatBgTable t{};
+    for (const auto& entry : kAnimRecords)
+    {
+        if (entry.mIsBgAnim && t.mCount < 128)
+        {
+            // No filter on mFrameTableOffset: the original BgAnimRec matched on
+            // mResourceId and mIsBgAnim alone, and a faithful port keeps that
+            // behaviour, including for rows whose AE slot is empty.
+            t.mRows[t.mCount] = SatBgAnim{entry.mAEData.mResourceId, entry.mId};
+            t.mCount++;
+        }
+    }
+    return t;
+}
+
+constexpr SatAnimFacts kSatAnimFacts = MakeSatAnimFacts();
+constexpr SatBgTable kSatBgTable = MakeSatBgTable();
+
+static_assert(static_cast<u32>(PalId::Bomb) < 128,
+              "PalId no longer fits in the 7 bits SatAnimFacts gives it");
+static_assert(kSatBgTable.mCount < 128,
+              "more background animations than SatBgTable::mRows can hold -- "
+              "grow it; silently dropping rows would surface as one missing "
+              "background animation on one screen, months later");
+
+void FrameTableOffsetExists(u32, bool, int, int)
+{
+    // Debug helpers with no callers anywhere in the tree; they exist to LOG_INFO
+    // a missing AnimId during asset work on PC.  Keeping their bodies would pin
+    // kAnimRecords for the sake of a log line this build cannot print.
+}
+
+void FrameTableOffsetExists(u32, bool)
+{
+}
+#else
 void FrameTableOffsetExists(u32 frameTableOffset, bool isAe, int maxW, int maxH)
 {
     for (const auto& entry : kAnimRecords)
@@ -1917,6 +2038,7 @@ void FrameTableOffsetExists(u32 frameTableOffset, bool isAe)
     }
     LOG_INFO("couldn't find AnimId for framtableoffset: %d", frameTableOffset);
 }
+#endif // TETHYS_SATURN
 
 static const PalRecord PalRec(bool isAe, PalId toFind)
 {
@@ -1937,6 +2059,51 @@ const PalRecord PalRec(PalId toFind)
     return PalRec(true, toFind);
 }
 
+#ifdef TETHYS_SATURN
+// SATURN: served from the derived tables above.  See the block beside
+// FrameTableOffsetExists for what the three surviving callers read and why the
+// remaining fields are zero rather than stale.
+static const AnimRecord AnimRec(bool isAe, AnimId toFind)
+{
+    // isAe is always true in this binary -- AliveLibAO is not compiled, so the
+    // AO branch of PerGameAnimRec resolves to a stub.  Asserting it here rather
+    // than ignoring it means a build that ever does compile Oddysee fails loudly
+    // instead of silently handing out Exoddus rows.
+    if (!isAe)
+    {
+        ALIVE_FATAL("AnimRec(AO) on the Saturn AE build");
+    }
+    const u32 idx = static_cast<u32>(toFind);
+    if (idx >= kSatAnimCount)
+    {
+        ALIVE_FATAL("Missing animation entry");
+    }
+    const u8 f = kSatAnimFacts.mFlags[idx];
+    // mFrameTableOffset is a PRESENCE flag here, not an offset: Door.cpp:258 is
+    // the only reader and it compares against 0.
+    return AnimRecord{toFind, nullptr, (f & 1u) ? 1u : 0u, 0, 0, 0,
+                      static_cast<PalId>(f >> 1)};
+}
+
+static const AnimRecord BgAnimRec(bool isAe, s32 toFindResId)
+{
+    if (!isAe)
+    {
+        ALIVE_FATAL("BgAnimRec(AO) on the Saturn AE build");
+    }
+    for (u32 i = 0; i < kSatBgTable.mCount; i++)
+    {
+        if (kSatBgTable.mRows[i].mResourceId == toFindResId)
+        {
+            const AnimId id = kSatBgTable.mRows[i].mId;
+            const u8 f = kSatAnimFacts.mFlags[static_cast<u32>(id)];
+            return AnimRecord{id, nullptr, (f & 1u) ? 1u : 0u, 0, 0, toFindResId,
+                              static_cast<PalId>(f >> 1)};
+        }
+    }
+    ALIVE_FATAL("Missing background animation entry");
+}
+#else
 static const AnimRecord AnimRec(bool isAe, AnimId toFind)
 {
     for (const CombinedAnimRecord& anim : kAnimRecords)
@@ -1962,6 +2129,7 @@ static const AnimRecord BgAnimRec(bool isAe, s32 toFindResId)
     }
     ALIVE_FATAL("Missing background animation entry");
 }
+#endif // TETHYS_SATURN
 
 const AnimRecord AnimRec(AnimId toFind)
 {
