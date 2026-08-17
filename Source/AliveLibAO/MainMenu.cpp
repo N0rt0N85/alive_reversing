@@ -3164,7 +3164,7 @@ void Menu::Load_Update()
     }
 }
 
-s32 Menu::StringsEqual(const void* pStr1, const void* pStr2)
+int Menu::StringsEqual(const void* pStr1, const void* pStr2) // SATURN: see header
 {
     return _strcmpi(static_cast<const char_type*>(pStr1), static_cast<const char_type*>(pStr2));
 }

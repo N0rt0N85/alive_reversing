@@ -75,8 +75,18 @@ s32 AliveFont::DrawString(OrderingTable& ot, const char_type* text, s32 x, s16 y
         const s8 texture_u = static_cast<s8>(atlasEntry->x);
         const s8 texture_v = static_cast<s8>(atlasEntry->mY);
 
+#ifdef TETHYS_SATURN
+        // SATURN: FP_GetDouble is the decompiler's spelling of a 16.16 divide;
+        // on SH-2 it costs __floatsidf + __muldf3 + __fixdfsi per glyph.  The
+        // fixed-point form is bit-exact here: FP_FromInteger(w) * scale is
+        // (w<<16 * fp)>>16 == w*fp, and FP_GetExponent divides by 65536 with
+        // the same truncation -- w <= 69 so nothing overflows s32.
+        const s16 widthScaled = FP_GetExponent(FP_FromInteger(charWidth) * scale);
+        const s16 heightScaled = FP_GetExponent(FP_FromInteger(charHeight) * scale);
+#else
         const s16 widthScaled = static_cast<s16>(charWidth * FP_GetDouble(scale));
         const s16 heightScaled = static_cast<s16>(charHeight * FP_GetDouble(scale));
+#endif
 
         poly->SetSemiTransparent(bSemiTrans);
         poly->SetShadeTex(disableBlending);
@@ -187,7 +197,16 @@ s32 AliveFont::MeasureCharacterWidth(char_type character)
 
     if (!gFontDrawScreenSpace)
     {
+#ifdef TETHYS_SATURN
+        // SATURN: no FPU on SH-2.  0.575 IS 23/40 -- the very PSX->PC x scale
+        // PCToPsxX applies (PsxDisplay.hpp:24), which the decompiler spelled as
+        // a double.  `result` is an atlas width (<= 69 in either Euro table),
+        // and for 0 <= result <= 199 the integer form (r*23)/40 is BIT-IDENTICAL
+        // to (s32)(r * 0.575) -- checked exhaustively on the AO port (P10).
+        result = PCToPsxX(result);
+#else
         result = static_cast<s32>(result * 0.575); // Convert screen space to world space.
+#endif
     }
 
     return result;
@@ -232,7 +251,11 @@ const char_type* AliveFont::SliceText(const char_type* text, s32 left, FP scale,
             atlasIdx = character - 31;
         }
 
+#ifdef TETHYS_SATURN // SATURN: see MeasureCharacterWidth -- fixed-point, no FPU.
+        xOff += FP_GetExponent(FP_FromInteger(mFontContext->mAtlasArray[atlasIdx].mWidth) * scale) + mFontContext->mAtlasArray->mWidth;
+#else
         xOff += static_cast<s32>(mFontContext->mAtlasArray[atlasIdx].mWidth * FP_GetDouble(scale)) + mFontContext->mAtlasArray->mWidth;
+#endif
     }
 
     return text;

@@ -109,7 +109,11 @@ UXB::UXB(relive::Path_UXB* pTlv, const Guid& tlvId)
     mPatternIndex = 0;
 
     // Single out a single digit, and use that digit as the new amount of red blinks before a green one.
+#ifdef TETHYS_SATURN // SATURN: pow() is libm double math; no FPU on SH-2.
+    mRedBlinkCount = (mPattern / Math_IntPow10(mPatternLength - 1)) % 10;
+#else
     mRedBlinkCount = (mPattern / static_cast<s32>(pow(10, mPatternLength - 1))) % 10;
+#endif
 
     if (pTlv->mScale == relive::reliveScale::eHalf)
     {
@@ -393,7 +397,11 @@ void UXB::VUpdate()
                     }
 
                     // Single out a single digit, and use that digit as the new amount of red blinks before a green one.
+#ifdef TETHYS_SATURN // SATURN: pow() is libm double math; no FPU on SH-2.
+                    mRedBlinkCount = (mPattern / Math_IntPow10(mPatternLength - mPatternIndex - 1)) % 10;
+#else
                     mRedBlinkCount = (mPattern / static_cast<s32>(pow(10, mPatternLength - mPatternIndex - 1))) % 10;
+#endif
                 }
 
               

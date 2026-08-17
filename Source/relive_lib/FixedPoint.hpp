@@ -76,7 +76,11 @@ inline bool operator!=(const FixedPoint& lhs, const FixedPoint& rhs)
     return lhs.fpValue != rhs.fpValue;
 }
 
-inline FixedPoint FP_FromDouble(f64 v)
+// SATURN: constexpr, so every FP_FromDouble(<literal>) -- and the core is full
+// of them -- is folded by the compiler instead of reaching the SH-2, which has
+// no FPU.  FixedPoint is a POD aggregate, so this is free.  Non-constant
+// arguments would still emit soft-float; there are none in the game core.
+constexpr FixedPoint FP_FromDouble(f64 v)
 {
     FixedPoint f = {};
     f.fpValue = (static_cast<s32>(v * 0x10000));

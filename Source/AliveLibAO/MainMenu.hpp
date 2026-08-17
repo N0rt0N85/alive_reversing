@@ -190,7 +190,10 @@ public:
     void Load_Update();
     void CycleGameSpeakIdleAnims();
 
-    static s32 StringsEqual(const void* pStr1, const void* pStr2);
+    // SATURN: `int`, not s32 -- s32 is `long` on SH-2 and qsort's
+    // __compar_fn_t is strictly `int (*)(const void*, const void*)`.
+    // Identical type on MSVC/Linux, where int and s32 coincide.
+    static int StringsEqual(const void* pStr1, const void* pStr2);
 
     // Compared via address
     void ToggleMotions_Update();

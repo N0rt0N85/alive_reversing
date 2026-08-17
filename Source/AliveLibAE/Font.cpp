@@ -610,11 +610,22 @@ s32 AliveFont::DrawString(OrderingTable& ot, const char_type* text, s32 x, s16 y
 {
     if (!gFontDrawScreenSpace)
     {
+#ifdef TETHYS_SATURN
+        // SATURN: no FPU on SH-2.  x / 0.575 IS PsxToPCX (40*x)/23, the helper
+        // this header tells you to use.  Verified bit-identical to the double
+        // for every x in -2000..2000 -- zero divergence in the divide sense.
+        x = PsxToPCX(x); // 368 to 640. Convert world space to screen space coords.
+#else
         x = static_cast<s32>(x / 0.575); // 368 to 640. Convert world space to screen space coords.
+#endif
     }
 
     s32 characterRenderCount = 0;
+#ifdef TETHYS_SATURN
+    const s32 maxRenderX = PsxToPCX(maxRenderWidth); // SATURN: see above.
+#else
     const s32 maxRenderX = static_cast<s32>(maxRenderWidth / 0.575);
+#endif
     s16 offsetX = static_cast<s16>(x);
     s32 charInfoIndex = 0;
     auto poly = &mFntPolyArray[polyOffset];
@@ -651,8 +662,16 @@ s32 AliveFont::DrawString(OrderingTable& ot, const char_type* text, s32 x, s16 y
         const s8 texture_u = static_cast<s8>(atlasEntry->x);
         const s8 texture_v = static_cast<s8>(atlasEntry->mY);
 
+#ifdef TETHYS_SATURN
+        // SATURN: see AliveLibAO/Font.cpp -- FP_GetDouble costs __floatsidf +
+        // __muldf3 + __fixdfsi per glyph on a CPU with no FPU.  The fixed-point
+        // form is bit-exact for atlas-sized widths.
+        const s16 widthScaled = FP_GetExponent(FP_FromInteger(charWidth) * scale);
+        const s16 heightScaled = FP_GetExponent(FP_FromInteger(charHeight) * scale);
+#else
         const s16 widthScaled = static_cast<s16>(charWidth * FP_GetDouble(scale));
         const s16 heightScaled = static_cast<s16>(charHeight * FP_GetDouble(scale));
+#endif
 
         poly->SetSemiTransparent(bSemiTrans);
         poly->SetShadeTex(disableBlending);
@@ -726,7 +745,14 @@ s32 AliveFont::MeasureTextWidth(const char_type* text)
 
     if (!gFontDrawScreenSpace)
     {
+#ifdef TETHYS_SATURN
+        // SATURN: no FPU.  0.575 IS 23/40, i.e. PCToPsxX.  `result` is an atlas
+        // width (<= 69 in every table), and the two forms are bit-identical for
+        // 0 <= result <= 199 -- verified exhaustively.
+        result = PCToPsxX(result);
+#else
         result = static_cast<s32>(result * 0.575); // Convert screen space to world space.
+#endif
     }
 
     return result;
@@ -761,7 +787,14 @@ s32 AliveFont::MeasureCharacterWidth(char_type character)
 
     if (!gFontDrawScreenSpace)
     {
+#ifdef TETHYS_SATURN
+        // SATURN: no FPU.  0.575 IS 23/40, i.e. PCToPsxX.  `result` is an atlas
+        // width (<= 69 in every table), and the two forms are bit-identical for
+        // 0 <= result <= 199 -- verified exhaustively.
+        result = PCToPsxX(result);
+#else
         result = static_cast<s32>(result * 0.575); // Convert screen space to world space.
+#endif
     }
 
     return result;
@@ -771,7 +804,17 @@ s32 AliveFont::MeasureCharacterWidth(char_type character)
 const char_type* AliveFont::SliceText(const char_type* text, s32 left, FP scale, s32 right)
 {
     s32 xOff = 0;
+#ifdef TETHYS_SATURN
+    // SATURN: no FPU.  PCToPsxX is (x*23)/40, which this header declares as THE
+    // replacement for this calc.  Unlike the atlas-width sites, `right` reaches
+    // 640, and there the integer form can differ from the PC double by 1 at
+    // multiples of 40 >= 200 (IEEE rounding noise around 0.575, which is not
+    // representable).  That is a sub-pixel text-slice difference in a cold
+    // path; matching the engine's own declared formula is the better contract.
+    s32 rightWorldSpace = PCToPsxX(right);
+#else
     s32 rightWorldSpace = static_cast<s32>(right * 0.575);
+#endif
 
     if (gFontDrawScreenSpace)
     {
@@ -779,7 +822,11 @@ const char_type* AliveFont::SliceText(const char_type* text, s32 left, FP scale,
     }
     else
     {
+#ifdef TETHYS_SATURN // SATURN: PsxToPCX -- proven bit-identical in the divide sense.
+        xOff = PsxToPCX(left);
+#else
         xOff = static_cast<s32>(left / 0.575);
+#endif
     }
 
 
@@ -806,7 +853,11 @@ const char_type* AliveFont::SliceText(const char_type* text, s32 left, FP scale,
             atlasIdx = character - 31;
         }
 
+#ifdef TETHYS_SATURN // SATURN: see above -- fixed-point, no FPU.
+        xOff += FP_GetExponent(FP_FromInteger(mFontContext->mAtlasArray[atlasIdx].mWidth) * scale) + mFontContext->mAtlasArray->mWidth;
+#else
         xOff += static_cast<s32>(mFontContext->mAtlasArray[atlasIdx].mWidth * FP_GetDouble(scale)) + mFontContext->mAtlasArray->mWidth;
+#endif
     }
 
     return text;
@@ -823,12 +874,60 @@ void FontContext::LoadFontType(FontType resourceID)
         mFntResource.mPngPtr->mPal = std::make_shared<AnimationPal>();
 
         auto fontFile = reinterpret_cast<File_Font*>(sDebugFont);
-        for (s32 i = 0; i < fontFile->mPaletteSize; i++)
+
+#ifdef TETHYS_SATURN
+        // SATURN: sDebugFont (Resources.cpp:178) is a verbatim LITTLE-ENDIAN PSX
+        // font COMPILED INTO the binary, so the offline converter never sees it
+        // and cannot pre-swap it the way it does everything on the disc.  Its
+        // first bytes are 80 00 80 00 04 00 10 00 -- read as big-endian s16 that
+        // is mWidth = mHeight = 0x8000 = -32768 and mPaletteSize = 0x1000 = 4096,
+        // where the true values are 128, 128 and 16.  (8 + 32 + 8192 = 8232 =
+        // sizeof(sDebugFont) confirms 128x128 4bpp, 16 colours.)
+        //
+        // Both misreads were fatal, and the palette one was the worse of the two:
+        //   - (-32768) * (-32768) = 0x40000000, so the vector below asked for
+        //     exactly 1 GiB -- the "OOM want 1073741824" that surfaced this.
+        //   - the loop wrote 4096 RGBA32 entries into AnimationPal::mPal[256],
+        //     a 15,360-byte overflow past a freshly allocated block that smashed
+        //     the TLSF headers behind it.  That is why the heap then reported
+        //     zero free with a high-water of only 180 KB out of 749 KB: the pool
+        //     was already corrupt before the 1 GiB request was ever made.
+        // Fixing only the size would have silenced the symptom and left the heap
+        // smasher running.
+        //
+        // The pixel buffer is 4bpp nibbles and therefore byte-oriented: it must
+        // NOT be swapped, and is read through fontFile below unchanged.
+        const auto le16 = [](const u8* p) -> u32 {
+            return static_cast<u32>(p[0]) | (static_cast<u32>(p[1]) << 8);
+        };
+        const s32 fontW = static_cast<s32>(le16(&sDebugFont[0]));
+        const s32 fontH = static_cast<s32>(le16(&sDebugFont[2]));
+        s32 palSize = static_cast<s32>(le16(&sDebugFont[6]));
+        const auto palEntryAt = [&](s32 i) -> u16 {
+            return static_cast<u16>(le16(&sDebugFont[8 + (i * 2)]));
+        };
+#else
+        const s32 fontW = fontFile->mWidth;
+        const s32 fontH = fontFile->mHeight;
+        s32 palSize = fontFile->mPaletteSize;
+        const auto palEntryAt = [&](s32 i) -> u16 { return fontFile->mPalette[i]; };
+#endif
+
+        // Guard rail, not a fix: with the header read correctly palSize is 16 and
+        // this never fires.  It stays because the failure mode it prevents -- a
+        // silent heap-header smash -- presents as an unrelated allocation dying
+        // much later, which is expensive to trace back here.
+        if (palSize > static_cast<s32>(sizeof(mFntResource.mPngPtr->mPal->mPal) / sizeof(mFntResource.mPngPtr->mPal->mPal[0])))
         {
-            mFntResource.mPngPtr->mPal->mPal[i] = RGBConversion::RGBA555ToRGBA888Components(fontFile->mPalette[i]);
+            palSize = static_cast<s32>(sizeof(mFntResource.mPngPtr->mPal->mPal) / sizeof(mFntResource.mPngPtr->mPal->mPal[0]));
         }
-    
-        std::vector<u8> newData(fontFile->mWidth * fontFile->mHeight); // TODO *2 was out of bounds?
+
+        for (s32 i = 0; i < palSize; i++)
+        {
+            mFntResource.mPngPtr->mPal->mPal[i] = RGBConversion::RGBA555ToRGBA888Components(palEntryAt(i));
+        }
+
+        std::vector<u8> newData(fontW * fontH); // TODO *2 was out of bounds?
     
         // Expand 4bit to 8bit
         std::size_t src = 0;
@@ -840,9 +939,9 @@ void FontContext::LoadFontType(FontType resourceID)
         }
         mFntResource.mPngPtr->mPixels = newData;
 
-        mFntResource.mPngPtr->mWidth = fontFile->mWidth;
-        mFntResource.mPngPtr->mHeight = fontFile->mHeight;
-        mFntResource.mPngPtr->mPixels.resize(fontFile->mWidth * fontFile->mHeight);
+        mFntResource.mPngPtr->mWidth = fontW;
+        mFntResource.mPngPtr->mHeight = fontH;
+        mFntResource.mPngPtr->mPixels.resize(fontW * fontH);
     
         mFntResource.mCurPal = mFntResource.mPngPtr->mPal;
         return;

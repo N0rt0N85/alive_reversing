@@ -926,7 +926,14 @@ void Mudokon::ReduceXVelocityBy(FP amount)
         }
     }
 
+#ifdef TETHYS_SATURN
+    // SATURN: this is a truthiness test, not arithmetic -- the decompiler
+    // spelled "is mVelX non-zero" as a double conversion, which drags
+    // __floatsidf + __nedf2 onto an FPU-less CPU for a plain integer compare.
+    if (mVelX != FP_FromInteger(0))
+#else
     if (FP_GetDouble(mVelX))
+#endif
     {
         MoveOnLine();
     }
