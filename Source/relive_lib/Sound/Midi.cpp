@@ -112,6 +112,12 @@ void SND_Free_All_VABS_4C9EB0()
 
 void SND_Free_All_Seqs_4C9F40()
 {
+    // SATURN: null seq table (see SND_SEQ_PlaySeq) -- and this one walks 144
+    // entries, so it would clear std::vectors made of whatever low memory holds.
+    if (!SND_Seq_Table_Valid())
+    {
+        return;
+    }
     for (s32 i = 0; i < GetMidiVars()->MidiTableSize(); i++)
     {
         GetMidiVars()->sSeqDataTable()[i].field_C_ppSeq_Data.clear();
@@ -425,6 +431,11 @@ void SND_Stop_Channels_Mask(u32 bitMask)
 
 void SND_Stop_All_Seqs()
 {
+    // SATURN: null seq table (see SND_SEQ_PlaySeq).
+    if (!SND_Seq_Table_Valid())
+    {
+        return ;
+    }
     // TODO: Why is there 16 of these but 32 of sMidiStruct2Ary32_C13400? Seems like they should match in size
     GetMidiVars()->sSeqsPlaying_count_word() = 0;
     for (s16 i = 0; i < 16; i++)
@@ -445,6 +456,11 @@ void SND_Stop_All_Seqs()
 
 void SND_Seq_Stop_4CA8E0()
 {
+    // SATURN: null seq table (see SND_SEQ_PlaySeq).
+    if (!SND_Seq_Table_Valid())
+    {
+        return ;
+    }
     for (s16 i = 0; i < 16; i++)
     {
         if (GetMidiVars()->sSeq_Ids_word().ids[i] >= 0)
@@ -462,6 +478,16 @@ void SND_Seq_Stop_4CA8E0()
 
 s16 SND_SEQ_PlaySeq(u16 idx, s16 repeatCount, s16 bDontStop)
 {
+    // SATURN: the table is a POINTER, null until SND_Load_Seqs runs.  A path
+    // with no sound block never runs it, and on a machine with no MMU the
+    // resulting `[idx]` reads low memory instead of faulting: the garbage
+    // vector reads non-empty, SsSeqOpen rejects the magic and returns -1, and
+    // the code then writes ids[-1] and asks for seq song -1.  The predicate
+    // already exists (SND_Seq_Table_Valid); it was simply not asked here.
+    if (!SND_Seq_Table_Valid())
+    {
+        return 0;
+    }
     OpenSeqHandle& rec = GetMidiVars()->sSeqDataTable()[idx];
     if (rec.field_C_ppSeq_Data.empty())
     {
@@ -525,6 +551,11 @@ s16 SND_SEQ_PlaySeq(u16 idx, s16 repeatCount, s16 bDontStop)
 
 s16 SND_SEQ_Play(u16 idx, s16 repeatCount, s16 volLeft, s16 volRight)
 {
+    // SATURN: see SND_SEQ_PlaySeq -- same null table, same -1 handle.
+    if (!SND_Seq_Table_Valid())
+    {
+        return 0;
+    }
     OpenSeqHandle& rec = GetMidiVars()->sSeqDataTable()[idx];
     if (rec.field_C_ppSeq_Data.empty())
     {
@@ -608,6 +639,11 @@ s16 SND_SEQ_Play(u16 idx, s16 repeatCount, s16 volLeft, s16 volRight)
 
 s32 SND_SsIsEos_DeInlined(u16 idx)
 {
+    // SATURN: null seq table (see SND_SEQ_PlaySeq).
+    if (!SND_Seq_Table_Valid())
+    {
+        return 0;
+    }
     OpenSeqHandle* pRec = &GetMidiVars()->sSeqDataTable()[idx];
     if (pRec->field_A_id_seqOpenId != -1 && !pRec->field_C_ppSeq_Data.empty())
     {
@@ -619,6 +655,11 @@ s32 SND_SsIsEos_DeInlined(u16 idx)
 
 void SND_SEQ_SetVol(s32 idx, s16 volLeft, s16 volRight)
 {
+    // SATURN: null seq table (see SND_SEQ_PlaySeq).
+    if (!SND_Seq_Table_Valid())
+    {
+        return ;
+    }
     u16 limitedIdx = idx & 0xFFFF;
     if (GetMidiVars()->sSeqDataTable()[limitedIdx].field_A_id_seqOpenId != -1
         && !GetMidiVars()->sSeqDataTable()[limitedIdx].field_C_ppSeq_Data.empty()
@@ -631,6 +672,11 @@ void SND_SEQ_SetVol(s32 idx, s16 volLeft, s16 volRight)
 
 void SND_SEQ_Stop(u16 idx)
 {
+    // SATURN: null seq table (see SND_SEQ_PlaySeq).
+    if (!SND_Seq_Table_Valid())
+    {
+        return ;
+    }
     if (GetMidiVars()->sSeqDataTable()[idx].field_A_id_seqOpenId != -1 && !GetMidiVars()->sSeqDataTable()[idx].field_C_ppSeq_Data.empty())
     {
         if (SsIsEos_4FDA80(GetMidiVars()->sSeqDataTable()[idx].field_A_id_seqOpenId, 0))

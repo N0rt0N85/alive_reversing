@@ -20,6 +20,9 @@
 
 #include "../relive_lib/BinaryPath.hpp"
 #include "../relive_lib/FatalError.hpp"
+// SATURN: pow() in the MIDI pitch path -- genuine equal-temperament
+// float math on an f32 field, same as relive_lib/Sound/PsxSpuApi.cpp.
+#include <math.h>
 
 // TODO: Refactor + remove these
 #define BYTEn(x, n) (*((u8*) &(x) + n))
@@ -165,7 +168,11 @@ public:
     {
         if (idx < 0 || idx >= 32)
         {
-            ALIVE_FATAL("sMidiSeqSongs out of bounds");
+            // SATURN: see the AE twin in relive_lib/Sound/PsxSpuApi.cpp -- and
+            // reaching THIS one in an AE build would itself be the finding.
+            ALIVE_FATAL("AOseq idx %d ra %08x", idx,
+                        static_cast<u32>(reinterpret_cast<uintptr_t>(
+                            __builtin_return_address(0))));
         }
         return sMidiSeqSongs_ABFB40.table[idx];
     }
@@ -204,7 +211,13 @@ public:
     virtual IO_FileHandleType& sSoundDatFileHandle() override
     {
         // Should never be called
+#ifdef TETHYS_SATURN
+        // SATURN: built with -fno-exceptions.  This is an unreachable
+        // not-implemented stub, so a fatal is the faithful translation.
+        ALIVE_FATAL("AOPsxSpuApiVars::sSoundDatFileHandle is not implemented");
+#else
         throw std::logic_error("The method or operation is not implemented.");
+#endif
     }
 
     virtual u8& sControllerValue() override

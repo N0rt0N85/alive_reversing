@@ -9,6 +9,42 @@
 #include <assert.h>
 #include "../../relive_lib/FatalError.hpp"
 #include <algorithm>
+// SATURN: <math.h> for the two pow() calls left in the MIDI pitch path
+// (MIDI_PitchBend and the note-to-frequency conversion).  Those are GENUINE
+// floating point -- equal-temperament ratios, 2^(semitones/12), stored in an
+// f32 field -- not decompiler residue like the ADSR block below.  This whole
+// file emulates the PSX SPU, which our SCSP backend replaces (see
+// docs/AUDIO_VIDEO_PLAN.md), so it is a seam candidate rather than something
+// to rewrite in fixed point.
+#include <math.h>
+
+#ifdef TETHYS_SATURN
+// SATURN: offline-computed ADSR tables -- see the use site below.
+static const u16 kAdsrAttack[128] = {
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 1, 1, 1, 1, 2, 2, 2, 3, 4, 4,
+    5, 6, 8, 9, 11, 13, 16, 19, 23, 27, 32, 38,
+    46, 54, 65, 77, 92, 109, 130, 154, 184, 219, 260, 309,
+    368, 438, 521, 619, 737, 876, 1042, 1239, 1474, 1753, 2085, 2479,
+    2949, 3507, 4170, 4959, 5898, 7014, 8341, 9919, 11796, 14028, 16682, 19839,
+    23592, 28056, 32767, 32767, 32767, 32767, 32767, 32767, 32767, 32767, 32767, 32767,
+    32767, 32767, 32767, 32767, 32767, 32767, 32767, 32767, 32767, 32767, 32767, 32767,
+    32767, 32767, 32767, 32767, 32767, 32767, 32767, 32767, 32767, 32767, 32767, 32767,
+    32767, 32767, 32767, 32767, 32767, 32767, 32767, 32767, 32767, 32767, 32767, 32767,
+    32767, 32767, 32767, 32767, 32767, 32767, 32767, 32767,
+};
+
+static const u16 kAdsrRelease[32] = {
+    0, 0, 0, 0, 0, 1, 2, 5, 11, 23, 46, 92,
+    184, 368, 737, 1474, 2949, 5898, 11796, 23592, 32767, 32767, 32767, 32767,
+    32767, 32767, 32767, 32767, 32767, 32767, 32767, 32767,
+};
+
+static const u16 kAdsrDecay[16] = {
+    0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11,
+    12, 13, 14, 16,
+};
+#endif
 
 // TODO: Refactor + remove these
 #define BYTEn(x, n) (*((u8*) &(x) + n))
@@ -131,7 +167,14 @@ public:
     {
         if (idx < 0 || idx >= 32)
         {
-            ALIVE_FATAL("sMidiSeqSongs out of bounds");
+            // SATURN: name the index AND the caller.  Every call site here is
+            // reached through a seq HANDLE, and the handles are all guarded
+            // except the four that follow an SsSeqOpen which can return -1 --
+            // so the address is what tells us which one, in one run instead of
+            // one per candidate.  Look it up in build/ae/TethysAE.map.
+            ALIVE_FATAL("AEseq idx %d ra %08x", idx,
+                        static_cast<u32>(reinterpret_cast<uintptr_t>(
+                            __builtin_return_address(0))));
         }
         return sMidiSeqSongs_C13400.table[idx];
     }
@@ -397,12 +440,27 @@ s16 SsVabOpenHead(VabHeader* pVabHeader)
                 const s16 centre = pVagAttr->field_4_centre;
                 pData->field_A_shift_cen = 2 * (pVagAttr->field_5_shift + (centre << 7));
 
+#ifdef TETHYS_SATURN
+                // SATURN: the four ADSR conversions were the last libm callers
+                // in the audio path.  Every input is a bounded bit-field, so
+                // they become lookups computed offline with the SAME precision
+                // as the original (powf/f32 for attack and decay, pow/f64 for
+                // release).  sustain is exactly index*40 in f32.  NOTE: where
+                // the float exceeded 65535 the original cast it to u16 -- that
+                // is undefined behaviour; the tables saturate to 32767, which
+                // is what the surrounding std::min was written to express.
+                pData->field_0_adsr_attack = kAdsrAttack[(pVagAttr->field_10_adsr1 >> 8) & 0x7F];
+                pData->field_4_adsr_decay = kAdsrDecay[(pVagAttr->field_10_adsr1 >> 4) & 0xF];
+                pData->field_2_adsr_sustain_level = static_cast<u16>((2 * (~(u8) pVagAttr->field_10_adsr1 & 0xF)) * 40);
+                pData->field_6_adsr_release = kAdsrRelease[pVagAttr->field_12_adsr2 & 0x1F];
+#else
                 f32 sustain_level = static_cast<f32>((2 * (~(u8) pVagAttr->field_10_adsr1 & 0xF)));
 
                 pData->field_0_adsr_attack = std::min(static_cast<u16>((powf(2.0f, ((pVagAttr->field_10_adsr1 >> 8) & 0x7F) * 0.25f) * 0.09f)), static_cast<u16>(32767));
                 pData->field_4_adsr_decay = static_cast<u16>((((pVagAttr->field_10_adsr1 >> 4) & 0xF) / 15.0f) * 16.0f);
                 pData->field_2_adsr_sustain_level = std::min(static_cast<u16>((sustain_level / 15.0f) * 600.0f), static_cast<u16>(32767));
                 pData->field_6_adsr_release = std::min(static_cast<u16>(pow(2, pVagAttr->field_12_adsr2 & 0x1F) * 0.045), static_cast<u16>(32767));
+#endif
 
                 // If decay is at max, then nothing should play. So mute sustain too ?
                 if (pData->field_4_adsr_decay == 16)
