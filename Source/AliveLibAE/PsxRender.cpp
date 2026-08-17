@@ -10,6 +10,17 @@
 s32 gScreenXOffset = 0;
 s32 gScreenYOffset = 0;
 
+#ifdef TETHYS_SATURN
+// SATURN: the layer the ordering-table walk is currently emitting from.  The
+// Saturn backend has a hard VDP1 command budget and must shed by IMPORTANCE
+// when a frame overflows it -- and importance is the LAYER, which lives only in
+// this loop index and is thrown away before Draw() is ever reached.  Shedding
+// by list position instead deletes the NEAREST sprites (Abe, the Sligs, FG1)
+// and keeps background decoration, because the walk is far-to-near; the
+// Oddysee port paid for that across four builds.  Defined by the backend.
+extern "C" u32 Tethys_AE_gCurLayer;
+#endif
+
 void OrderingTable::HandlePrimRendering(IRenderer& renderer, const BasePrimitive& any)
 {
     switch (any.mType)
@@ -59,6 +70,9 @@ void OrderingTable::DrawOTag()
 
     for (u32 i = 0; i < mLen; i++)
     {
+#ifdef TETHYS_SATURN
+        Tethys_AE_gCurLayer = i; // SATURN: see the declaration at the top
+#endif
         BasePrimitive* pOtItem = mOrderingTable[i];
         while (pOtItem)
         {
