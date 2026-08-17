@@ -240,6 +240,23 @@ public:
     static void PendAnimation(AnimId anim);
     static AnimResource LoadAnimation(AnimId anim);
 
+    // SATURN: on this platform LoadAnimation returns a DECLARATION -- the id
+    // with no bytes behind it -- and this fills it in the first time the
+    // animation is actually played (relive_lib/Animation.cpp).  One Mudokon
+    // declares 60 animations worth 747 KB on a 732 KB heap, so loading a motion
+    // set up front is not a performance question here, it is the difference
+    // between the character existing and not.
+    //
+    // On PC it is a no-op: LoadAnimation still returns a fully loaded resource
+    // and this sees a resource that is already resolved.  Declared for both so
+    // Animation.cpp needs no #ifdef around the call.
+    static void ResolveAnimation(AnimResource& res);
+
+#ifdef TETHYS_SATURN
+    // The real load, split out so LoadAnimation can hand back a declaration.
+    static AnimResource LoadAnimationNow(AnimId anim);
+#endif
+
     static PalResource LoadPal(PalId pal);
 
     static CamResource LoadCam(EReliveLevelIds lvlId, u32 pathNumber, u32 camNumber);

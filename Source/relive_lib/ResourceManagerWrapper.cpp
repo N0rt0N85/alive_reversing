@@ -348,6 +348,13 @@ FontResource ResourceManagerWrapper::LoadFont(FontType fontId)
     return newRes;
 }
 
+// SATURN: the PC half of the lazy-animation seam.  Here LoadAnimation already
+// returns a fully loaded resource, so there is nothing to resolve; the function
+// exists so relive_lib/Animation.cpp can call it unconditionally.
+void ResourceManagerWrapper::ResolveAnimation(AnimResource& /*res*/)
+{
+}
+
 std::vector<std::unique_ptr<BinaryPath>> ResourceManagerWrapper::LoadPaths(EReliveLevelIds lvlId)
 {
     std::vector<std::unique_ptr<BinaryPath>> ret;

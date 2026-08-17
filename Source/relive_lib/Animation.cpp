@@ -315,9 +315,37 @@ void Animation::Invoke_CallBacks()
 
 s16 Animation::Set_Animation_Data(AnimResource& pAnimRes)
 {
+    // SATURN: resolve the animation HERE, the moment it is actually played.
+    //
+    // The engine's contract is that an actor loads its whole motion set in its
+    // constructor and GetAnimRes is a pure lookup.  On a PC that is a good
+    // trade.  Measured on Saturn: ONE Mudokon's kMudMotionAnimIds is 60
+    // animations and 747 KB of texels, against a 732 KB heap -- so a single
+    // background character on a neighbouring screen cannot be built at all,
+    // and no amount of reclaiming elsewhere changes that.
+    //
+    // So LoadAnimation returns a DECLARATION (the id, no bytes) and the bytes
+    // arrive here and in Init, the only two places an animation is ever
+    // consumed.  An actor then costs what it plays instead of what it might
+    // play.  Everything downstream is unchanged, including the two sites that
+    // bypass GetAnimRes (HoistRocksEffect indexes mLoadedAnims directly,
+    // AnimationCallBacks uses a local resource) -- which is exactly why the
+    // resolve lives at the choke point and not in the lookup.
+    // SATURN: resolve a COPY, never the caller's slot.
+    //
+    // pAnimRes is the actor's own mLoadedAnims[i] and lives as long as the
+    // actor, so resolving it IN PLACE pinned every motion the actor ever played
+    // for the actor's whole life -- and PurgeUnusedAnimations' use_count()==1
+    // test could never reach any of them.  That is the ratchet behind the
+    // tester's "OOM want 15008 free 43108": a heap with plenty left over and no
+    // contiguous block in it.  Init (below) has always resolved a copy; this is
+    // the one site that did not.
+    AnimResource resolved = pAnimRes;
+    ResourceManagerWrapper::ResolveAnimation(resolved);
+
     auto oldPal = mAnimRes.mCurPal;
 
-    mAnimRes = pAnimRes;
+    mAnimRes = resolved;
 
     // Keep the custom pal that was set
     if (oldPal)
@@ -325,14 +353,16 @@ s16 Animation::Set_Animation_Data(AnimResource& pAnimRes)
         mAnimRes.mCurPal = oldPal;
     }
 
-    mFrameDelay = pAnimRes.mJsonPtr->mAttributes.mFrameRate;
+    // Read through mAnimRes, which is already assigned: same value, and one
+    // fewer place for a later edit to leave a stale `pAnimRes.` behind.
+    mFrameDelay = mAnimRes.mJsonPtr->mAttributes.mFrameRate;
 
     SetForwardLoopCompleted(false);
     SetIsLastFrame(false);
     SetLoopBackwards(false);
     SetLoop(false);
 
-    if (pAnimRes.mJsonPtr->mAttributes.mLoop)
+    if (mAnimRes.mJsonPtr->mAttributes.mLoop)
     {
         SetLoop(true);
     }
@@ -366,6 +396,11 @@ void Animation::Init(const AnimResource& ppAnimData, BaseGameObject* pGameObj)
     SetIgnorePosOffset(false);
 
     mAnimRes = ppAnimData;
+    // SATURN: the other consumption point -- see Set_Animation_Data above.
+    // Resolving the COPY rather than the source is deliberate: ppAnimData is a
+    // const ref, and the resource manager caches, so the caller's declaration
+    // costs one map lookup if it is ever played again.  No const_cast needed.
+    ResourceManagerWrapper::ResolveAnimation(mAnimRes);
     mFnPtrArray = nullptr;
 
     mGameObj = pGameObj;
@@ -420,9 +455,26 @@ const PerFrameInfo* Animation::Get_FrameHeader(s32 frame)
         frame = mCurrentFrame != -1 ? mCurrentFrame : 0;
     }
 
-    if (frame > static_cast<s32>(mAnimRes.mJsonPtr->mFrames.size()))
+    // SATURN: two changes, both about being able to READ this failure.
+    //
+    // The null check is first because without it this is not a bounds error at
+    // all: on SH-2 there is no MMU, so mJsonPtr->mFrames.size() through a null
+    // pointer quietly reads address 0 and returns whatever lives there, and the
+    // comparison below then fires with a message that names the wrong problem.
+    // That is exactly how an unresolved animation presented -- as "frame out of
+    // bounds" -- and it cost a diagnosis.
+    //
+    // The bound is also `>=` now, not `>`: at frame == size() the old test
+    // passed and the return below indexed one PAST the last frame.
+    if (!mAnimRes.mJsonPtr)
     {
-        ALIVE_FATAL("Animation frame out of bounds");
+        ALIVE_FATAL("anim %d unresolved, frame %d", static_cast<s32>(mAnimRes.mId), frame);
+    }
+
+    if (frame >= static_cast<s32>(mAnimRes.mJsonPtr->mFrames.size()))
+    {
+        ALIVE_FATAL("anim %d frame %d of %d", static_cast<s32>(mAnimRes.mId), frame,
+                    static_cast<s32>(mAnimRes.mJsonPtr->mFrames.size()));
     }
 
     return &mAnimRes.mJsonPtr->mFrames[frame];
