@@ -81,9 +81,25 @@ void Map::Reset()
     mRestoreMapObjectStates = false;
 }
 
+#ifdef TETHYS_SATURN
+extern "C" void Tethys_AE_Mark(const char* stage);
+extern "C" void Tethys_AE_MarkRes(const char* stage);
+// src_ae/resource_manager_saturn.cxx -- repaint the VDP2 plane for the camera
+// the engine is actually standing on.  See the call site in GoTo_Camera.
+extern "C" void Tethys_AE_SyncCamera(u32 lvlId, u32 pathNumber, u32 camNumber);
+    #define AE_MARK(s) Tethys_AE_Mark(s)
+    // Same trace with the resource census attached; used around the five
+    // Create_Camera calls, which is where the Saturn heap actually goes.
+    #define AE_MARK_RES(s) Tethys_AE_MarkRes(s)
+#else
+    #define AE_MARK(s)
+    #define AE_MARK_RES(s)
+#endif
+
 void Map::Init(EReliveLevelIds level, s16 path, s16 camera, CameraSwapEffects screenChangeEffect, s16 fmvBaseId, s16 forceChange)
 {
     gPathInfo = relive_new Path();
+    AE_MARK("13a path obj");
 
     field_2C_camera_array[0] = nullptr;
     field_2C_camera_array[1] = nullptr;
@@ -100,7 +116,9 @@ void Map::Init(EReliveLevelIds level, s16 path, s16 camera, CameraSwapEffects sc
     mForceLoad = 0;
 
     SetActiveCam(level, path, camera, screenChangeEffect, fmvBaseId, forceChange);
+    AE_MARK("13b set active cam");
     GoTo_Camera();
+    AE_MARK("13c goto camera");
 
     mCamState = CamChangeStates::eInactive_0;
 }
@@ -671,11 +689,35 @@ void Map::GoTo_Camera()
         else
         {
             // Don't let the force flag make us reload paths for no reason
+            AE_MARK("13b1 load paths");
             mLoadedPaths = ResourceManagerWrapper::LoadPaths(mNextLevel);
-
-            // TODO: This data is now per path rather than lvl - logic needs updating to reflect this
-            SND_Load_VABS(mLoadedPaths[0]->GetSoundInfo(), Path_Get_Reverb(mNextLevel)); // TODO: Remove hard coded data
-            SND_Load_Seqs(gSeqData.mSeqs, mLoadedPaths[0]->GetSoundInfo());
+        
+            // SATURN: mLoadedPaths[0] on an EMPTY vector is what hung Game_Run.
+            // std::vector::operator[] does not bounds-check, so this read a null
+            // unique_ptr and called a method through it; on SH-2 that reaches
+            // address 0 and the machine stops with nothing on screen.
+            //
+            // The second half of the condition is about the SOUND seam, which is
+            // a different piece of work (AE-6): the Saturn path loader builds a
+            // real PathSoundInfo but leaves the file names empty, and
+            // SND_VAB_Load_4C9FE0 would then hand SsVabOpenHead the data()
+            // pointer of an EMPTY vector -- a VAB header read from address 0,
+            // followed by a sample upload sized from whatever it found there.
+            // Naming the sound file is what makes this data loadable, so that is
+            // what the guard asks about; it starts working on its own the day
+            // AE-6 fills it in.
+            //
+            // Written as data checks rather than an #ifdef because both are real
+            // defects either way: PC always has paths and names, so neither
+            // guard ever fires there and its behaviour is unchanged.
+            if (!mLoadedPaths.empty()
+                && mLoadedPaths[0]->GetSoundInfo()
+                && !mLoadedPaths[0]->GetSoundInfo()->mVhFile.empty())
+            {
+                // TODO: This data is now per path rather than lvl - logic needs updating to reflect this
+                SND_Load_VABS(mLoadedPaths[0]->GetSoundInfo(), Path_Get_Reverb(mNextLevel)); // TODO: Remove hard coded data
+                SND_Load_Seqs(gSeqData.mSeqs, mLoadedPaths[0]->GetSoundInfo());
+            }
 
             // TODO: Remove hard coded data
             relive_new BackgroundMusic(Path_Get_BackGroundMusicId(mNextLevel));
@@ -715,6 +757,22 @@ void Map::GoTo_Camera()
         GetPathResourceBlockPtr(mNextPath));
 
     BinaryPath* pNextPath = GetPathResourceBlockPtr(mNextPath);
+
+    // SATURN: this is where 493 SECONDS went, and it deserves a name rather
+    // than a mystery.  GetPathResourceBlockPtr returns null cleanly when
+    // mLoadedPaths is empty -- which it always is until AE-1 ships the path
+    // pack -- and the range-for below then iterates a std::vector read through
+    // a null pointer.  SH-2 has no MMU, so address 0 reads fine and hands back
+    // whatever begin/end happen to sit there: the loop walked an arbitrary span
+    // of memory for eight minutes before falling out of it.
+    //
+    // A named stop is worth far more than that walk.  Four failures in a row
+    // presented as the same frozen picture; this one says what is missing.
+    if (!pNextPath)
+    {
+        ALIVE_FATAL("AE-1: path pack missing, LoadPaths returned nothing");
+    }
+
     for (auto& cam : pNextPath->GetCameras())
     {
         if (pNextPath->CameraNameAsInteger(cam->mName.c_str()) == static_cast<u32>(mNextCamera))
@@ -725,7 +783,7 @@ void Map::GoTo_Camera()
         }
     }
 
-    mCameraOffset.x = FP_FromInteger(mCamIdxOnX * mPathData->field_A_grid_width);
+        mCameraOffset.x = FP_FromInteger(mCamIdxOnX * mPathData->field_A_grid_width);
     mCameraOffset.y = FP_FromInteger(mCamIdxOnY * mPathData->field_C_grid_height);
 
     // If map has changed then load new collision info
@@ -748,11 +806,19 @@ void Map::GoTo_Camera()
         field_2C_camera_array[i] = nullptr;
     }
 
+    // SATURN: FIVE cameras, not one -- the current screen plus its four
+    // neighbours, each instantiating every object on it and loading that
+    // object's animation.  The Saturn heap profile shows 385 KB disappearing
+    // across these five calls against 308 KB for the whole rest of the boot, so
+    // they are marked individually: "one screen is expensive" and "the four
+    // neighbours are the expense" lead to completely different work.
+    AE_MARK_RES("13b4 pre cams");
     field_2C_camera_array[0] = Create_Camera(mCamIdxOnX, mCamIdxOnY, 1);
     field_2C_camera_array[3] = Create_Camera(mCamIdxOnX - 1, mCamIdxOnY, 0);
     field_2C_camera_array[4] = Create_Camera(mCamIdxOnX + 1, mCamIdxOnY, 0);
     field_2C_camera_array[1] = Create_Camera(mCamIdxOnX, mCamIdxOnY - 1, 0);
     field_2C_camera_array[2] = Create_Camera(mCamIdxOnX, mCamIdxOnY + 1, 0);
+    AE_MARK_RES("13b9 cams done");
 
     // Free resources for each camera
     for (s32 i = 0; i < ALIVE_COUNTOF(field_40_stru_5); i++)
@@ -775,20 +841,67 @@ void Map::GoTo_Camera()
         }
     }
 
+    // SATURN: Create_Camera turned out to cost nothing at all (five calls, zero
+    // animations, zero camera packs, heap unmoved) -- the screens are BUILT
+    // here instead.  Each Load_Path_Items constructs every object on its camera,
+    // and every object loads its animation.  Marked one by one because "the
+    // current screen" and "the four neighbours" are different problems: the
+    // neighbours are a PSX-era prefetch that assumes backgrounds live in VRAM.
+    AE_MARK_RES("13c1 pre items");
     Map::Load_Path_Items(field_2C_camera_array[0], LoadMode::ConstructObject_0);
+#ifdef TETHYS_SATURN
+    // SATURN: Load_Path_Items fetches a background only the FIRST time a camera
+    // object is current -- its `mCamResLoaded` guard at :1203 -- and
+    // Create_Camera recycles those objects across transitions (:1157).  So
+    // walking BACK to a screen you have already stood on re-reads nothing.  On a
+    // PC that is correct: the CamResource still holds the pixels.  Here the
+    // pixels went straight into the single VDP2 bitmap plane and the
+    // CamResource holds none, so "loaded once" and "on screen now" are
+    // different facts and the engine only tracks the first.
+    //
+    // This states the missing one directly: the plane shows camera_array[0].
+    // Keyed on the far side, so a first visit costs no second drive read.
+    if (field_2C_camera_array[0])
+    {
+        Tethys_AE_SyncCamera(static_cast<u32>(field_2C_camera_array[0]->mLevel),
+                             static_cast<u32>(field_2C_camera_array[0]->mPath),
+                             static_cast<u32>(field_2C_camera_array[0]->mCameraNumber));
+    }
+#endif
+    AE_MARK_RES("13c2 items cam0");
     ResourceManagerWrapper::LoadingLoop(bShowLoadingIcon);
+#ifndef TETHYS_SATURN
+    // SATURN: the four neighbour screens are NOT built.  This is a PSX-era
+    // prefetch that assumes a background lives in VRAM and costs nothing to
+    // hold; here each neighbour is a ~85 KB camera pack read off the CD plus
+    // every object on that screen with its animations.  Measured on MIP01C04:
+    // four packs, 373,308 bytes, of which 284,248 are never displayed.
+    //
+    // Nothing is lost that the crossing does not redo: GoTo_Camera runs again
+    // when Abe leaves the screen and builds the new camera_array[0] then.  The
+    // Camera OBJECTS stay (they are created above) -- do NOT null those slots,
+    // MapWrapper.cpp:249-273 null-tests them to decide whether an edge crossing
+    // is legal at all, and Get_Camera_World_Rect feeds GetDirection for AI and
+    // sound panning.  Keep the objects, skip the work.  The Oddysee port took
+    // the other route and had to grow a replacement grid test to pay for it.
     Map::Load_Path_Items(field_2C_camera_array[3], LoadMode::ConstructObject_0);
+    AE_MARK_RES("13c3 items -x");
     Map::Load_Path_Items(field_2C_camera_array[4], LoadMode::ConstructObject_0);
+    AE_MARK_RES("13c4 items +x");
     Map::Load_Path_Items(field_2C_camera_array[1], LoadMode::ConstructObject_0);
     Map::Load_Path_Items(field_2C_camera_array[2], LoadMode::ConstructObject_0);
+    AE_MARK_RES("13c5 items +-y");
+#endif
 
     // Create the screen manager if it hasn't already been done (probably should have always been done by this point though?)
     if (!gScreenManager)
     {
         gScreenManager = relive_new ScreenManager(field_2C_camera_array[0]->mCamRes, &mCameraOffset);
     }
+    AE_MARK_RES("13c6 screenmgr");
 
     gPathInfo->Loader_4DB800(mCamIdxOnX, mCamIdxOnY, LoadMode::ConstructObject_0, ReliveTypes::eNone); // none = load all
+    AE_MARK_RES("13c7 tlv loader");
 
     if (prevPathId != mCurrentPath || prevLevelId != mCurrentLevel)
     {
@@ -802,6 +915,7 @@ void Map::GoTo_Camera()
     }
 
     Create_FG1s();
+    AE_MARK_RES("13c8 fg1");
 
     if (mCameraSwapEffect == CameraSwapEffects::ePlay1FMV_5)
     {

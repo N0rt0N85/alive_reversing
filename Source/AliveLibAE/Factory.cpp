@@ -1629,8 +1629,21 @@ static void Factory_RollingBall(relive::Path_TLV* pTlv, Path*, const Guid& tlvId
     }
 }
 
+#ifdef TETHYS_SATURN
+// SATURN: which TLV the engine is currently turning into an object.  A failure
+// deep inside a constructor -- a missing animation, a null resource -- names the
+// resource but not the OBJECT that wanted it, and on a screen with nine TLVs
+// that is the difference between a fix and a bisect.  One store per object
+// construction, read only by the fatal paths in src_ae/.
+extern "C" s32 gTethysTlvType;
+s32 gTethysTlvType = -1;
+#endif
+
 void ConstructTLVObject(relive::Path_TLV* pTlv, Path* pPath, const Guid& tlvId, LoadMode loadMode)
 {
+#ifdef TETHYS_SATURN
+    gTethysTlvType = static_cast<s32>(pTlv->mTlvType);
+#endif
     switch (pTlv->mTlvType)
     {
         case ReliveTypes::eBackgroundAnimation:

@@ -132,12 +132,19 @@ void SYS_EventsPump()
     }
 }
 
+// SATURN: SYS_GetTicks and Alive_Show_ErrorMsg are OS-seam functions that
+// happen to be DEFINED here with SDL.  We leave them undefined on Saturn on
+// purpose: src/ provides them (SRL frame counter, and the SH-2 exception death
+// screen), and an unresolved symbol is a seam we can see rather than a stub we
+// forget.
+#ifndef TETHYS_SATURN
 u32 SYS_GetTicks()
 {
     // Using this instead of SDL_GetTicks resolves a weird x64 issue on windows where
     // the tick returned is a lot faster on some machines.
     return static_cast<u32>(SDL_GetPerformanceCounter() / (SDL_GetPerformanceFrequency() / 1000));
 }
+#endif
 
 void Alive_Show_ErrorMsg(const char_type* fmt, ...)
 {
@@ -147,7 +154,11 @@ void Alive_Show_ErrorMsg(const char_type* fmt, ...)
     vsnprintf(buf, sizeof(buf) - 1, fmt, args);
     va_end(args);
 
+#ifndef TETHYS_SATURN
     SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, ("R.E.L.I.V.E. " + BuildString()).c_str(), buf, nullptr);
+#else
+    ALIVE_FATAL("%s", buf);   // SATURN: no message box; the death screen is it.
+#endif
 }
 
 
@@ -373,6 +384,20 @@ void DDCheat_Allocate()
     relive_new DDCheat();
 }
 
+// SATURN: Game_Run's start-up is ten calls in a row, and a hang in any of them
+// presents identically -- a frozen picture between "7 engine built" and the
+// first frame.  AE_MARK names each step on the debug overlay (the same trace
+// src_ae/hw/main_ae.cxx writes for the boot chain), so the LAST row on screen
+// is the step that completed and the missing one is the step that hung.
+#ifdef TETHYS_SATURN
+extern "C" void Tethys_AE_Mark(const char* stage);
+extern "C" void Tethys_AE_InstallInput(); // src_ae/hw/sys_ae.cxx
+extern "C" void Tethys_AE_ClearBootTrace(); // src_ae/hw/main_ae.cxx
+    #define AE_MARK(s) Tethys_AE_Mark(s)
+#else
+    #define AE_MARK(s)
+#endif
+
 void Game_Run()
 {
     // Begin start up
@@ -383,29 +408,73 @@ void Game_Run()
     SYS_EventsPump();
 
     gPsxDisplay.Init();
+    AE_MARK("8 psxdisplay");
     Input_Pads_Reset_4FA960(); // starts card/pads on psx ver
     Input_EnableInput_4EDDD0();
+    AE_MARK("9 input pads");
 
     gBaseGameObjects = relive_new DynamicArrayT<BaseGameObject>(90);
 
     BaseAnimatedWithPhysicsGameObject::MakeArray(); // Makes drawables
 
     AnimationBase::CreateAnimationArray();
+    AE_MARK("10 object arrays");
 
     Input_Init();
+#ifdef TETHYS_SATURN
+    // SATURN: Input_Init just installed the PC keyboard/DirectInput
+    // converter (Input.cpp:1540).  Swap it for the SMPC pad reader --
+    // AFTER, not before, or the engine overwrites us with a callback
+    // that reads hardware this machine does not have.
+    Tethys_AE_InstallInput();
+#endif
+    AE_MARK("11 input init");
     Init_Sound_DynamicArrays_And_Others();
+    AE_MARK("12 sound arrays");
     
+#ifdef TETHYS_SATURN
+    // SATURN: boot straight into the Mines, not the menu.
+    //
+    // eMenu is level 2000 and cd/data_ae/TETHYS.PAK holds level 2001 only --
+    // 198 Mines cameras across 12 paths, and nothing else.  Asking for a screen
+    // that was never packed hung Game_Run here with no message: the pack lookup
+    // returns null cleanly (cd_ae.cxx Find), and the engine has no answer for a
+    // camera that does not exist.  Path 1 camera 1 IS in the pack.
+    //
+    // The same shape as the Oddysee port, which boots directly to R1P15C01
+    // rather than through a menu it cannot yet draw.  Revisit when the menu
+    // level is packed and the LCD/font seam (AE-8) exists to draw it.
+    //
+    // CAMERA 4, not 1, and the choice is evidence rather than taste: MIP01C04
+    // is the only cell on path 1 carrying AbeStart_22 (plus ContinuePoint_0).
+    // Abe is spawned BY that TLV, so on any other screen of this path a correct
+    // engine draws no Abe at all -- and "no Abe" would then be indistinguishable
+    // from a broken path loader.  Booting where the spawn lives makes the test
+    // able to fail honestly.
+    gMap.Init(EReliveLevelIds::eMines, 1, 4, CameraSwapEffects::eInstantChange_0, 0, 0);
+#else
     gMap.Init(EReliveLevelIds::eMenu, 1, 25, CameraSwapEffects::eInstantChange_0, 0, 0);
+#endif
+    AE_MARK("13 map init");
 
     DDCheat_Allocate();
+    AE_MARK("14 ddcheat");
 
     gEventSystem = relive_new GameSpeak();
 
     gCheatController = relive_new CheatController();
+    AE_MARK("15 gamespeak");
 
     Game_Init_LoadingIcon();
+    AE_MARK("16 loading icon");
 
     // Main loop start
+    AE_MARK("17 game loop");
+#ifdef TETHYS_SATURN
+    // SATURN: the boot trace has done its job -- from here it is 25 rows of
+    // text over the picture the tester is trying to judge.
+    Tethys_AE_ClearBootTrace();
+#endif
     Game_Loop();
 
     // Shut down start
