@@ -1,6 +1,18 @@
 #pragma once
 
+// SATURN: this single include coupled TEN translation units to SDL -- Game,
+// Movie, PsxRender, VGA, Animation, Engine, Psx, Sys... none of which name an
+// SDL type themselves.  SDL_Window is already forward-declared below, so the
+// header is needed only for SDL_Rect and the two window calls in StartFrame,
+// both of which are meaningless on a console with no window manager.
+#ifndef TETHYS_SATURN
 #include "SDL.h"
+#else
+struct SDL_Rect
+{
+    s32 x, y, w, h;
+};
+#endif
 
 struct BasePrimitive;
 struct Prim_ScissorRect;
@@ -128,12 +140,14 @@ public:
     {
         if (mIsFirstStartFrame)
         {
+#ifndef TETHYS_SATURN
             // Make the window visible only on the first frame otherwise you can see
             // some unclear framebuffer crap for a half second or so
             SDL_ShowWindow(mWindow);
 
             // Bring to front and give input focus
             SDL_RaiseWindow(mWindow);
+#endif // SATURN: no window manager; the VDP2 display is already up.
 
             mIsFirstStartFrame = false;
         }

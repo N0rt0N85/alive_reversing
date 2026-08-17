@@ -98,10 +98,12 @@ void PSX_VSync(VSyncMode mode)
                 SsSeqCalledTbyT();
 
                 // Prevent max CPU usage, will probably cause stuttering on weaker machines
+#ifndef TETHYS_SATURN
                 if (gLatencyHack)
                 {
                     SDL_Delay(1);
                 }
+#endif // SATURN: nothing else runs on this CPU -- yielding buys nothing.
             }
         }
         while (timeSinceLastFrame < (1000 * 2) / 60);

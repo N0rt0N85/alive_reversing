@@ -81,6 +81,7 @@ void Engine::Run()
     // Moved from PsxDisplay init to prevent desync
     PSX_PutDispEnv_4F5890();
 
+#ifndef TETHYS_SATURN
     // TODO: HACK mini loop till Game.cpp is merged
     DataConversionUI dcu(mGameType);
     if (dcu.ConversionRequired())
@@ -100,6 +101,13 @@ void Engine::Run()
     {
         LOG_INFO("Data is up to date, skip conversion");
     }
+#else
+    // SATURN: conversion happens OFFLINE (tools/ae/ae_pack.py emits the
+    // big-endian TAEA/TAEC packs), so there is never anything to convert at
+    // boot.  This is the only reference to DataConversionUI in built code --
+    // dropping it retires the whole data_conversion/ directory except guid.cpp,
+    // which is core object identity that merely happens to live in there.
+#endif
 
     GetGameAutoPlayer().Pause(false);
     GetGameAutoPlayer().EnableRecorder();

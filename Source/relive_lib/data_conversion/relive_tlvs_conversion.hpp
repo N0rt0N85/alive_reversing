@@ -1,6 +1,16 @@
 #pragma once
 
+// SATURN: this header is pure struct-to-struct conversion -- it contains not one
+// mention of json (grep it).  It only reached nlohmann because the serialiser it
+// includes does, which is what kept the whole TLV converter out of the Saturn
+// build.  Taking relive_tlvs.hpp directly is the same set of TYPES without the
+// serialisation, so src_ae/path_loader_ae.cxx can call the engine's own 210-case
+// converter instead of reimplementing it.
+#ifdef TETHYS_SATURN
+#include "relive_tlvs.hpp"
+#else
 #include "relive_tlvs_serialization.hpp"
+#endif
 #include "PathTlvsAO.hpp"
 #include "PathTlvsAE.hpp"
 #include "SwitchStates.hpp"

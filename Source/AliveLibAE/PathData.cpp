@@ -2,7 +2,9 @@
 #include "PathData.hpp"
 #include "../relive_lib/Function.hpp"
 #include "stdlib.hpp"
-#include <sstream>
+#ifndef TETHYS_SATURN
+#include <sstream> // SATURN: unused here; iostreams are too heavy to link
+#endif
 #include <assert.h>
 #include "../relive_lib/FatalError.hpp"
 #include "Collisions.hpp"

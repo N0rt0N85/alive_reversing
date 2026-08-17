@@ -5,9 +5,15 @@
 #include "stdlib.hpp"
 #include "../relive_lib/Masher.hpp"
 #include "../relive_lib/FatalError.hpp"
+#ifndef TETHYS_SATURN
 #include "SDL.h"
+#endif // SATURN: the only unconditional SDL reference in this file -- every
+       // actual use sits behind USE_SDL2_IO, which is 0 for us, so the whole
+       // 600-line C-stdio path compiles unchanged.
 
-#if !_WIN32
+#if !_WIN32 && !defined(TETHYS_SATURN)
+    // SATURN: newlib/sh-elf has no directory API; IO_EnumerateDirectory is
+    // reimplemented against the CD layer in src_ae/.
     #include <dirent.h>
     #include <sys/stat.h>
 #endif
@@ -66,7 +72,11 @@ size_t IO_Read(IO_FileHandleType pHandle, void* ptr, size_t size, size_t maxnum)
 #if USE_SDL2_IO
     return pHandle->read(pHandle, ptr, size, maxnum);
 #else
-    return ae_fread_520B5C(ptr, size, maxnum, pHandle);
+    // SATURN: `ae_fread_520B5C` is declared and defined NOWHERE in the tree.
+    // Upstream always builds with USE_SDL2_IO = 1, so this branch has never
+    // been compiled -- the same family as the MISC_PC_MENU_FIXES = 0 branch
+    // assigning a member that does not exist.  Plain fread is what it meant.
+    return ::fread(ptr, size, maxnum, pHandle);
 #endif
 }
 
@@ -483,6 +493,11 @@ bool IO_DirectoryExists(const char_type* pDirName)
     }
     FindClose(hFind);
     return true;
+#elif defined(TETHYS_SATURN)
+    // SATURN: a CD-ROM has no writable directory tree; the only "directory"
+    // that matters is the data root, which always exists once the disc is in.
+    (void) pDirName;
+    return true;
 #else
     DIR* dir = opendir(pDirName);
     if (dir)
@@ -574,6 +589,13 @@ void IO_EnumerateDirectory(const char_type* fileName, TEnumCallBack cb)
         }
         _findclose(hFind);
     }
+#elif defined(TETHYS_SATURN)
+    // SATURN: no directory API, and nothing to enumerate -- this call lists
+    // save files in the working directory, and Saturn saves live in backup RAM
+    // (AE-5), not on the disc.  Enumerating nothing is the correct answer here,
+    // not a stub: a CD has no writable directory to walk.
+    (void) fileName;
+    (void) cb;
 #else
     DIR* dir(opendir("."));
     if (dir)

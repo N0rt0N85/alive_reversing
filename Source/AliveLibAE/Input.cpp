@@ -9,7 +9,9 @@
 #include "PsxRender.hpp"
 #include "GameAutoPlayer.hpp"
 #include "../relive_lib/data_conversion/string_util.hpp"
-#include <sstream>
+#ifndef TETHYS_SATURN
+#include <sstream> // SATURN: iostreams cost ~hundreds of KB; see the guard below
+#endif
 #include <algorithm>
 #include <SDL_gamecontroller.h>
 #include <FatalError.hpp>
@@ -834,6 +836,16 @@ void Input_SaveSettingsIni_Common()
         return;
     }
 
+#ifdef TETHYS_SATURN
+    // SATURN: writes a settings .ini next to the executable.  A CD is read-only
+    // and there is no keyboard to remap, so there is nothing to save.
+    //
+    // Guarded rather than left to the linker, because the cost is NOT the few
+    // lines below: `std::stringstream` is the ONLY iostream use left in the
+    // built engine, and it drags std::locale, basic_streambuf and the rest of
+    // libstdc++'s iostream machinery into a program that must fit in 1 MB.
+    return;
+#else
     s32 prevJoyState = sJoystickEnabled;
 
     std::stringstream output;
@@ -980,6 +992,7 @@ void Input_SaveSettingsIni_Common()
     }
 
     Input_Init_Names_491870();
+#endif // TETHYS_SATURN
 }
 
 void Input_SaveSettingsIni_492840()
@@ -1074,7 +1087,12 @@ s32 Input_Convert_KeyboardGamePadInput_To_Internal_Format_492150()
 
         Input_GetJoyState_460280(&pX1, &pY1, &pX2, &pY2, &pButtons);
 
-        if ((sGamepadCapFlags_5C2EF8 & eDisableAutoRun) == 1 && sJoystickNumButtons_5C2EFC <= 4 && fabs(pX1) >= 0.75f) // Auto sprint
+        // SATURN: `fabs(pX1) >= 0.75f` promoted a float to double and called
+        // libm for a magnitude test.  The two-sided comparison is bit-identical
+        // (0.75 is exact in both formats) and pulls no soft-float into a build
+        // with no FPU -- and this branch is dead on Saturn anyway, since there
+        // is no SDL joystick to read.
+        if ((sGamepadCapFlags_5C2EF8 & eDisableAutoRun) == 1 && sJoystickNumButtons_5C2EFC <= 4 && (pX1 >= 0.75f || pX1 <= -0.75f)) // Auto sprint
         {
             pressed_keyboard_keys |= InputCommands::eRun;
             keys_down = pressed_keyboard_keys;

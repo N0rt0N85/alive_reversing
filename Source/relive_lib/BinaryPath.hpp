@@ -2,7 +2,13 @@
 
 // TODO: consider not using STL in her
 #include "Types.hpp"
+// SATURN: this single include is what coupled EIGHT translation units to
+// nlohmann -- Map, Path, Midi and QuikSave in both games all fail here, not on
+// any JSON of their own.  On Saturn paths come from the offline binary packs
+// (tools/ae/ae_pack.py), so the declaration below goes with it.
+#ifndef TETHYS_SATURN
 #include "nlohmann/json_fwd.hpp"
+#endif
 
 #include "Collisions.hpp"
 
@@ -56,7 +62,9 @@ public:
     {
     }
 
+#ifndef TETHYS_SATURN
     void CreateFromJson(nlohmann::json& pathJson);
+#endif
 
     u32 GetPathId() const
     {

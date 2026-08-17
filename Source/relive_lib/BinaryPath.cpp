@@ -1,7 +1,10 @@
 #include "stdafx.h"
 #include "BinaryPath.hpp"
-#include "data_conversion/relive_tlvs_serialization.hpp"
 #include "../AliveLibAO/Path.hpp"
+// SATURN: the JSON path deserialiser (from_json, the TLV type map and
+// CreateFromJson) is PC-only -- see the header.  TlvsById below is not.
+#ifndef TETHYS_SATURN
+#include "data_conversion/relive_tlvs_serialization.hpp"
 #include "nlohmann/json.hpp"
 
 #include <typeindex>
@@ -239,6 +242,8 @@ void BinaryPath::CreateFromJson(nlohmann::json& pathJson)
     from_json(pathJson["map"]["sound_info"], *mSoundInfo);
 }
 
+#endif // TETHYS_SATURN
+
 relive::Path_TLV* BinaryPath::TlvsById(const Guid& id)
 {
     for (auto& cam : mCameras)
@@ -255,7 +260,19 @@ relive::Path_TLV* BinaryPath::TlvsById(const Guid& id)
             {
                 break;
             }
-            pPathTLV = AO::Path_TLV::Next_446460(pPathTLV);
+            // SATURN: was AO::Path_TLV::Next_446460.  This is relive_lib -- the
+            // GAME-NEUTRAL layer -- walking a relive::Path_TLV through a helper
+            // that happens to live in ODDYSEE's namespace.  Harmless upstream,
+            // where both games are compiled into one binary; fatal in an
+            // Exoddus-only build, which links no AliveLibAO at all and reaches
+            // this the moment a TLV is looked up by Guid.
+            //
+            // The helper's whole body is the two lines below (AliveLibAO/Path.hpp
+            // Next_NoCheck), and the end-of-list check above already did its
+            // other half, so this is the same walk with the layering slip
+            // removed rather than a Saturn special case.
+            pPathTLV = reinterpret_cast<relive::Path_TLV*>(
+                reinterpret_cast<u8*>(pPathTLV) + pPathTLV->mLength);
         }
     }
     return nullptr;

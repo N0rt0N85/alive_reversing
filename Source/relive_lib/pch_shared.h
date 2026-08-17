@@ -127,7 +127,9 @@
 
 #include <cstddef>
 #include <cstring>
-#include <iostream>
+#ifndef TETHYS_SATURN // SATURN: <iostream> drags iostream_init static ctors
+#include <iostream>   // into every TU; nothing in the core actually streams.
+#endif
 #include <map>
 #include <memory>
 #include <string>
@@ -136,7 +138,9 @@
 #include <vector>
 #include <mutex>
 
-#include "SDL.h"
+#ifndef TETHYS_SATURN // SATURN: the shared PCH pulled SDL into all ~290 TUs
+#include "SDL.h"      // while only ~9 core files name an SDL type; those are
+#endif                // seam files src/ replaces anyway.
 
 #include "GameObjects/BaseAliveGameObject.hpp"
 #include "data_conversion/relive_tlvs.hpp"
