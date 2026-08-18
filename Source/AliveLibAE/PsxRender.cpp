@@ -19,6 +19,12 @@ s32 gScreenYOffset = 0;
 // and keeps background decoration, because the walk is far-to-near; the
 // Oddysee port paid for that across four builds.  Defined by the backend.
 extern "C" u32 Tethys_AE_gCurLayer;
+// SATURN: the walk is over.  The backend times StartFrame..here to separate its
+// own cost from the engine's and from the drive -- and the bracket cannot end at
+// EndFrame, because PsxDisplay::RenderOrderingTable calls PSX_VSync BETWEEN this
+// function returning and the present.  A gauge that included a 33 ms deliberate
+// wait would read as "the renderer is slow" forever.
+extern "C" void Tethys_AE_WalkDone();
 #endif
 
 void OrderingTable::HandlePrimRendering(IRenderer& renderer, const BasePrimitive& any)
@@ -107,6 +113,10 @@ void OrderingTable::DrawOTag()
             pOtItem = pOtItem->mNext;
         }
     }
+
+#ifdef TETHYS_SATURN
+    Tethys_AE_WalkDone(); // SATURN: see the declaration at the top
+#endif
 }
 
 void OrderingTable::Add(Layer layer, BasePrimitive* pPrim)
