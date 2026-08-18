@@ -1466,6 +1466,13 @@ EXPORT void Factory_BirdPortal_486710(Path_TLV* pTlv, Map* /*pMap*/, TlvItemInfo
             ResourceManager::LoadResourcesFromList_446E80("SHRYPORT.BND", kResources2.AsList(), loadMode, 0);
             ResourceManager::LoadResource_446C90("SPLINE.BAN", ResourceManager::Resource_Animation, AOResourceID::kSplineAOResID, loadMode);
         }
+#ifdef TETHYS_SATURN
+        // SATURN (bt1121): the construct branch below demands kDovbasicAOResID
+        // and this branch never fetched it -- a portal spawns doves, so load it
+        // here, once per camera, instead of leaving Dove::ctor's per-INSTANCE
+        // "hack loading" rescue to do a CD read per bird.
+        ResourceManager::LoadResource_446C90("DOVBASIC.BAN", ResourceManager::Resource_Animation, AOResourceID::kDovbasicAOResID, loadMode);
+#endif
     }
     else
     {

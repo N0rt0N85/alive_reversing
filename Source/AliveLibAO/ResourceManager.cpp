@@ -333,6 +333,8 @@ static TethysStickyEntry sTethysAbsent[32] = {};
 static s32 sTethysAbsentCount = 0;
 static bool sTethysAbsentOverflow = false;
 extern "C" volatile s32 Tethys_gAbsentRes = 0; // overlay gauge: absent-name skips
+extern "C" volatile u32 Tethys_gLastMissType = 0; // bt1121: last CheckResourceIsLoaded miss
+extern "C" volatile u32 Tethys_gLastMissId = 0;
 
 static bool Tethys_ArchiveHas(const char_type* pFileName)
 {
@@ -2571,6 +2573,39 @@ void ResourceManager::CheckResourceIsLoaded(u32 type, AOResourceID resourceId)
         {
             return;
         }
+
+        // SATURN (bt1121): AND NOW IT IS NEVER FATAL, ON AN AUDIT RATHER THAN ON
+        // ONE MORE FIELD DEATH.
+        //
+        // bt1120 fixed Factory_Dove, which checked for DOVBASIC.BAN and had no
+        // load branch at all.  The tester died on the very next screen, on the
+        // same resource, from Factory_BirdPortal -- which loads PORTAL.BND and
+        // SHRYPORT.BND and demands the dove on top.  So the pattern got audited
+        // instead of patched again: all 115 factories in Factory.cpp were paired
+        // up, construct-branch demands against load-branch fetches, and NINE
+        // disagree.  Five of them -- BellHammer, SlingMud, MotionDetector,
+        // ElectricWall, ChimeLock -- have NO load branch whatsoever, exactly like
+        // Dove did.  That is not nine bugs, it is one design: in the OG these
+        // resources arrive through the path's own resource list or a neighbour's
+        // load, and CheckResourceIsLoaded is a DEBUG ASSERTION answered with a
+        // log line and a shrug.  RELIVE says so itself -- Dove::ctor carries a
+        // "hack loading dove resources" rescue for precisely this case.
+        //
+        // Hardening it into a fatal (bt990) was right when it was written: it
+        // caught the S4 .ctors bug, where LoadResourcesFromList("SLIG.BND") was a
+        // silent no-op.  That bug is long fixed, and the cost of the guard is now
+        // a death screen wherever the OG plays on -- which, with fourteen levels
+        // on the disc instead of one, is a wall the tester hits every few
+        // screens.  A guard that fires on the engine's normal behaviour is not a
+        // guard, it is a fault.
+        //
+        // NOT SILENT, THOUGH.  The count and the last offender ride the overlay
+        // (rs on row 12), so a missing sprite still comes with the number that
+        // explains it -- which is the whole property the fatal was protecting.
+        Tethys_gAbsentRes++;
+        Tethys_gLastMissType = type;
+        Tethys_gLastMissId = static_cast<u32>(resourceId);
+        return;
 
         // The death screen is the only log -- name the culprit
         // (type fourcc, low byte first + decimal id) in the fatal message.
