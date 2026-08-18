@@ -101,8 +101,32 @@ VabUnknown s512_byte_C13180 = {};
 u8 sVagCounts_BE6144[kMaxVabs] = {};
 u8 sProgCounts_BDCD64[kMaxVabs] = {};
 VabHeader* spVabHeaders_C13160[4] = {};
+#ifdef TETHYS_SATURN
+// SATURN: 184,320 BYTES OF .bss FOR TWO TABLES NOTHING TOUCHES UNTIL A VAB IS
+// OPENED.  The Saturn port places .bss in LWRAM (tools/ae/ae_sgl.linker), and
+// what is left of that megabyte IS the engine's entire C++ heap -- 700,416
+// bytes of it.  These two objects are 26 % of that heap, and 53 % of all .bss
+// in the image.  The tester ran out at frame 1055 with
+// `OOM want 38416 free 127660`, having peaked at 670,412 of the 700,416.
+//
+// So they are allocated ON FIRST TOUCH instead of reserved unconditionally.
+// Value-initialised, which zeroes them exactly as .bss did, and never freed,
+// which is also exactly what .bss did -- observably identical from the first
+// read onwards.  Sound is not ported yet (AE-6), so today that first read never
+// happens and the heap keeps the space; the day it does, the port pays the same
+// 184 KB it was already paying, out of a pool that is now 184 KB larger.
+// Nothing is traded away, only deferred.
+//
+// A POINTER, NOT A SMALLER TABLE.  Shrinking kMaxVabs or the prog range would
+// have been fewer lines and would have turned "sound finally got loaded" into a
+// silent out-of-bounds write into somebody else's heap block -- the one class
+// of failure this machine has no MMU to catch.
+ConvertedVagTable* spConvertedVagTable_BEF160 = nullptr;
+SoundEntryTable* spSoundEntryTable16_BE6160 = nullptr;
+#else
 ConvertedVagTable sConvertedVagTable_BEF160 = {};
 SoundEntryTable sSoundEntryTable16_BE6160 = {};
+#endif
 MidiChannels sMidi_Channels_C14080 = {};
 MidiSeqSongsTable sMidiSeqSongs_C13400 = {};
 s32 sMidi_Inited_dword_BD1CF4 = 0;
@@ -150,12 +174,31 @@ public:
 
     virtual ConvertedVagTable& sConvertedVagTable() override
     {
+#ifdef TETHYS_SATURN
+        // SATURN: see the definition -- reserved on first touch, not at link
+        // time.  Every caller takes the address of an element, so handing back
+        // a reference to freshly zeroed storage is the whole contract.
+        if (!spConvertedVagTable_BEF160)
+        {
+            spConvertedVagTable_BEF160 = new ConvertedVagTable();
+        }
+        return *spConvertedVagTable_BEF160;
+#else
         return sConvertedVagTable_BEF160;
+#endif
     }
 
     virtual SoundEntryTable& sSoundEntryTable16() override
     {
+#ifdef TETHYS_SATURN
+        if (!spSoundEntryTable16_BE6160)
+        {
+            spSoundEntryTable16_BE6160 = new SoundEntryTable();
+        }
+        return *spSoundEntryTable16_BE6160;
+#else
         return sSoundEntryTable16_BE6160;
+#endif
     }
 
     virtual MidiChannels& sMidi_Channels() override
