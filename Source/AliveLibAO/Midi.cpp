@@ -389,6 +389,73 @@ EXPORT s32 CC MIDI_Allocate_Channel_49D660(s32 not_used, s32 priority)
     return MIDI_Allocate_Channel_4FCA50(not_used, priority);
 }
 
+#ifdef TETHYS_SATURN
+// SATURN (bt1112/bt1117): THE OWNING SEQUENCE OF A NOTE, WHICH AO NEVER RECORDED.
+//
+// Reported symptom: the secret-area jingle rang on for ~18 s and the Mudokon-
+// rescue one for ~16 s, and the tester's own reading of it was right -- "le son
+// se prolonge jusqu'a ce que l'ambiance reprenne, au lieu de s'arreter".
+//
+// MEASURED, so the numbers are not in doubt (scratchpad seqlen/seqsim/VH dump,
+// run against the SHIPPED cd/data/R1.LVL and cross-checked on the untouched PC
+// r1.lvl):
+//   * POSITIV9.SEQ (SeqId 46, secret area) is 5502 ticks = 3005 ms of MIDI,
+//     120 note-ons.  POSITIV1.SEQ (SeqId 45, rescue) is 920 ms, 12 note-ons.
+//     THREE SECONDS IS THE CORRECT LENGTH of the secret-area jingle.  The
+//     10.4 s figure quoted in the first version of this comment was wrong: 320
+//     is rec2s_4CD5A8[5].field_2_duration, the MusicController's state budget
+//     (MusicController.cpp:997), not the sequence's length.
+//   * Every note-off in the game data is a NoteOn with velocity 0 -- 1716 of
+//     them across R1's 41 sequences, and not one 0x80 event.  The parser's
+//     NoteOff_80 case is dead code here.  Under AO's own matching key the data
+//     is perfectly balanced: no orphan off, nothing left sounding at any
+//     end-of-track.  The scored note-offs ARE reaching the voices.
+//   * They just do not silence them.  49 of RFSNDFX.VH's live tones carry
+//     release rate 30 (exponential mode on 48 of them), and PsxSpuApi.cpp:423
+//     models that as pow(2, 30) * 0.045 ms clamped to 32767 -- a THIRTY-TWO
+//     SECOND release, ramped quadratically (V - t^2*V/R^2), so the note is
+//     still at 99.2 % of full volume three seconds after its key-off.  That is
+//     the 18 s: the note is released on time and stays loud until something
+//     reclaims the voice, which is "until the ambience comes back".
+//
+// This is faithful to the PSX, and the PSX has a second mechanism that we
+// lost.  AO's SsUtKeyOffV_49EE50 is NOT AE's: a key-off on a channel that is
+// ALREADY in release (state 4) hard-stops the sample instead of re-arming the
+// ramp.  So the original silences a finished sequence in two beats -- the
+// scored note-off arms the release, then the sequence's own end-of-track
+// SsSeqStop_4FD9C0 comes through and stops it dead.
+//
+// SsSeqStop_4FD9C0 keys off only the channels whose field_1C_adsr.field_C >> 4
+// equals the sequence's open id (PsxSpuApi.cpp:1307-1316).  That tag is
+// written in exactly one place in the whole engine -- PsxSpuApi.cpp:1037,
+// inside AE's parser, as 16 * seqSlot + midiChannel over the channel bitmask
+// the note-on returns.  AO runs its OWN parser (MIDI_ParseMidiMessage_49DD30;
+// the map file confirms both are linked and which one AO reaches) and factored
+// its note-on into MIDI_PlayerPlayMidiNote_49D730, whose signature carries
+// neither the sequence index nor the MIDI channel.  So AO cannot tag, and does
+// not: field_C stays 0 and NO sequence stop has ever keyed off a single note.
+//
+// WHY THIS IS QUIET ON PC AND LOUD ON SATURN.  Our SCSP slots are keyed on
+// with an instant-attack/instant-release hardware envelope because the
+// engine's software ADSR drives TL instead (src/sound_saturn.cxx:33,317), and
+// a sample carrying the loop flag repeats until something reclaims the voice.
+// A 32 s software release therefore means 32 s of audible note.
+//
+// THE FIX is the one AE already ships, in the one place AO has the two facts:
+// tag the channels the note-on actually took, at the NoteOn_90 site where both
+// `idx` and data.Channel() are in scope.  Nothing else is needed -- the
+// end-of-track handler ALREADY calls SsSeqStop_49E6E0(idx), and so does
+// SND_Seq_Stop_477A60 when the MusicController switches tracks, which is the
+// second half of the bug: until now a track change never silenced the track it
+// replaced either.
+//
+// The bt1114 private-owner-table version is gone.  It only ever covered
+// end-of-track, it cost a 24-byte table plus its own sweep loop, and it was
+// written on the belief that 3 s was too short -- which the measurement above
+// refutes.
+#define TETHYS_SEQ_KEYOFF 1
+#endif
+
 // NOTE: Impl is not the same as AE
 EXPORT s32 CC MIDI_PlayerPlayMidiNote_49D730(s32 vabId, s32 program, s32 note, s32 leftVolume, s32 rightVolume, s32 volume)
 {
@@ -719,7 +786,29 @@ EXPORT s32 CC MIDI_ParseMidiMessage_49DD30(s32 idx)
                         auto l_vol = (s16)((u32)(pProgVol->field_1_left_vol * pCtx->field_C_volume) >> 7);
 
                         auto freq = data.param2;
+#if defined(TETHYS_SATURN) && TETHYS_SEQ_KEYOFF
+                        // SATURN (bt1117): this is the one site where both the
+                        // sequence being parsed and its MIDI channel are in
+                        // scope, which is exactly what AE's parser has at
+                        // PsxSpuApi.cpp:1037 and AO's factored-out note-on lost.
+                        // Record the owner over the channel bitmask the note-on
+                        // returns, in AE's own encoding (16 * seqSlot + midi
+                        // channel), so SsSeqStop_4FD9C0 can find them.  A
+                        // velocity-0 note-on returns 0 and tags nothing, which
+                        // is right: it is a note-OFF and takes no voice.
+                        const s32 usedChannels =
+                            MIDI_PlayerPlayMidiNote_49DAD0(pCtx->field_seq_idx, program, note, l_vol, r_vol, freq);
+                        for (s32 ch = 0; ch < kNumChannels; ch++)
+                        {
+                            if (usedChannels & (1 << ch))
+                            {
+                                GetSpuApiVars()->sMidi_Channels().channels[ch].field_1C_adsr.field_C =
+                                    static_cast<u16>(16 * idx + data.Channel());
+                            }
+                        }
+#else
                         MIDI_PlayerPlayMidiNote_49DAD0(pCtx->field_seq_idx, program, note, l_vol, r_vol, freq); // Note: inlined
+#endif
                         break;
                     }
 
