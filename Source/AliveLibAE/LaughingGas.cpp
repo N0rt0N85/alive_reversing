@@ -155,6 +155,26 @@ void LaughingGas::VRender(OrderingTable& ot)
 
 void LaughingGas::DoRender()
 {
+#ifdef TETHYS_SATURN
+    // SATURN: this fills a buffer NOTHING READS, at a price the tester measured
+    // as the worst frame in the game.
+    //
+    // mpGasPixels is consumed by exactly one thing -- Prim_GasEffect, whose
+    // Draw() is still a no-op in the Saturn backend -- while the loop below is
+    // mWidthCount * mHeightCount iterations of f32 arithmetic through Calc_X,
+    // plus six Calc_Y per row, on a CPU with no FPU.  Every one of those is a
+    // libgcc __floatsidf / __muldf3 call; the build's own soft-float census
+    // names this object.  On the "GAZ HILARANT" camera the overlay read
+    // ms46 mx161 -- 21 fps average and 6 fps at worst -- with only ELEVEN
+    // sprites on screen, which is what says the cost is here and not in VDP1.
+    //
+    // Skipped, not deleted, and NOT hoisted into VRender: the gate belongs with
+    // the work so that implementing Draw(Prim_GasEffect) is the only thing that
+    // has to change to get it back.  Gameplay is untouched -- the gas acts on
+    // Abe through mAmountOn (IsOn() tests it against 0.3), never through these
+    // pixels.
+    return;
+#endif
     f32 local_array[6];
 
     u16* pixelPtr = mpGasPixels;
@@ -259,6 +279,11 @@ f32 LaughingGas::Calc_Y(f32* a2, s32 yIndex)
 
 void LaughingGas::UpdateGasPos()
 {
+#ifdef TETHYS_SATURN
+    // SATURN: sixteen sin() calls a frame feeding mGasY, which feeds DoRender,
+    // which is skipped above.  Same gate, same reason -- see DoRender.
+    return;
+#endif
     for (s32 i = 0; i < 4; i++)
     {
         for (s32 j = 0; j < 4; j++)
