@@ -412,6 +412,37 @@ EXPORT void Factory_WellExpress_483340(Path_TLV* pTlv, Map* /*pMap*/, TlvItemInf
 
 EXPORT void Factory_Dove_4834C0(Path_TLV* pTlv, Map* /*pMap*/, TlvItemInfoUnion tlvOffsetLevelIdPathId, LoadMode loadMode)
 {
+#ifdef TETHYS_SATURN
+    // SATURN (bt1120): THE LOAD PASS THIS FACTORY NEVER HAD.
+    //
+    // Every other factory in this file is a two-branch shape -- load the files
+    // under LoadResourceFromList_1 / LoadResource_2, construct under anything
+    // else (Factory_RockSack_483680 twenty lines below is the template).  This
+    // one has only the construct branch, so DOVBASIC.BAN is never loaded for a
+    // Path_Dove TLV, and the CheckResourceIsLoaded immediately below is asking
+    // for a resource nobody was ever asked to fetch.
+    //
+    // On PC that is a LOG_ERROR and the run continues, because Dove::ctor_40EE50
+    // carries an explicit rescue -- "hack loading dove resources" at
+    // Dove.cpp:54 and :125, which loads the file per INSTANCE once the check has
+    // already failed.  That comment is upstream's own record of this bug.
+    // This port hardened CheckResourceIsLoaded into a fatal (bt990, and it earns
+    // its keep -- it caught the S4 .ctors bug), so the rescue never gets to run:
+    // the tester warped into D1 p04 c08 and died on "Res missing Anim 60" at
+    // frame 580, with 143,236 B of HWRAM and 665,768 B of LWRAM free.  Not a
+    // memory fault at all, and Anim 60 is DOVBASIC.BAN, present in thirteen of
+    // the fourteen LVLs on the disc.
+    //
+    // Fix the CAUSE rather than muting the alarm: give the factory the branch
+    // its siblings have.  The resource is then loaded during the load pass, the
+    // check passes, the per-instance rescue never fires, and the doves actually
+    // appear instead of being rescued one at a time.
+    if (loadMode == LoadMode::LoadResourceFromList_1 || loadMode == LoadMode::LoadResource_2)
+    {
+        ResourceManager::LoadResource_446C90("DOVBASIC.BAN", ResourceManager::Resource_Animation, AOResourceID::kDovbasicAOResID, loadMode);
+        return;
+    }
+#endif
     if (loadMode != LoadMode::LoadResourceFromList_1 && loadMode != LoadMode::LoadResource_2)
     {
         ResourceManager::CheckResourceIsLoaded(ResourceManager::Resource_Animation, AOResourceID::kDovbasicAOResID);
