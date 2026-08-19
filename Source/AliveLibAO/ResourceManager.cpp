@@ -333,6 +333,11 @@ static TethysStickyEntry sTethysAbsent[32] = {};
 static s32 sTethysAbsentCount = 0;
 static bool sTethysAbsentOverflow = false;
 extern "C" volatile s32 Tethys_gAbsentRes = 0; // overlay gauge: absent-name skips
+// SATURN: bt1126 -- the bt1121 fatal-downgrade gets its OWN counter. rs
+// mixed it with the documented-normal archive-absent floor, so the one
+// event that predicts a visibly missing sprite was unreadable inside a
+// number whose own comment says a non-zero reading is expected.
+extern "C" volatile s32 Tethys_gMissingRes = 0;
 extern "C" volatile u32 Tethys_gLastMissType = 0; // bt1121: last CheckResourceIsLoaded miss
 extern "C" volatile u32 Tethys_gLastMissId = 0;
 
@@ -465,7 +470,6 @@ static u32 sFlipRecBytes = 0;
 // one line away whenever ck says there is a who. Arity is what Debug::Print
 // bills for (628 B for two rows going 6->7/8 args), so a swap is free and an
 // addition is not.
-static u32 sFlipLzRaw = 0;
 extern "C" u32 Tethys_RawTicks(); // src/sys_saturn.cxx, ~208 ticks/ms
 
 static void Tethys_NoteFlipRecord(const char_type* pName, u32 bytes, u32 startSector)
@@ -498,7 +502,6 @@ extern "C" void Tethys_FlipRecordReset()
     sFlipTopBytes = 0;
     sFlipTopSector = 0;
     sFlipRecBytes = 0;
-    sFlipLzRaw = 0;
 }
 
 extern "C" u32 Tethys_FlipTopSector()
@@ -509,11 +512,6 @@ extern "C" u32 Tethys_FlipTopSector()
 extern "C" u32 Tethys_FlipRecKb()
 {
     return sFlipRecBytes >> 10;
-}
-
-extern "C" u32 Tethys_FlipLzMs()
-{
-    return sFlipLzRaw / 208u;
 }
 
 // Wedge diagnostics (S7 round 6): a staging block that cannot fit is now a
@@ -1880,9 +1878,10 @@ struct CamSectorReader
             return false;
         }
         const u32 want = (zRemain < Tethys_kLz4Block) ? zRemain : Tethys_kLz4Block;
-        const u32 tLz0 = Tethys_RawTicks();
+        // SATURN: bt1126 -- lz retired WITH its bracket. Measured 49-92 ms
+        // against ~216 ms of CD bought; the 8:1 trade holds and the question
+        // is closed, so the two FRT reads per block go with the column.
         const u32 got = Tethys_Lz4Decode(zIn, clen, zOut, want);
-        sFlipLzRaw += Tethys_RawTicks() - tLz0; // bt1065: `lz`, decode only
 
         if (got != want) // short or long is corruption; malformed input returns 0
         {
@@ -2603,6 +2602,7 @@ void ResourceManager::CheckResourceIsLoaded(u32 type, AOResourceID resourceId)
         // (rs on row 12), so a missing sprite still comes with the number that
         // explains it -- which is the whole property the fatal was protecting.
         Tethys_gAbsentRes++;
+        Tethys_gMissingRes++; // SATURN: bt1126 -- the alarming class, on its own
         Tethys_gLastMissType = type;
         Tethys_gLastMissId = static_cast<u32>(resourceId);
         return;

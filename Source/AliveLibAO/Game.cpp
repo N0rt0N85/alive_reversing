@@ -1,5 +1,15 @@
 #include "stdafx_ao.h"
 #include "Game.hpp"
+// SATURN: bt1125 VUpdate population census. pu (row 12 `u`) is the largest
+// unexplained block in the port -- 36 ms of a 90 ms tick -- and it has never
+// had a single COUNT pointed at it: bt1041 measured it as 86-98 % VUpdate and
+// bt1061 then deleted the per-object argmax because it charged two FRT reads
+// and a call PER OBJECT PER TICK to feed statics nothing printed. These two
+// are one `++` each, no clock read at all, and they are latched on the SAME
+// argmax tick as pu itself (src/sys_saturn.cxx, kPhase[4..5]) so that u/nu is
+// a real per-call cost rather than two different ticks divided by each other.
+extern "C" unsigned int Tethys_gVuCalls;
+extern "C" unsigned int Tethys_gVuList;
 #include "logger.hpp"
 #include "Function.hpp"
 #include "FixedPoint.hpp"
@@ -47,6 +57,15 @@ namespace AO {
 // the main loop below for why the tick had to be cut this finely.
 extern "C" u32 Tethys_gPhUpd;
 extern "C" u32 Tethys_gPhAnim;
+// SATURN: bt1134 -- a RAW-TICK twin of the AnimateAll bracket. bt1133's A/B was
+// UNDECIDABLE and the emulator was not the reason: `a` is whole MILLISECONDS on
+// a phase worth 2-12 of them, so quantisation alone is +/-6 to 25 percent and a
+// 10 percent effect cannot be seen. 208 raw FRT ticks = 1 ms, so this is 208x
+// the resolution for two extra clock reads per TICK -- not per object, which is
+// what bt1061 deleted. The ms bracket STAYS: `o == u+a+v+w` is the closure check
+// and it is in ms.
+extern "C" u32 Tethys_gPhAnimRaw;
+extern "C" u32 Tethys_RawTicks(void);
 extern "C" u32 Tethys_gPhRend;
 // SATURN (bt1030): pu owns the possession spike -- 25 ms of a 47 ms worst
 // tick against 4 ms quiet -- and pu is one number over the whole object list.
@@ -484,6 +503,7 @@ EXPORT void CC Game_Loop_437630()
                 break;
             }
 
+            Tethys_gVuList++; // SATURN: bt1125 objects EXAMINED (see the head)
             if (pObjIter->field_6_flags.Get(BaseGameObject::eUpdatable_Bit2) && !pObjIter->field_6_flags.Get(BaseGameObject::eDead_Bit3) && (sNumCamSwappers_507668 == 0 || pObjIter->field_6_flags.Get(BaseGameObject::eUpdateDuringCamSwap_Bit10)))
             {
                 if (pObjIter->field_8_update_delay > 0)
@@ -512,6 +532,7 @@ EXPORT void CC Game_Loop_437630()
                         // floor. THIS IS THE HOUSE RULE APPLIED LATE: a gauge
                         // that has answered is deleted WITH its verdict, and
                         // deleting the row is not deleting the gauge.
+                        Tethys_gVuCalls++; // SATURN: bt1125 population census
                         pObjIter->VUpdate();
                     }
                 }
@@ -521,6 +542,7 @@ EXPORT void CC Game_Loop_437630()
         for (s32 i = 0; i < gLoadingFiles->Size(); i++)
         {
             BaseGameObject* pObjIter = gLoadingFiles->ItemAt(i);
+            Tethys_gVuList++; // SATURN: bt1125 objects EXAMINED (see the head)
             if (pObjIter->field_6_flags.Get(BaseGameObject::eUpdatable_Bit2) && !pObjIter->field_6_flags.Get(BaseGameObject::eDead_Bit3) && (sNumCamSwappers_507668 == 0 || pObjIter->field_6_flags.Get(BaseGameObject::eUpdateDuringCamSwap_Bit10)))
             {
                 if (pObjIter->field_8_update_delay > 0)
@@ -529,6 +551,7 @@ EXPORT void CC Game_Loop_437630()
                 }
                 else
                 {
+                    Tethys_gVuCalls++; // SATURN: bt1125 population census
                     pObjIter->VUpdate(); // bt1061: bracket removed, see above
                 }
             }
@@ -606,6 +629,7 @@ EXPORT void CC Game_Loop_437630()
 #endif
 
         // Animate everything
+        const u32 tAnimRaw0 = Tethys_RawTicks(); // SATURN: bt1134
         if (sNumCamSwappers_507668 <= 0)
         {
             GetGameAutoPlayer().SyncPoint(SyncPoints::AnimateAll);
@@ -614,6 +638,7 @@ EXPORT void CC Game_Loop_437630()
 
 #ifdef TETHYS_SATURN
         Tethys_gPhAnim += SYS_GetTicks() - tPhase0;
+        Tethys_gPhAnimRaw += Tethys_RawTicks() - tAnimRaw0; // SATURN: bt1134
         tPhase0 = SYS_GetTicks();
 #endif
 
