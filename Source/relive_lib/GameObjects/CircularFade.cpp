@@ -68,6 +68,49 @@ void CircularFade::VRender(OrderingTable& ot)
 
     GetAnimation().SetRGB(fade_rgb, fade_rgb, fade_rgb);
 
+#if defined(TETHYS_SATURN)
+    // SATURN: ONE FULL-SCREEN QUAD INSTEAD OF AN IRIS, and the reason is that
+    // every piece of this effect is a SUBTRACTIVE BLEND the Saturn cannot do
+    // where it is needed.
+    //
+    // The PSX effect is: a SpotLight cel scaled over the focus point, plus four
+    // eBlend_2 tiles filling the screen around that cel's frame rect.  eBlend_2
+    // is B - F, so a tile at mFadeColour 0 subtracts nothing and is INVISIBLE,
+    // and the picture darkens as the colour climbs to 255.
+    //
+    // On this port the background is the VDP2 bitmap plane and the tiles would
+    // be VDP1 quads, and the two cannot blend at all -- VDP1 draws into its own
+    // framebuffer.  So the tiles came out OPAQUE: at mFadeColour 0, where the PSX
+    // shows the room untouched, the Saturn painted solid black over everything
+    // outside the cel's rect, and the cel itself -- also opaque -- sat in the
+    // hole as a bright square with a dark middle.  That is verbatim what the
+    // tester reported: "ecran noir, carre blanc, rond noir".
+    //
+    // The port already has the right instrument for a fade: a full-screen one is
+    // folded into the VDP2 COLOUR OFFSET (renderer_ae.cxx AccumulateFade), which
+    // darkens the camera plane and the sprites together, register-only, and
+    // whose eBlend_2 case is exactly a negative offset.  So emit ONE full-screen
+    // tile carrying the same colour and the same blend mode, and let that path
+    // do the work.  The intensity ramp -- the part that actually hides the
+    // camera swap -- is reproduced exactly.
+    //
+    // WHAT IS DELIBERATELY LOST: the circular shape.  A colour offset is global
+    // to the layer, so there is no way to leave a hole in it.  A faithful iris
+    // needs a VDP2 LINE WINDOW gating NBG1 (a per-scanline x0/x1 table, 960 B,
+    // which does describe a circle) plus VDP1 user clipping for the sprites, and
+    // that is a feature to prototype on hardware, not a bug fix.  A clean fade
+    // is a correct transition; a black screen with a white square is not.
+    const u8 saturnFade = static_cast<u8>(mFadeColour);
+    Poly_G4* pFull = &mTile1;
+    pFull->SetRGB0(saturnFade, saturnFade, saturnFade);
+    pFull->SetRGB1(saturnFade, saturnFade, saturnFade);
+    pFull->SetRGB2(saturnFade, saturnFade, saturnFade);
+    pFull->SetRGB3(saturnFade, saturnFade, saturnFade);
+    pFull->SetXYWH(0, 0, gPsxDisplay.mWidth, gPsxDisplay.mHeight);
+    pFull->SetSemiTransparent(true);
+    pFull->SetBlendMode(relive::TBlendModes::eBlend_2);
+    ot.Add(GetAnimation().GetRenderLayer(), pFull);
+#else
     GetAnimation().VRender(
         FP_GetExponent(FP_FromInteger(mXOffset) + mXPos - gScreenManager->CamXPos()),
         FP_GetExponent(FP_FromInteger(mYOffset) + mYPos - gScreenManager->CamYPos()),
@@ -143,7 +186,10 @@ void CircularFade::VRender(OrderingTable& ot)
     pTile4->SetSemiTransparent(true);
     pTile4->SetBlendMode(relive::TBlendModes::eBlend_2);
     ot.Add(GetAnimation().GetRenderLayer(), pTile4);
+#endif
 
+    // SHARED: the done-detection reads mFadeColour only, so it is the same on
+    // both sides of the branch above.
     if ((mFadeColour == 255 && mFadeIn) || (mFadeColour == 0 && !mFadeIn))
     {
         if (GetGameType() == GameType::eAe)
