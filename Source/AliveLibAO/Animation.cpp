@@ -40,6 +40,13 @@ extern "C" unsigned int Tethys_gAnDecode;
 // DECODE (d is 3-22 a tick), which is the cheap end of every bracket this port
 // has ever carried.
 extern "C" unsigned int Tethys_gDcRaw;
+// SATURN bt1138: the decompression-destination A/B -- see the type 4/5 case.
+extern "C" const unsigned int Tethys_kDbufScratchBytes;
+extern "C" unsigned char* Tethys_gDbufScratch;
+extern "C" unsigned int Tethys_gDbufArm;
+extern "C" unsigned int Tethys_gDbufRaw[2];
+extern "C" unsigned int Tethys_gDbufBytes[2];
+extern "C" unsigned int Tethys_gDbufFall;
 extern "C" unsigned int Tethys_RawTicks(void);
 
 // Fix pollution from windows.h
@@ -405,9 +412,50 @@ void Animation::UploadTexture(const FrameHeader* pFrameHeader, const PSX_RECT& v
         case CompressionType::eType_5_RLE:
             if (EnsureDecompressionBuffer())
             {
+#ifdef TETHYS_SATURN
+                // SATURN (bt1138) THE HARDWARE A/B, and it is ONE POINTER. The
+                // buffer is the only thing that changes: arm 0 decompresses into
+                // the Resource_DecompressionBuffer, which in cart mode is in the
+                // cartridge (A-bus, ~4x LWRAM, no write burst); arm 1
+                // decompresses into an LWRAM scratch. The SH-2 cache is
+                // write-through with no write allocate, so every store the
+                // decoder makes is an external write and the destination's bus
+                // is the whole cost -- bt1136 proved the loop itself cannot be
+                // improved (see CompressionType_4Or5.cpp). NOT ONE INSTRUCTION
+                // differs between the arms, so Ymir must show them EQUAL; a
+                // difference on hardware is the A-bus and nothing else.
+                //   The swap is safe because it is total and local: nothing
+                // outside this switch ever reads the buffer's CONTENTS (the only
+                // other uses of field_24_dbuf are its alloc, its free and the
+                // other compression types, all in this file), and the decompress
+                // and the Upload below both take the same pointer. The arm flips
+                // once per FRAME, not per decode, so a frame's decodes never mix.
+                u8* pDst = *field_24_dbuf;
+                s32 dbufArm = 0;
+                if (Tethys_gDbufArm != 0u && Tethys_gDbufScratch != nullptr)
+                {
+                    if (field_28_dbuf_size <= Tethys_kDbufScratchBytes)
+                    {
+                        pDst = Tethys_gDbufScratch;
+                        dbufArm = 1;
+                    }
+                    else
+                    {
+                        Tethys_gDbufFall++; // arm 1 could not take this frame
+                    }
+                }
+                {
+                    const unsigned int t0 = Tethys_RawTicks();
+                    Decompress_Type_4_5_461770(reinterpret_cast<const u8*>(&pFrameHeader->field_8_width2), pDst);
+                    Tethys_gDbufRaw[dbufArm] += Tethys_RawTicks() - t0;
+                    Tethys_gDbufBytes[dbufArm] += *reinterpret_cast<const u32*>(&pFrameHeader->field_8_width2);
+                }
+                renderer.Upload(AnimFlagsToBitDepth(field_4_flags), vram_rect, pDst);
+#else
                 // TODO: Refactor structure to get pixel data/remove casts
                 Decompress_Type_4_5_461770(reinterpret_cast<const u8*>(&pFrameHeader->field_8_width2), *field_24_dbuf);
                 renderer.Upload(AnimFlagsToBitDepth(field_4_flags), vram_rect, *field_24_dbuf);
+#endif
             }
             break;
 
