@@ -123,12 +123,28 @@ void Map::Init(EReliveLevelIds level, s16 path, s16 camera, CameraSwapEffects sc
     mCamState = CamChangeStates::eInactive_0;
 }
 
+#ifdef TETHYS_SATURN
+// SATURN: the platform layer's T0.  Declared here rather than in a header
+// because it is the only engine call site and the seam is one function.
+extern "C" void Tethys_AE_OnScreenChange();
+#endif
+
 void Map::ScreenChange()
 {
     if (mCamState == CamChangeStates::eInactive_0)
     {
         return;
     }
+
+#ifdef TETHYS_SATURN
+    // SATURN: a screen change is committed past this point, and everything
+    // below is the point of no return -- the VScreenChanged loop destroys
+    // objects whose texture slots and palette homes the live sprite list still
+    // references.  So the backend fades the composed screen out here, WHILE that
+    // list is still valid, and drops it and the FG1 table before the storm.
+    // Same hook and same reasoning as the Oddysee port's Map::ScreenChange_4444D0.
+    Tethys_AE_OnScreenChange();
+#endif
 
     if (gMap_bDoPurpleLightEffect)
     {
