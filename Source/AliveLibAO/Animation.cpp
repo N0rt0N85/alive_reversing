@@ -43,7 +43,6 @@ extern "C" unsigned int Tethys_gDcRaw;
 // SATURN bt1138: the decompression-destination A/B -- see the type 4/5 case.
 extern "C" const unsigned int Tethys_kDbufScratchBytes;
 extern "C" unsigned char* Tethys_gDbufScratch;
-extern "C" unsigned int Tethys_gDbufArm;
 extern "C" unsigned int Tethys_gDbufRaw[2];
 extern "C" unsigned int Tethys_gDbufBytes[2];
 extern "C" unsigned int Tethys_gDbufFall;
@@ -428,11 +427,21 @@ void Animation::UploadTexture(const FrameHeader* pFrameHeader, const PSX_RECT& v
                 // outside this switch ever reads the buffer's CONTENTS (the only
                 // other uses of field_24_dbuf are its alloc, its free and the
                 // other compression types, all in this file), and the decompress
-                // and the Upload below both take the same pointer. The arm flips
-                // once per FRAME, not per decode, so a frame's decodes never mix.
+                // and the Upload below both take the same pointer.
+                //   bt1139: THE ARM IS A PURE FUNCTION OF THE GAME FRAME NUMBER,
+                // and that is a fix, not a tidy-up. bt1138 flipped a global at the
+                // vsync handler -- which runs once per VBLANK, not once per game
+                // tick. At ft020 a tick spans 2.0 vblanks, so the two flips
+                // cancelled and the arm only ever changed when a tick happened to
+                // span an odd number: measured kA:kB = 4.6-5.7 to 1 on five
+                // captures instead of 1:1. The arms were not seeing the same
+                // content, and decompression cost per byte varies x3.2 with
+                // content, so the 7-11 % difference that run showed proved
+                // nothing. Keying off gnFrameCount cannot drift: every decode in
+                // a game frame reads the same number, by construction.
                 u8* pDst = *field_24_dbuf;
                 s32 dbufArm = 0;
-                if (Tethys_gDbufArm != 0u && Tethys_gDbufScratch != nullptr)
+                if ((gnFrameCount_507670 & 1u) != 0u && Tethys_gDbufScratch != nullptr)
                 {
                     if (field_28_dbuf_size <= Tethys_kDbufScratchBytes)
                     {
