@@ -446,9 +446,21 @@ void Animation::UploadTexture(const FrameHeader* pFrameHeader, const PSX_RECT& v
                 //   COVERAGE IS THE PRE-FLIGHT. kA must equal kB before rA/rB mean
                 // anything -- decompression cost per byte varies 3.2x with content,
                 // so unequal arms compare different work and prove nothing.
+                //   bt1142: A THIRD ARM THAT COSTS NO RAM AT ALL -- the SAME cart
+                // buffer through the UNCACHED window (0x224xxxxx instead of
+                // 0x024xxxxx). A vs B prices cart against LWRAM; A vs C asks
+                // whether the SH-2 cache does anything for this workload at all.
+                // It should not: the cache is write-through, so the stores go
+                // external either way, and the only thing the cached window can
+                // buy is the decoder reading back bytes it just wrote. C == A
+                // means those reads miss anyway and the whole cost is the write
+                // path; C much worse than A means the cache IS carrying the read
+                // side and a placement fix must not disturb it. A memory-map fact
+                // worth more than this function.
                 u8* pDst = *field_24_dbuf;
                 s32 dbufArm = 0;
-                if ((Tethys_gDbufTurn++ & 1u) != 0u && Tethys_gDbufScratch != nullptr)
+                const u32 turn = Tethys_gDbufTurn++ % 3u;
+                if (turn == 1u && Tethys_gDbufScratch != nullptr)
                 {
                     if (field_28_dbuf_size <= Tethys_kDbufScratchBytes)
                     {
@@ -458,6 +470,19 @@ void Animation::UploadTexture(const FrameHeader* pFrameHeader, const PSX_RECT& v
                     else
                     {
                         Tethys_gDbufFall++; // arm 1 could not take this frame
+                    }
+                }
+                else if (turn == 2u)
+                {
+                    // Only the CACHED cart window has an alias worth taking. With
+                    // no cartridge the heap is in LWRAM and is left on arm 0 --
+                    // aliasing it would measure a different region and quietly
+                    // turn the three-way back into a two-way.
+                    const u32 a = reinterpret_cast<u32>(pDst);
+                    if (a >= 0x02400000u && a < 0x02800000u)
+                    {
+                        pDst = reinterpret_cast<u8*>(a | 0x20000000u);
+                        dbufArm = 2;
                     }
                 }
                 {
