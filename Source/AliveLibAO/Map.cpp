@@ -62,9 +62,7 @@ extern "C" volatile u32 Tethys_gFlipCdMs;   // `lc`, latched over the WHOLE flip
 // bt1047: and its split, same window. lc is 71% of a camera flip and 84% of a
 // path transition [Ymir], so everything now hangs on whether that time is
 // seeks, drive rate, or our own SH-2 copy under GFS_TMODE_CPU.
-extern "C" u32 Tethys_gCdSeekRaw;
 extern "C" u32 Tethys_gCdBytes;
-extern "C" volatile u32 Tethys_gFlipSeekMs; // `ls`
 extern "C" volatile u32 Tethys_gFlipKb;     // `lk`
 extern "C" void Tethys_CamCacheReset();     // bt1061: src/cam_cache.cxx, level-scoped
 extern "C" u32 Tethys_gCdReads;              // bt1069: `nr`, cd_saturn.cxx
@@ -2229,7 +2227,7 @@ void Map::GoTo_Camera_445050()
     // drain, four more cameras -- was entirely invisible, and it is the biggest
     // named term in lo. Free: the accumulator was already zeroed at T0.
     Tethys_gFlipCdMs = Tethys_gCdRawAccum / 208u;
-    Tethys_gFlipSeekMs = Tethys_gCdSeekRaw / 208u; // bt1047: ls/lk, same window
+    // SATURN: bt1126 -- ls retired with its answer (seek travel is free).
     Tethys_gFlipKb = Tethys_gCdBytes >> 10;
     Tethys_gFlipReads = Tethys_gCdReads; // bt1069: nr, same window as lk
     // bt1051: kc RETIRED, verdict in place -- lk minus kc read 104, 106 and

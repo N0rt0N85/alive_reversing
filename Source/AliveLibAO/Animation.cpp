@@ -24,6 +24,23 @@
 #include "Blood.hpp"
 #include "Renderer/IRenderer.hpp"
 #include "AnimResources.hpp"
+// SATURN (bt1128): THE ANIMATE CENSUS. `a` (overlay row 12) is the largest
+// steady-state phase in the port -- 10-11 ms of a ~30 ms tick -- and nothing
+// has ever counted anything inside it. Defined in src/sys_saturn.cxx beside the
+// kPhase[] argmax that differences them, so they describe THE VERY TICK `a`
+// describes. Free-running monotone; never reset here.
+extern "C" unsigned int Tethys_gAnWalk;
+extern "C" unsigned int Tethys_gAnDecode;
+// SATURN: bt1135 -- RAW ticks inside vDecode ALONE. bt1134 split AnimateAll
+// into copy (cp) and everything-else and got 41-60 percent copy; the rest was
+// assumed to be the walk plus decompression. The walk cannot be it -- this
+// loop body is Size(), ItemAt, a flag test and a decrement, and forty of those
+// are not 90,000 cycles. So bracket the decompressor and stop assuming:
+// ar - cp - dc is then the walk, and it should read ~0. Two FRT reads per
+// DECODE (d is 3-22 a tick), which is the cheap end of every bracket this port
+// has ever carried.
+extern "C" unsigned int Tethys_gDcRaw;
+extern "C" unsigned int Tethys_RawTicks(void);
 
 // Fix pollution from windows.h
 #undef min
@@ -787,9 +804,21 @@ bool Animation::EnsureDecompressionBuffer()
     return field_24_dbuf != nullptr;
 }
 
+// SATURN (bt1128): two numbers, both free.
+//   gAnWalk   -- the loop's EXIT INDEX is the animation count, so it costs one
+//                add PER CALL and nothing per iteration. The body is unchanged.
+//                (bt1055's rule: never instrument a hot loop per iteration or
+//                the instrument is what you measure.)
+//   gAnDecode -- vDecode() calls THIS FUNCTION made. One meaning: the decodes
+//                at Set_Animation_Data_402A40 and Init_402D20 run inside
+//                VUpdate and belong to `u`; conflating them makes it unreadable.
+// The one caller is Game.cpp, itself guarded by sNumCamSwappers_507668 <= 0, so
+// per-call == per-tick EXCEPT during a camera swap, when neither advances and
+// the tick reads n000. That is a reading, not a fault -- note it and move on.
 void CC AnimationBase::AnimateAll_4034F0(DynamicArrayT<AnimationBase>* pAnimList)
 {
-    for (s32 i = 0; i < pAnimList->Size(); i++)
+    s32 i = 0;
+    for (; i < pAnimList->Size(); i++)
     {
         auto pAnim = pAnimList->ItemAt(i);
         if (!pAnim)
@@ -804,11 +833,17 @@ void CC AnimationBase::AnimateAll_4034F0(DynamicArrayT<AnimationBase>* pAnimList
                 pAnim->field_E_frame_change_counter--;
                 if (pAnim->field_E_frame_change_counter == 0)
                 {
-                    pAnim->vDecode();
+                    Tethys_gAnDecode++; // SATURN: bt1128 census
+                    {
+                        const unsigned int tDc0 = Tethys_RawTicks(); // SATURN bt1135
+                        pAnim->vDecode();
+                        Tethys_gDcRaw += Tethys_RawTicks() - tDc0;
+                    }
                 }
             }
         }
     }
+    Tethys_gAnWalk += static_cast<unsigned int>(i); // SATURN: bt1128, exit index
 }
 
 #ifdef TETHYS_SATURN
