@@ -452,6 +452,46 @@ void Game_Run()
     // from a broken path loader.  Booting where the spawn lives makes the test
     // able to fail honestly.
     gMap.Init(EReliveLevelIds::eMines, 1, 4, CameraSwapEffects::eInstantChange_0, 0, 0);
+
+    // SATURN: BOOT WARP -- spawn where the spawn is, then step to where the test is.
+    //
+    // The tester needs the screen carrying path 1's exit and has never reached
+    // it; navigating there by hand every boot is not a test, it is a chore.  But
+    // the camera cannot simply be changed above: MIP01C04 is the ONLY cell on
+    // path 1 with AbeStart_22, Abe is created BY that TLV, and booting anywhere
+    // else gives a screen with no hero at all.  So Init still lands on the
+    // spawn -- and then this moves him, which is what the game's own cheat does
+    // (DDCheat::Teleport, DDCheat.cpp:125).
+    //
+    // THE DESTINATION IS READ OUT OF THE PATH DATA, NOT EYEBALLED.  MIP01C22
+    // (cell 92) holds the only Door_5 on path 1 that leaves it -- the doors on
+    // C17/C18/C21 all point back at their own camera -- and it goes to path 7
+    // camera 11.  Its rect is TL(850,1740) BR(875,1760), so x is its centre.
+    //
+    // y comes from the COLLISION, which is the part that decides whether this
+    // works or kills him.  Exactly one line crosses x=862 anywhere near the
+    // door: (752,1758)-(1127,1758).  Standing on it is standing in the doorway,
+    // so there is no fall, and none of the flying-cheat business the Oddysee
+    // warp needed to survive arriving at stale coordinates.
+    //
+    // Collision is per PATH, not per camera, so the single frame Abe spends at
+    // these coordinates before ScreenChange runs is already standing on that
+    // line.  Nothing to sequence.
+    //
+    // Set kBootWarpCam to 0 to boot on the spawn as before.
+    {
+        constexpr s16 kBootWarpPath = 1;
+        constexpr s16 kBootWarpCam = 22;
+        constexpr s32 kBootWarpX = 862;
+        constexpr s32 kBootWarpY = 1758;
+        if (kBootWarpCam != 0 && gAbe)
+        {
+            gAbe->mXPos = FP_FromInteger(kBootWarpX);
+            gAbe->mYPos = FP_FromInteger(kBootWarpY);
+            gMap.SetActiveCam(EReliveLevelIds::eMines, kBootWarpPath, kBootWarpCam,
+                              CameraSwapEffects::eInstantChange_0, 0, 1);
+        }
+    }
 #else
     gMap.Init(EReliveLevelIds::eMenu, 1, 25, CameraSwapEffects::eInstantChange_0, 0, 0);
 #endif
