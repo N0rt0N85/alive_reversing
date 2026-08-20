@@ -43,7 +43,6 @@ extern "C" unsigned int Tethys_gDcRaw;
 // SATURN bt1138: the decompression-destination A/B -- see the type 4/5 case.
 extern "C" const unsigned int Tethys_kDbufScratchBytes;
 extern "C" unsigned char* Tethys_gDbufScratch;
-extern "C" unsigned int Tethys_gDbufTurn;
 extern "C" unsigned int Tethys_gDbufRaw[2];
 extern "C" unsigned int Tethys_gDbufBytes[2];
 extern "C" unsigned int Tethys_gDbufFall;
@@ -413,83 +412,71 @@ void Animation::UploadTexture(const FrameHeader* pFrameHeader, const PSX_RECT& v
             if (EnsureDecompressionBuffer())
             {
 #ifdef TETHYS_SATURN
-                // SATURN (bt1138) THE HARDWARE A/B, and it is ONE POINTER. The
-                // buffer is the only thing that changes: arm 0 decompresses into
-                // the Resource_DecompressionBuffer, which in cart mode is in the
-                // cartridge (A-bus, ~4x LWRAM, no write burst); arm 1
-                // decompresses into an LWRAM scratch. The SH-2 cache is
-                // write-through with no write allocate, so every store the
-                // decoder makes is an external write and the destination's bus
-                // is the whole cost -- bt1136 proved the loop itself cannot be
-                // improved (see CompressionType_4Or5.cpp). NOT ONE INSTRUCTION
-                // differs between the arms, so Ymir must show them EQUAL; a
-                // difference on hardware is the A-bus and nothing else.
-                //   The swap is safe because it is total and local: nothing
-                // outside this switch ever reads the buffer's CONTENTS (the only
-                // other uses of field_24_dbuf are its alloc, its free and the
-                // other compression types, all in this file), and the decompress
-                // and the Upload below both take the same pointer.
-                //   bt1141: THE ARM ALTERNATES PER DECODE, and the two shapes it
-                // had before are why. bt1138 flipped a global in the vsync handler
-                // -- once per VBLANK, not once per game tick -- so at ft020 the two
-                // flips per tick cancelled and coverage came out 4.6-5.7 to 1.
-                // bt1140 keyed it to the game frame's PARITY instead, and coverage
-                // was still 2.00-2.25 to 1, because parity ALIASES WITH ANIMATION
-                // PERIOD: an anim whose frame lasts an even number of ticks decodes
-                // on the same parity forever. That is a property of the content, so
-                // no choice of per-frame counter can fix it. A per-decode counter
-                // can: consecutive decodes alternate, so every animation is split
-                // evenly across both arms whatever its period.
-                //   Per-decode switching is safe for the same reason per-frame was:
-                // the buffer is written whole and read immediately, and nothing
-                // outside this switch reads its contents.
-                //   COVERAGE IS THE PRE-FLIGHT. kA must equal kB before rA/rB mean
-                // anything -- decompression cost per byte varies 3.2x with content,
-                // so unequal arms compare different work and prove nothing.
-                //   bt1142: A THIRD ARM THAT COSTS NO RAM AT ALL -- the SAME cart
-                // buffer through the UNCACHED window (0x224xxxxx instead of
-                // 0x024xxxxx). A vs B prices cart against LWRAM; A vs C asks
-                // whether the SH-2 cache does anything for this workload at all.
-                // It should not: the cache is write-through, so the stores go
-                // external either way, and the only thing the cached window can
-                // buy is the decoder reading back bytes it just wrote. C == A
-                // means those reads miss anyway and the whole cost is the write
-                // path; C much worse than A means the cache IS carrying the read
-                // side and a placement fix must not disturb it. A memory-map fact
-                // worth more than this function.
+                // SATURN (ao240.2) THE BUFFER LIVES IN LWRAM NOW, AND THE THREE-ARM
+                // A/B THAT PUT IT THERE IS RETIRED WITH ITS ANSWER.
+                //
+                // WHAT THE ARMS MEASURED. Same decoder, same frame, the only thing
+                // differing between arms was this destination pointer: arm A the
+                // Resource_DecompressionBuffer (in cart mode, the cartridge --
+                // A-bus), arm B an LWRAM scratch, arm C the SAME cart bytes through
+                // the UNCACHED window (0x224xxxxx). Real hardware, ao240.1,
+                // 2026-08-20, 154 samples whose three coverage counts agreed inside
+                // 15 %:
+                //     rB/rA = 0.881  (0.853 .. 0.910)   LWRAM ~12 % faster
+                //     rC/rA = 1.800  (1.667 .. 1.851)   uncached ~80 % worse
+                // The second number is the interesting one and it is now in
+                // ../saturn-refs/knowledge/HW_MEMORY_AND_BUS.md: the SH-2 cache is
+                // WRITE-THROUGH, so the decoder's stores leave on the bus in both
+                // arms -- the entire 80 % is carried by its READS, i.e. the LZSS
+                // back-references re-reading the destination it just wrote. So a
+                // read-modify loop still wants a cached window even when every
+                // write is external, and a "we are only writing, the cache cannot
+                // help" argument is wrong. (That argument was mine, at bt1142.)
+                //
+                // WHY THE ARMS HAD TO EXIST AT ALL. On Ymir the same experiment
+                // read rB/rA = 1.00 and rC/rA = 1.18, i.e. "the two placements are
+                // equivalent". That is not a null result, it is an ABSENT
+                // measurement -- Ymir models the cache partially and the A-bus not
+                // at all -- and it was nearly published as a refutation.
+                //
+                // WHY THE COVERAGE CHECK WAS LOAD-BEARING, since the next A/B will
+                // want it: decompression cost per byte varies 3.2x with content, so
+                // unequal arms compare different work. Two designs died on it. A
+                // per-VBLANK flip (bt1138) cancelled itself at ft020 and gave 4.6:1.
+                // Frame PARITY (bt1140) still gave 2.25:1, because parity ALIASES
+                // WITH ANIMATION PERIOD -- an anim whose frame lasts an even number
+                // of ticks decodes on the same parity forever, which is a property
+                // of the content that no per-frame counter can fix. Only a PER
+                // DECODE counter splits every animation evenly.
+                //
+                // WHAT SHIPS. LWRAM unconditionally, whenever the frame fits the
+                // scratch. The fallback is the old cart buffer and it is counted
+                // (fb): the scratch is 32 KiB against a measured worst R1 frame of
+                // 13,104 B, and Tethys_gDbufFall read 0 on every capture it ever
+                // shipped in -- but a count that is asserted rather than measured
+                // is how bt999 died, so it keeps its column.
+                //   Sizing, so nobody expects the frame rate to move: on hardware
+                // the LZSS is ~7 ms of a frame ((dc-cp)/kw = 0.494 against cp/kw =
+                // 0.115, so it is 4.3x the copy), and 12 % of that is ~0.85 ms. It
+                // is free -- LWRAM had 632 KB idle -- and it is not the fps story.
                 u8* pDst = *field_24_dbuf;
-                s32 dbufArm = 0;
-                const u32 turn = Tethys_gDbufTurn++ % 3u;
-                if (turn == 1u && Tethys_gDbufScratch != nullptr)
+                if (Tethys_gDbufScratch != nullptr
+                    && field_28_dbuf_size <= Tethys_kDbufScratchBytes)
                 {
-                    if (field_28_dbuf_size <= Tethys_kDbufScratchBytes)
-                    {
-                        pDst = Tethys_gDbufScratch;
-                        dbufArm = 1;
-                    }
-                    else
-                    {
-                        Tethys_gDbufFall++; // arm 1 could not take this frame
-                    }
+                    pDst = Tethys_gDbufScratch;
                 }
-                else if (turn == 2u)
+                else
                 {
-                    // Only the CACHED cart window has an alias worth taking. With
-                    // no cartridge the heap is in LWRAM and is left on arm 0 --
-                    // aliasing it would measure a different region and quietly
-                    // turn the three-way back into a two-way.
-                    const u32 a = reinterpret_cast<u32>(pDst);
-                    if (a >= 0x02400000u && a < 0x02800000u)
-                    {
-                        pDst = reinterpret_cast<u8*>(a | 0x20000000u);
-                        dbufArm = 2;
-                    }
+                    Tethys_gDbufFall++; // 'fb': this frame stayed in the old buffer
                 }
                 {
+                    // ONE rate now, not three. Kept because the next hardware slot
+                    // has to see that the move actually took: r should land near
+                    // the old rB (~141) and nowhere near the old rA (~161).
                     const unsigned int t0 = Tethys_RawTicks();
                     Decompress_Type_4_5_461770(reinterpret_cast<const u8*>(&pFrameHeader->field_8_width2), pDst);
-                    Tethys_gDbufRaw[dbufArm] += Tethys_RawTicks() - t0;
-                    Tethys_gDbufBytes[dbufArm] += *reinterpret_cast<const u32*>(&pFrameHeader->field_8_width2);
+                    Tethys_gDbufRaw[0] += Tethys_RawTicks() - t0;
+                    Tethys_gDbufBytes[0] += *reinterpret_cast<const u32*>(&pFrameHeader->field_8_width2);
                 }
                 renderer.Upload(AnimFlagsToBitDepth(field_4_flags), vram_rect, pDst);
 #else
