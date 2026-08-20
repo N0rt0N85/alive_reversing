@@ -1,4 +1,7 @@
 #include "stdafx.h"
+#ifdef TETHYS_SATURN
+extern "C" u32 Tethys_AE_gAbeDoorState; // src_ae/hw/renderer_ae.cxx, overlay row 17
+#endif
 #include "Abe.hpp"
 #include "../relive_lib/Function.hpp"
 #include "Map.hpp"
@@ -6936,6 +6939,15 @@ void Abe::Motion_113_ChantEnd()
 
 void Abe::Motion_114_DoorEnter()
 {
+#ifdef TETHYS_SATURN
+    // SATURN: the door sub-state, which is private and therefore has to be
+    // published from inside.  Six states, and which one it stops on names the
+    // cause: 0/2/3 are before the camera change, 4 is the change itself, 5 is
+    // finding the target door on the NEW path -- the step that walks path 7's
+    // TLV chain and the first that could fail on data this port only shipped
+    // today -- and 6 is the 30-frame wait before he is made visible again.
+    Tethys_AE_gAbeDoorState = static_cast<u32>(field_120_state.door);
+#endif
     switch (field_120_state.door)
     {
         case AbeDoorStates::eAbeComesIn_0:

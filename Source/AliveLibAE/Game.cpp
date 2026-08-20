@@ -19,6 +19,15 @@
 #include <fstream>
 #include "../relive_lib/Events.hpp"
 #include "Abe.hpp"
+#ifdef TETHYS_SATURN
+// SATURN: src_ae/hw/renderer_ae.cxx -- overlay row 17.  See the probe in the
+// main loop for what each one answers.
+extern "C" u32 Tethys_AE_gCamSwappers;
+extern "C" u32 Tethys_AE_gGnFrame;
+extern "C" u32 Tethys_AE_gAbeMotion;
+extern "C" u32 Tethys_AE_gAbeRender;
+extern "C" u32 Tethys_AE_gAbeDoorState;
+#endif
 #include "MusicController.hpp"
 #include "../relive_lib/GameObjects/CheatController.hpp"
 #include "Slurg.hpp"
@@ -343,6 +352,32 @@ void Game_Loop()
 
         gMap.ScreenChange();
         Input().Update(GetGameAutoPlayer());
+
+#ifdef TETHYS_SATURN
+        // SATURN: the four numbers that separate a frozen ENGINE from a frozen
+        // WORLD, published one statement before the branch they are about.
+        //
+        // Crossing the path-1 door leaves the tester on the right camera with no
+        // Abe and nothing moving, and that single photograph is consistent with
+        // at least three different failures.  The line below decides between
+        // them because it sits beside the gate that causes two of them: three
+        // lines down, sGnFrame ONLY advances while gNumCamSwappers is zero, and
+        // the object loop above (Game.cpp:259) refuses to update anything for
+        // the same reason.  So a live swapper freezes every timer in the game AND
+        // every object, while the loop keeps iterating and the overlay keeps
+        // being drawn -- which looks exactly like a hang and is not one.
+        //
+        // Abe's motion says the rest.  114 is DoorEnter, whose FIRST step hides
+        // him (SetRender(false)) and whose last two wait on sGnFrame; 115 is
+        // DoorExit, i.e. he arrived and is playing the animation.  Stuck at 114
+        // with cs nonzero is the swapper; stuck at 114 with cs zero and gf
+        // climbing is his own state machine; no Abe at all is a third thing
+        // entirely, and ar separates "not drawn" from "not there".
+        Tethys_AE_gCamSwappers = static_cast<u32>(gNumCamSwappers < 0 ? 0 : gNumCamSwappers);
+        Tethys_AE_gGnFrame = static_cast<u32>(sGnFrame);
+        Tethys_AE_gAbeMotion = gAbe ? static_cast<u32>(gAbe->mCurrentMotion) : 999u;
+        Tethys_AE_gAbeRender = (gAbe && gAbe->GetAnimation().GetRender()) ? 1u : 0u;
+#endif
 
         if (gNumCamSwappers == 0)
         {
