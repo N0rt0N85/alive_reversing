@@ -933,10 +933,46 @@ void Map::GoTo_Camera()
     Create_FG1s();
     AE_MARK_RES("13c8 fg1");
 
+#ifdef TETHYS_SATURN
+    // SATURN: NO MOVIE PLAYER, SO NO MOVIE SWAPPER -- and skipping it is not an
+    // optimisation, it is what stops the whole game freezing on a door.
+    //
+    // The CameraSwapper this used to build is constructed to play an FMV and
+    // dies when the movie ends.  There is no movie on this port, so it never
+    // died -- and gNumCamSwappers is the most load-bearing counter in the
+    // engine: nonzero, it stops sGnFrame advancing (Game.cpp:347) and stops
+    // EVERY object updating (Game.cpp:259).  The loop kept running and the
+    // overlay kept drawing, so it read as a hang and was not one: Abe was frozen
+    // mid-transition in Motion_114_DoorEnter, whose first step had already hidden
+    // him.  The tester saw the right camera, no hero, and nothing moving.
+    //
+    // NOT A RARE PATH.  36 of the Mines' 59 doors carry this effect, 11 of them
+    // crossing to another path -- so this was every path change in the level,
+    // not one unlucky door.
+    //
+    // The purple-light cleanup is the swapper's DESTRUCTOR's job, and with no
+    // swapper there is no destructor.  Left undone, gMap_bDoPurpleLightEffect
+    // stays armed forever and every later screen change takes a different branch
+    // through Map::ScreenChange.  Doing it here is not tidiness, it is the other
+    // half of removing the object.
+    //
+    // Revisit when the FMV seam exists (docs/AUDIO_VIDEO_PLAN.md): the door
+    // still knows its movie id, so restoring the cutscene is re-enabling this
+    // call, not rediscovering the data.
+    if (mCameraSwapEffect == CameraSwapEffects::ePlay1FMV_5)
+    {
+        if (gMap_bDoPurpleLightEffect)
+        {
+            RemoveObjectsWithPurpleLight(0);
+            gMap_bDoPurpleLightEffect = 0;
+        }
+    }
+#else
     if (mCameraSwapEffect == CameraSwapEffects::ePlay1FMV_5)
     {
         Map::FMV_Camera_Change(field_2C_camera_array[0]->mCamRes, this, mNextLevel);
     }
+#endif
 
     if (mCameraSwapEffect == CameraSwapEffects::eUnknown_11)
     {
