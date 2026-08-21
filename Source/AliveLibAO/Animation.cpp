@@ -46,6 +46,7 @@ extern "C" unsigned char* Tethys_gDbufScratch;
 extern "C" unsigned int Tethys_gDbufRaw[2];
 extern "C" unsigned int Tethys_gDbufBytes[2];
 extern "C" unsigned int Tethys_gDbufFall;
+extern "C" unsigned int Tethys_gInAnimate; // SATURN (ao242.6): the parent split
 extern "C" unsigned int Tethys_RawTicks(void);
 
 // Fix pollution from windows.h
@@ -475,8 +476,17 @@ void Animation::UploadTexture(const FrameHeader* pFrameHeader, const PSX_RECT& v
                     // the old rB (~141) and nowhere near the old rA (~161).
                     const unsigned int t0 = Tethys_RawTicks();
                     Decompress_Type_4_5_461770(reinterpret_cast<const u8*>(&pFrameHeader->field_8_width2), pDst);
-                    Tethys_gDbufRaw[0] += Tethys_RawTicks() - t0;
-                    Tethys_gDbufBytes[0] += *reinterpret_cast<const u32*>(&pFrameHeader->field_8_width2);
+                    // SATURN (ao242.6) THE PARENT SPLIT. vDecode is reached from
+                    // AnimateAll AND from VUpdate (Set_Animation_Data_402A40,
+                    // Init_402D20), so every tick charged to [0] was charged to
+                    // the animate phase whether it happened there or not -- which
+                    // is why the a-subtree could never sum. [1] takes the
+                    // out-of-phase half; the array already had three slots and
+                    // only [0] was ever written. Both raw AND bytes are split, so
+                    // row 7's r stays a true rate over its own population.
+                    const u32 kPar = Tethys_gInAnimate ? 0u : 1u;
+                    Tethys_gDbufRaw[kPar] += Tethys_RawTicks() - t0;
+                    Tethys_gDbufBytes[kPar] += *reinterpret_cast<const u32*>(&pFrameHeader->field_8_width2);
                 }
                 renderer.Upload(AnimFlagsToBitDepth(field_4_flags), vram_rect, pDst);
 #else

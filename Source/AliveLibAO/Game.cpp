@@ -67,6 +67,14 @@ extern "C" u32 Tethys_gPhAnim;
 extern "C" u32 Tethys_gPhAnimRaw;
 extern "C" u32 Tethys_RawTicks(void);
 extern "C" u32 Tethys_gPhRend;
+// SATURN (ao242.6) the frame hierarchy -- definitions in src/sys_saturn.cxx
+extern "C" u32 Tethys_gUStamp;   // the running stamp S0..S3 differences
+extern "C" u32 Tethys_gUtRaw;    // uT tail | uA loop A | uB loop B
+extern "C" u32 Tethys_gUaRaw;
+extern "C" u32 Tethys_gUbRaw;
+extern "C" u32 Tethys_gScrRaw;   // vs  ScreenManager::VRender
+extern "C" u32 Tethys_gDrawWalk; // n   drawables walked
+extern "C" u32 Tethys_gInAnimate;// the parent flag for Upload's two callers
 // SATURN (bt1030): pu owns the possession spike -- 25 ms of a 47 ms worst
 // tick against 4 ms quiet -- and pu is one number over the whole object list.
 // These three split it WITHOUT summing anything: the single most expensive
@@ -495,6 +503,13 @@ EXPORT void CC Game_Loop_437630()
 
         // Update objects
         GetGameAutoPlayer().SyncPoint(SyncPoints::ObjectsUpdateStart);
+#ifdef TETHYS_SATURN
+        {   // SATURN (ao242.6) S1: uT closes, uA opens
+            const u32 tS1 = Tethys_RawTicks();
+            Tethys_gUtRaw += tS1 - Tethys_gUStamp;
+            Tethys_gUStamp = tS1;
+        }
+#endif
         for (s32 i = 0; i < gBaseGameObject_list_9F2DF0->Size(); i++)
         {
             BaseGameObject* pObjIter = gBaseGameObject_list_9F2DF0->ItemAt(i);
@@ -503,7 +518,15 @@ EXPORT void CC Game_Loop_437630()
                 break;
             }
 
-            Tethys_gVuList++; // SATURN: bt1125 objects EXAMINED (see the head)
+            // SATURN (ao242.6): the per-iteration `Tethys_gVuList++` is GONE from
+            // here. It was ~250 write-through stores a tick -- every one an
+            // external bus cycle on this CPU -- INSIDE the very loop uA now
+            // measures, i.e. a counter that had become a term in the number it
+            // was about to be divided into. It is replaced by one add at each
+            // loop's exit. The meaning shifts from "objects examined" to "list
+            // length", which are identical unless the `break` on a null ItemAt
+            // fires -- and DynamicArray's RemoveAt swap-with-last invariant
+            // forbids a null before Size().
             if (pObjIter->field_6_flags.Get(BaseGameObject::eUpdatable_Bit2) && !pObjIter->field_6_flags.Get(BaseGameObject::eDead_Bit3) && (sNumCamSwappers_507668 == 0 || pObjIter->field_6_flags.Get(BaseGameObject::eUpdateDuringCamSwap_Bit10)))
             {
                 if (pObjIter->field_8_update_delay > 0)
@@ -539,10 +562,17 @@ EXPORT void CC Game_Loop_437630()
             }
         }
 
+#ifdef TETHYS_SATURN
+        {   // SATURN (ao242.6) S2: uA closes, uB opens
+            const u32 tS2 = Tethys_RawTicks();
+            Tethys_gUaRaw += tS2 - Tethys_gUStamp;
+            Tethys_gUStamp = tS2;
+            Tethys_gVuList += (u32) gBaseGameObject_list_9F2DF0->Size();
+        }
+#endif
         for (s32 i = 0; i < gLoadingFiles->Size(); i++)
         {
             BaseGameObject* pObjIter = gLoadingFiles->ItemAt(i);
-            Tethys_gVuList++; // SATURN: bt1125 objects EXAMINED (see the head)
             if (pObjIter->field_6_flags.Get(BaseGameObject::eUpdatable_Bit2) && !pObjIter->field_6_flags.Get(BaseGameObject::eDead_Bit3) && (sNumCamSwappers_507668 == 0 || pObjIter->field_6_flags.Get(BaseGameObject::eUpdateDuringCamSwap_Bit10)))
             {
                 if (pObjIter->field_8_update_delay > 0)
@@ -563,6 +593,13 @@ EXPORT void CC Game_Loop_437630()
             }
         }
 
+#ifdef TETHYS_SATURN
+        {   // SATURN (ao242.6) S3: uB closes. u - uT - uA - uB is the while
+            // back-edge and must read <= 2 tenths of a ms.
+            Tethys_gUbRaw += Tethys_RawTicks() - Tethys_gUStamp;
+            Tethys_gVuList += (u32) gLoadingFiles->Size();
+        }
+#endif
         GetGameAutoPlayer().SyncPoint(SyncPoints::ObjectsUpdateEnd);
 
 #ifdef TETHYS_SATURN
@@ -629,6 +666,15 @@ EXPORT void CC Game_Loop_437630()
 #endif
 
         // Animate everything
+        // SATURN (ao242.6) sTethysInAnimate -- THE PARENT FLAG, and without it the
+        // frame hierarchy cannot sum. Upload (and through it the texel copy and the
+        // LZSS) has TWO parents: AnimateAll here, and VUpdate via
+        // Set_Animation_Data_402A40 / Init_402D20. Every raw tick either of them
+        // spends has until now been added to one accumulator, so `a` was credited
+        // with work that happened inside `u` and the a-subtree could never close.
+        // One byte, set and cleared TWICE PER TICK -- never per call, never in a
+        // loop -- routes each sample to its real parent.
+        Tethys_gInAnimate = 1;
         const u32 tAnimRaw0 = Tethys_RawTicks(); // SATURN: bt1134
         if (sNumCamSwappers_507668 <= 0)
         {
@@ -637,6 +683,7 @@ EXPORT void CC Game_Loop_437630()
         }
 
 #ifdef TETHYS_SATURN
+        Tethys_gInAnimate = 0; // SATURN (ao242.6): back under `u`'s parentage
         Tethys_gPhAnim += SYS_GetTicks() - tPhase0;
         Tethys_gPhAnimRaw += Tethys_RawTicks() - tAnimRaw0; // SATURN: bt1134
         tPhase0 = SYS_GetTicks();
@@ -646,8 +693,13 @@ EXPORT void CC Game_Loop_437630()
         PrimHeader** ppOt = gPsxDisplay_504C78.field_C_drawEnv[gPsxDisplay_504C78.field_A_buffer_index].field_70_ot_buffer;
 
         GetGameAutoPlayer().SyncPoint(SyncPoints::DrawAllStart);
-        for (s32 i = 0; i < gObjList_drawables_504618->Size(); i++)
+        // SATURN (ao242.6): `i` is hoisted so the walk can be counted ONCE at the
+        // loop exit. This list is the only one in the render phase that has never
+        // had a trip counter, and `v` cannot be divided without one.
+        s32 iDraw = 0;
+        for (iDraw = 0; iDraw < gObjList_drawables_504618->Size(); iDraw++)
         {
+            const s32 i = iDraw;
             BaseGameObject* pDrawable = gObjList_drawables_504618->ItemAt(i);
             if (!pDrawable)
             {
@@ -665,10 +717,24 @@ EXPORT void CC Game_Loop_437630()
             }
         }
         GetGameAutoPlayer().SyncPoint(SyncPoints::DrawAllEnd);
+#ifdef TETHYS_SATURN
+        Tethys_gDrawWalk += (u32) iDraw; // SATURN (ao242.6): one add, at the exit
+#endif
 
         DebugFont_Flush_487F50();
         PSX_DrawSync_496750(0);
+#ifdef TETHYS_SATURN
+        {   // SATURN (ao242.6) 'vs': ScreenManager::VRender loops a FIXED 300
+            // times regardless of what the screen actually holds, so it is a
+            // constant floor under every render phase and it has never been
+            // priced. A CALL boundary, one execution a tick.
+            const u32 tScr0 = Tethys_RawTicks();
+            pScreenManager_4FF7C8->VRender(ppOt);
+            Tethys_gScrRaw += Tethys_RawTicks() - tScr0;
+        }
+#else
         pScreenManager_4FF7C8->VRender(ppOt);
+#endif
         SYS_EventsPump_44FF90();
 
 #ifdef TETHYS_SATURN
@@ -682,6 +748,14 @@ EXPORT void CC Game_Loop_437630()
         // Re-armed AFTER the OT render, so the next lap's pu measures only the
         // update loops and never the walk (pw already owns that).
         tPhase0 = SYS_GetTicks(); // SATURN (bt1012)
+        // SATURN (ao242.6) S0 -- `u` starts HERE, one lap early, because the
+        // accumulator is armed after the OT render and closes after the update
+        // loops. Three more stamps partition it into the tail (destroy loop,
+        // pause, ScreenChange, Input), loop A (the VUpdate list) and loop B
+        // (gLoadingFiles -- the synchronous-CD suspect). Stamps, not nested
+        // brackets: four RawTicks reads a tick, and every span is a difference of
+        // two of them, so no span can double-count another.
+        Tethys_gUStamp = Tethys_RawTicks();
 #endif
 
         GetGameAutoPlayer().SyncPoint(SyncPoints::RenderStart);
