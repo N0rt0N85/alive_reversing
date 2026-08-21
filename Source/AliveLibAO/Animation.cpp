@@ -48,6 +48,9 @@ extern "C" unsigned int Tethys_gDbufBytes[2];
 extern "C" unsigned int Tethys_gDbufFall;
 extern "C" unsigned int Tethys_gInAnimate; // SATURN (ao242.6): the parent split
 extern "C" unsigned int Tethys_RawTicks(void);
+// SATURN (ao242.13) the probe gate -- see src/renderer_saturn.cxx.
+extern "C" unsigned char Tethys_gProbeOn;
+#define TETHYS_PT() (Tethys_gProbeOn ? Tethys_RawTicks() : 0u)
 
 // Fix pollution from windows.h
 #undef min
@@ -474,7 +477,7 @@ void Animation::UploadTexture(const FrameHeader* pFrameHeader, const PSX_RECT& v
                     // ONE rate now, not three. Kept because the next hardware slot
                     // has to see that the move actually took: r should land near
                     // the old rB (~141) and nowhere near the old rA (~161).
-                    const unsigned int t0 = Tethys_RawTicks();
+                    const unsigned int t0 = TETHYS_PT();
                     Decompress_Type_4_5_461770(reinterpret_cast<const u8*>(&pFrameHeader->field_8_width2), pDst);
                     // SATURN (ao242.6) THE PARENT SPLIT. vDecode is reached from
                     // AnimateAll AND from VUpdate (Set_Animation_Data_402A40,
@@ -485,7 +488,7 @@ void Animation::UploadTexture(const FrameHeader* pFrameHeader, const PSX_RECT& v
                     // only [0] was ever written. Both raw AND bytes are split, so
                     // row 7's r stays a true rate over its own population.
                     const u32 kPar = Tethys_gInAnimate ? 0u : 1u;
-                    Tethys_gDbufRaw[kPar] += Tethys_RawTicks() - t0;
+                    Tethys_gDbufRaw[kPar] += TETHYS_PT() - t0;
                     Tethys_gDbufBytes[kPar] += *reinterpret_cast<const u32*>(&pFrameHeader->field_8_width2);
                 }
                 renderer.Upload(AnimFlagsToBitDepth(field_4_flags), vram_rect, pDst);
@@ -921,9 +924,9 @@ void CC AnimationBase::AnimateAll_4034F0(DynamicArrayT<AnimationBase>* pAnimList
                 {
                     Tethys_gAnDecode++; // SATURN: bt1128 census
                     {
-                        const unsigned int tDc0 = Tethys_RawTicks(); // SATURN bt1135
+                        const unsigned int tDc0 = TETHYS_PT(); // SATURN bt1135
                         pAnim->vDecode();
-                        Tethys_gDcRaw += Tethys_RawTicks() - tDc0;
+                        Tethys_gDcRaw += TETHYS_PT() - tDc0;
                     }
                 }
             }

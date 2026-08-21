@@ -66,6 +66,27 @@ extern "C" u32 Tethys_gPhAnim;
 // and it is in ms.
 extern "C" u32 Tethys_gPhAnimRaw;
 extern "C" u32 Tethys_RawTicks(void);
+// SATURN (ao242.13) THE PROBE GATE -- see the banner in src/renderer_saturn.cxx.
+// START+L now stops the instrument, not just its display, so the frame the
+// tester records with the overlay off is the frame the GAME costs. A macro, not
+// a static inline: bt1136 measured `static inline` not being inlined at -Os.
+extern "C" u8 Tethys_gProbeOn;
+#define TETHYS_PT() (Tethys_gProbeOn ? Tethys_RawTicks() : 0u)
+// SATURN (ao242.13) `d` IS THE LAST UNSPLIT NODE IN THE FRAME, and on c8 it is
+// the biggest: 11.8 ms of a 57.8 ms tick for 26 drawables, 0.45 ms each, with no
+// column able to say whether that is one expensive object or twenty-six ordinary
+// ones. ao242.12 gated ScreenManager::VRender off, so `v` IS `d` now -- the two
+// columns row 21 used to spend on `s` and on the dropped-Sprts count are free,
+// and they are worth more spent naming who is inside it.
+//   Cost: ONE bracket per drawable, and bt1055 is the rule it has to answer to.
+// bt1055 forbade a per-iteration counter in the VUpdate loop because that loop
+// runs ~250 times a tick for a few cycles apiece; this one runs 15-26 times for
+// ~450,000 cycles apiece. 26 pairs at the measured K = 0.49 raw ticks is 12.7
+// ticks = 0.06 ms against 11.8 -- 0.5%, and it is switched off with the rest.
+//   The table is indexed by AO type id (0..103, BaseGameObject::Types is s16) and
+// reset per SCREEN with everything else on rows 16-22, bt1007/bt1008: a boot
+// cumulative on a per-screen row reports the past forever.
+extern "C" u32 Tethys_gDrawByType[128];
 extern "C" u32 Tethys_gPhRend;
 // SATURN (ao242.6) the frame hierarchy -- definitions in src/sys_saturn.cxx
 extern "C" u32 Tethys_gUStamp;   // the running stamp S0..S3 differences
@@ -505,7 +526,7 @@ EXPORT void CC Game_Loop_437630()
         GetGameAutoPlayer().SyncPoint(SyncPoints::ObjectsUpdateStart);
 #ifdef TETHYS_SATURN
         {   // SATURN (ao242.6) S1: uT closes, uA opens
-            const u32 tS1 = Tethys_RawTicks();
+            const u32 tS1 = TETHYS_PT();
             Tethys_gUtRaw += tS1 - Tethys_gUStamp;
             Tethys_gUStamp = tS1;
         }
@@ -564,7 +585,7 @@ EXPORT void CC Game_Loop_437630()
 
 #ifdef TETHYS_SATURN
         {   // SATURN (ao242.6) S2: uA closes, uB opens
-            const u32 tS2 = Tethys_RawTicks();
+            const u32 tS2 = TETHYS_PT();
             Tethys_gUaRaw += tS2 - Tethys_gUStamp;
             Tethys_gUStamp = tS2;
             Tethys_gVuList += (u32) gBaseGameObject_list_9F2DF0->Size();
@@ -596,7 +617,7 @@ EXPORT void CC Game_Loop_437630()
 #ifdef TETHYS_SATURN
         {   // SATURN (ao242.6) S3: uB closes. u - uT - uA - uB is the while
             // back-edge and must read <= 2 tenths of a ms.
-            Tethys_gUbRaw += Tethys_RawTicks() - Tethys_gUStamp;
+            Tethys_gUbRaw += TETHYS_PT() - Tethys_gUStamp;
             Tethys_gVuList += (u32) gLoadingFiles->Size();
         }
 #endif
@@ -675,7 +696,7 @@ EXPORT void CC Game_Loop_437630()
         // One byte, set and cleared TWICE PER TICK -- never per call, never in a
         // loop -- routes each sample to its real parent.
         Tethys_gInAnimate = 1;
-        const u32 tAnimRaw0 = Tethys_RawTicks(); // SATURN: bt1134
+        const u32 tAnimRaw0 = TETHYS_PT(); // SATURN: bt1134 (ao242.13: gated)
         if (sNumCamSwappers_507668 <= 0)
         {
             GetGameAutoPlayer().SyncPoint(SyncPoints::AnimateAll);
@@ -685,7 +706,7 @@ EXPORT void CC Game_Loop_437630()
 #ifdef TETHYS_SATURN
         Tethys_gInAnimate = 0; // SATURN (ao242.6): back under `u`'s parentage
         Tethys_gPhAnim += SYS_GetTicks() - tPhase0;
-        Tethys_gPhAnimRaw += Tethys_RawTicks() - tAnimRaw0; // SATURN: bt1134
+        Tethys_gPhAnimRaw += TETHYS_PT() - tAnimRaw0; // SATURN: bt1134
         tPhase0 = SYS_GetTicks();
 #endif
 
@@ -713,7 +734,27 @@ EXPORT void CC Game_Loop_437630()
             else if (pDrawable->field_6_flags.Get(BaseGameObject::eDrawable_Bit4))
             {
                 pDrawable->field_6_flags.Set(BaseGameObject::eCantKill_Bit11);
+#ifdef TETHYS_SATURN
+                // SATURN (ao242.13): the `d` probe -- see the head of the file.
+                // The whole bracket, table lookup included, is behind the gate,
+                // so with the overlay off this is one predicted-not-taken branch.
+                if (Tethys_gProbeOn)
+                {
+                    const u32 tD0 = Tethys_RawTicks();
+                    pDrawable->VRender(ppOt);
+                    // & 127 never collides: AO Types run 0..103 (eElectrocute_103
+                    // is the last), so the mask is a bound, not a hash.
+                    Tethys_gDrawByType[static_cast<u32>(
+                        static_cast<s32>(pDrawable->field_4_typeId)) & 127u]
+                        += Tethys_RawTicks() - tD0;
+                }
+                else
+                {
+                    pDrawable->VRender(ppOt);
+                }
+#else
                 pDrawable->VRender(ppOt);
+#endif
             }
         }
         GetGameAutoPlayer().SyncPoint(SyncPoints::DrawAllEnd);
@@ -728,9 +769,9 @@ EXPORT void CC Game_Loop_437630()
             // times regardless of what the screen actually holds, so it is a
             // constant floor under every render phase and it has never been
             // priced. A CALL boundary, one execution a tick.
-            const u32 tScr0 = Tethys_RawTicks();
+            const u32 tScr0 = TETHYS_PT();
             pScreenManager_4FF7C8->VRender(ppOt);
-            Tethys_gScrRaw += Tethys_RawTicks() - tScr0;
+            Tethys_gScrRaw += TETHYS_PT() - tScr0;
         }
 #else
         pScreenManager_4FF7C8->VRender(ppOt);
@@ -755,7 +796,7 @@ EXPORT void CC Game_Loop_437630()
         // (gLoadingFiles -- the synchronous-CD suspect). Stamps, not nested
         // brackets: four RawTicks reads a tick, and every span is a difference of
         // two of them, so no span can double-count another.
-        Tethys_gUStamp = Tethys_RawTicks();
+        Tethys_gUStamp = TETHYS_PT();
 #endif
 
         GetGameAutoPlayer().SyncPoint(SyncPoints::RenderStart);
