@@ -356,6 +356,37 @@ void ScreenManager::VRender_406A60(PrimHeader** ppOt)
 
     PSX_DrawSync_496750(0);
 
+#ifdef TETHYS_SATURN
+    // SATURN (ao242.12) THE PSX DIRTY-RECTANGLE RECOMPOSITION IS DEAD WEIGHT HERE,
+    // and it was the most expensive dead weight in the frame.
+    //
+    // WHAT THIS LOOP IS. On PSX the background is a 640x240 area of the frame
+    // buffer and damaged 32x16 tiles are re-blitted every frame as sprites: 300
+    // tiles (20 x 15), five dirty-bit sets tested per tile, two OT primitives
+    // added per surviving tile. On Saturn the background is not a frame buffer at
+    // all -- it is a VDP2 NBG1 bitmap uploaded once per screen by
+    // Tethys_UploadCamBlob and displayed whole -- so there is nothing to repair.
+    //
+    // WHAT IT COST, measured (docs/FRAME_BUDGET.md, ao242.11, real hardware):
+    // 3.3-3.8 ms of EVERY tick of EVERY screen, and largest on the emptiest one.
+    // On a screen drawing two textured rects it was 3.8 of the 4.5 ms render
+    // phase -- 84 %. It then costs a second time: the primitives it emits are
+    // walked in the ordering table before SaturnRenderer::Draw(Prim_Sprt&)
+    // recognises them by their modal tpage and discards them ("the VDP2 CAM is
+    // displayed whole, these are pure duplication"). That discard is the `p`
+    // column, 111-170 a tick on every screen including the two-rect one.
+    //
+    // WHY SKIPPING IT CANNOT CHANGE A PIXEL. The renderer already threw every one
+    // of these primitives away, so not producing them is an identity rather than
+    // an approximation. And the state they read is write-only otherwise: grepping
+    // AO for field_58_20x16_dirty_bits finds initialisers, memsets and SetTile --
+    // this loop is the ONLY reader in the codebase.
+    //
+    // The bookkeeping below (sub_406FF0's index rotation, the OR, the memset) is
+    // deliberately KEPT. It is ~40 stores, it holds the invariant that a future
+    // reader would need, and removing state is not what this change is for.
+    if (false)
+#endif
     for (s32 i = 0; i < 300; i++)
     {
         SprtTPage* pSpriteTPage = &field_18_screen_sprites[i];
