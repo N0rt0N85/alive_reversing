@@ -178,17 +178,51 @@ enum PauseMenuPages
     eQuit_3 = 3
 };
 
+#ifdef TETHYS_SATURN
+// SATURN (ao261.22): the save-result banner.  0 = nothing to show, 1 = saved,
+// 2 = failed.  File-scope rather than a PauseMenu field because the struct has
+// ALIVE_ASSERT_SIZEOF over it and there is exactly one pause menu.
+static s16 sTethysSaveMsg = 0;
+static s16 sTethysSaveHold = 0;
+#endif
+
 void PauseMenu::VUpdate_44DFB0()
 {
 #ifdef TETHYS_SATURN
-    // SATURN: sFontContext_4FFD68's atlas is loaded only by the Menu
-    // (MainMenu.cpp:730), which the menu-less boot (P3_DESIGN D10) never
-    // runs -- entering the pause modal would DrawString through a null
-    // field_8_atlas_array. Keep the PauseMenu (created by Factory_AbeStart)
-    // inert until S8 loads the font at boot.
+    // SATURN (bt1071): sFontContext_4FFD68's atlas is loaded only by the Menu
+    // (MainMenu.cpp:730), which the menu-less boot never runs. Load it lazily
+    // on the FIRST pause: by now the R1 archive is open, LoadResourceFile_455270
+    // registers the font globally (a null camera is tolerated), and LoadFontType
+    // uploads it then frees it. One blocking CD read on that first pause; the
+    // atlas then stays resident in VRAM for the session. Try once: if the font
+    // is genuinely absent the menu stays inert rather than re-reading every
+    // frame.
+    //
+    // FONT CHOICE -- id 1 (MENU.FNT), the real menu font: the pause menu must
+    // match the PSX original, not the LCD marquee face. The earlier "id 1
+    // overflows DrawString_41C360's s8 UV" reasoning was WRONG on two counts:
+    // (1) the menu font is exactly 256x256 = one full PSX texture page, so the
+    // allocator keeps it page-aligned (rect.x&0x3F == 0 and rect.y&0xFF == 0)
+    // and texture_u/v never exceed 255; (2) even where a wrap could occur, the
+    // s8 store + u8 read-back in the renderer round-trips losslessly. The menu
+    // font is the SAFEST case, not the hardest -- the LCDFONT switch (ao261)
+    // was a wrong fix for a non-bug and is reverted here.
     if (!sFontContext_4FFD68.field_8_atlas_array)
     {
-        return;
+        static s16 sTethysMenuFontTried = 0;
+        if (!sTethysMenuFontTried)
+        {
+            sTethysMenuFontTried = 1;
+            if (ResourceManager::LoadResourceFile_455270("MENU.FNT", nullptr))
+            {
+                sFontContext_4FFD68.LoadFontType_41C040(1);
+                sFontLoaded_507688 = 1;
+            }
+        }
+        if (!sFontContext_4FFD68.field_8_atlas_array)
+        {
+            return;
+        }
     }
 #endif
     if (Input().IsAnyHeld(InputCommands::ePause))
@@ -390,7 +424,27 @@ void PauseMenu::VUpdate_44DFB0()
                             }
                             else
                             {
+#ifdef TETHYS_SATURN
+                                // SATURN (ao261.22): TELL THE PLAYER WHETHER IT
+                                // WORKED.  The original discards this return
+                                // because on PC a failed fopen means a broken
+                                // installation; on a console it is the ORDINARY
+                                // case -- no backup RAM fitted, an unformatted
+                                // device, or 32 KB already full of other games'
+                                // saves.  Without feedback the menu simply
+                                // closed and a silent failure looked exactly
+                                // like a success.
+                                const Bool32 saved =
+                                    SaveGame::SaveToFile_45A110(&saveNameBuffer_5080C6.characters[2]);
+                                sTethysSaveMsg = saved ? 1 : 2;
+                                sTethysSaveHold = 90; // ~3 s at 30 fps
+                                if (!saved)
+                                {
+                                    SFX_Play_43AD70(SoundEffect::ElectricZap_46, 0, 0);
+                                }
+#else
                                 SaveGame::SaveToFile_45A110(&saveNameBuffer_5080C6.characters[2]);
+#endif
                                 field_12C = 5;
                                 field_12A = 13;
                                 field_122 = 120;
@@ -398,6 +452,19 @@ void PauseMenu::VUpdate_44DFB0()
                         }
                         else if (field_12C == 5)
                         {
+#ifdef TETHYS_SATURN
+                            // Hold the result on screen before the menu closes.
+                            // Any confirm/cancel button cuts it short, so a
+                            // player who has read it never waits out the timer.
+                            if (sTethysSaveHold > 0
+                                && !Input().IsAnyHeld(InputCommands::eBack | InputCommands::eUnPause_OrConfirm | InputCommands::eThrowItem | InputCommands::eDoAction))
+                            {
+                                sTethysSaveHold--;
+                                break;
+                            }
+                            sTethysSaveMsg = 0;
+                            sTethysSaveHold = 0;
+#endif
                             field_11C = 0;
                             SFX_Play_43AE60(SoundEffect::PossessEffect_21, 40, 2400, 0);
                             SND_Restart_476340();
@@ -594,8 +661,25 @@ PauseMenu::PauseEntry quitEntries_4CDEA8[3] = {
 
 PauseMenu::PauseEntry saveEntries_4CDED0[4] = {
     {184, 120, "DUMMY_TEXT", 128u, 16u, 255u, '\x01'},
+#ifdef TETHYS_SATURN
+    // SATURN: "enter"/"esc" are PC keyboard labels that do not exist on the pad.
+    // Use the ENGINE'S OWN control bytes rather than hard-coded letters: every
+    // entry string is run through String_FormatString_450DC0 (DrawEntries:728),
+    // which substitutes kAO_ConfirmContinue / kAO_Esc via Input_GetButtonString
+    // -> our Saturn table (src/sys_saturn.cxx:3652-3666). So these render "B" and
+    // "Y" and they FOLLOW THE PAD MAPPING -- remap the pad and the label moves
+    // with it, instead of drifting into a lie the way the hard-coded "B save /
+    // C cancel" pair did the moment eBack left C.
+    //   (The earlier note here claimed these glyphs "draw Cross/Triangle". That
+    // was wrong twice over: the Euro atlas holds lettered oval keycaps A..H, not
+    // PSX button art -- and the formatter substitutes them before the font ever
+    // sees them, so no glyph is drawn at all.)
+    {184, 180, kAO_ConfirmContinue "   save", 160u, 160u, 160u, '\x01'},
+    {184, 205, kAO_Esc "   cancel", 160u, 160u, 160u, '\x01'},
+#else
     {184, 180, "enter   save", 160u, 160u, 160u, '\x01'},
     {184, 205, "esc   cancel", 160u, 160u, 160u, '\x01'},
+#endif
     {0, 0, nullptr, 0u, 0u, 0u, '\0'}};
 
 PauseMenu::PauseEntry controlsPageOne_4CDF00[17] = {
@@ -815,7 +899,51 @@ void PauseMenu::VRender_44E6F0(PrimHeader** ppOt)
         }
         case PauseMenuPages::eSave_1:
         {
+#ifdef TETHYS_SATURN
+            // SATURN (ao261.22): the save-result banner, drawn over the page
+            // for the hold set in VUpdate.  Green-ish for success, red for
+            // failure -- the tint is the SetRGB0 modulation of the font's grey
+            // ramp, so these are the actual on-screen colours, not names.
+            //
+            // ao261.24 -- IT MUST BE DRAWN *FIRST*, AND ITS polyOffset FED TO
+            // DrawEntries.  ao261.22/.23 drew it AFTER DrawEntries and passed a
+            // literal polyOffset of 0, which is not a cosmetic slip: the font
+            // owns ONE prim pool of 175 entries (ctor_41C170 at line 76) and
+            // polyOffset is the bump cursor into it.  Restarting at 0 re-issued
+            // prims that DrawEntries had already linked into the ordering table
+            // this frame, and adding an already-linked PrimHeader to an OT
+            // bucket closes a LOOP in the tag chain.  The renderer's walk then
+            // ran until its 100,000-step cap and died on "OT walk runaway
+            // (cyclic tag chain)" -- the fatal the tester photographed the
+            // moment they pressed save.  The cap did its job; the caller was
+            // wrong.  DrawEntries returns void, so the only ordering that can
+            // thread the cursor correctly is banner-then-entries.
+            s32 savePolyOffset = 0;
+            if (sTethysSaveMsg)
+            {
+                const char_type* msg = (sTethysSaveMsg == 1) ? "SAVED" : "SAVE FAILED";
+                const u8 r = (sTethysSaveMsg == 1) ? 96u : 255u;
+                const u8 g = (sTethysSaveMsg == 1) ? 255u : 64u;
+                const u8 b = (sTethysSaveMsg == 1) ? 96u : 64u;
+                savePolyOffset = field_E4_font.DrawString_41C360(
+                    ppOt,
+                    msg,
+                    static_cast<s16>(184 - field_E4_font.MeasureWidth_41C2B0(msg) / 2),
+                    150,
+                    TPageAbr::eBlend_0,
+                    1,
+                    0,
+                    Layer::eLayer_Menu_41,
+                    r, g, b,
+                    0,
+                    FP_FromInteger(1),
+                    640,
+                    0);
+            }
+            DrawEntries(ppOt, &saveEntries_4CDED0[0], -1, savePolyOffset);
+#else
             DrawEntries(ppOt, &saveEntries_4CDED0[0], -1);
+#endif
             break;
         }
         case PauseMenuPages::eControls_2:

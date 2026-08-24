@@ -84,6 +84,13 @@ void Map_ForceLink()
 
 ALIVE_VAR(1, 0x507C98, Camera*, sCameraBeingLoaded_507C98, nullptr);
 
+#ifdef TETHYS_SATURN
+// SATURN (bt1071): the real save-blob length, measured by SaveBlyData_446900 and
+// read by SaveGame::SaveToFile to truncate the on-device save.  Defined in
+// SaveGame.cpp (extern "C" volatile u32 Tethys_gSaveBlobLen = 0).
+extern "C" volatile u32 Tethys_gSaveBlobLen;
+#endif
+
 const OverlayRecords kOverlays = {
     {{"\\S1.OVL;1", 5205u},
      {"\\S1.LVL;1", 5207u},
@@ -979,6 +986,15 @@ void Map::SaveBlyData_446900(u8* pSaveBuffer)
             }
         }
     }
+
+#ifdef TETHYS_SATURN
+    // SATURN (bt1071): publish the real blob length (256 switch-states + 2 bytes
+    // per TLV) so the save path can truncate the struct instead of shipping all
+    // 8,192 bytes.  The zeroing of the tail happens in SaveToMemory_459490
+    // (which owns the SaveData and computes the hash right after this call);
+    // this site only measures.  RestoreBlyData reads exactly these bytes back.
+    Tethys_gSaveBlobLen = static_cast<u32>(pAfterSwitchStates - pSaveBuffer);
+#endif
 }
 
 void Map::RestoreBlyData_446A90(const u8* pSaveData)

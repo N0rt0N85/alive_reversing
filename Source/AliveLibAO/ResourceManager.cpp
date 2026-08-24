@@ -522,8 +522,14 @@ extern "C" u32 Tethys_FlipRecKb()
 // exactly which camera overflowed -- the input to deciding critical-path
 // (asset reduction) vs skippable. The stuck file's sector count is already on
 // overlay row 5 (q/st/sz), so it is not re-formatted here (keeps .text down).
+extern "C" void Tethys_WedgeCensus(void);
+
 static void Tethys_WedgeFatal()
 {
+    // ao261.24b: print the occupant list FIRST, while the heap is still intact
+    // -- Tethys_Fatal cannot do it (bt815) and the overlay is no longer on to
+    // do it by accident. See the block at Tethys_WedgeCensus in sys_saturn.cxx.
+    Tethys_WedgeCensus();
     static char_type msg[40];
     char_type* p = msg;
     for (const char_type* s = "LWRAM wedge "; *s; s++)
@@ -652,7 +658,19 @@ public:
                         // the next Slig screen re-stages its set once, into
                         // the ~300 K that just opened. Three passes because
                         // one list walk does not fully compact.
-                        if (Tethys_gState0Retries == 10)
+                        // ao261.24: RETRY THE RELEASE, do not fire it once.
+                        // bt1053 wrote this as `== 10`, so a heap that was still
+                        // fragmenting -- or that freed something a few frames
+                        // later -- got exactly ONE pressure release out of the
+                        // 600 retries before the fatal. The no-cart main menu
+                        // (new in ao261.21, and the configuration with the
+                        // smallest heap by 1.5 MB) is the first caller to spend
+                        // all 600. Six attempts instead of one, at 10/110/.../510.
+                        // This is a MITIGATION and is labelled as one: if the
+                        // menu's working set genuinely exceeds the no-cart heap,
+                        // no amount of compaction changes that and the death
+                        // screen's occupant list is what settles it.
+                        if (Tethys_gState0Retries % 100 == 10)
                         {
                             Tethys_ReleaseStickyResources();
                             const s16 savedPending = sResources_Pending_Loading_9F0E38;
