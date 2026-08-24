@@ -216,6 +216,11 @@ ALIVE_VAR(1, 0x4D0228, s16, sListCount_4D0228, -1);
 
 // The total number of valid controllers - includes the keyboard as well
 ALIVE_VAR(1, 0x4CE598, s32, sAvailableControllers_4CE598, 0);
+#ifdef TETHYS_SATURN
+// SATURN (ao261.29): the cart-heap size, 0 when no RAM cart is present.
+// Defined in src/main.cxx.
+extern "C" volatile u32 Tethys_gCartHeapBytes;
+#endif
 ALIVE_VAR(1, 0x5079A4, s32, gJoystickAvailable_5079A4, 0);
 
 ALIVE_VAR(1, 0x9F2DDC, s32, sSelectedSaveIdx_9F2DDC, 0);
@@ -839,7 +844,22 @@ Menu* Menu::ctor_47A6F0(Path_TLV* /*pTlv*/, s32 tlvInfo)
             pFrameHeader->field_0_clut_offset);
     }
 
+#ifdef TETHYS_SATURN
+    // SATURN (ao261.22): ONE controller exists on this machine, so the
+    // controller-select screen has nothing to select. The PC offers
+    // "Keyboard" / "Gamepad"; the Saturn has a pad and no keyboard, and our
+    // Input_JoyStickEnabled() is a compile-time `return true`
+    // (src/sys_saturn.cxx), so the keyboard entry was an option that could be
+    // highlighted, could not be chosen, and would have been a lie if it could.
+    //   1 makes the list one row long: the guards at MainMenu.cpp:2434 and
+    // :3063 both compare against this count, so the keyboard row is simply
+    // never drawn and the up/down navigation has nowhere to go. No screen is
+    // removed -- the page still renders and still exits on eBack -- which keeps
+    // the menu graph identical to the original's and touches no other page.
+    sAvailableControllers_4CE598 = 1;
+#else
     sAvailableControllers_4CE598 = (gJoystickAvailable_5079A4 != 0) + 1;
+#endif
 
     return this;
 }
@@ -988,7 +1008,31 @@ void Menu::AbePopThroughDoor_47B620()
         field_1DC_idle_input_counter = 0;
         ResourceManager::FreeResource_455550(field_E4_res_array[2]);
         field_E4_res_array[2] = nullptr;
+#ifdef TETHYS_SATURN
+        // SATURN (ao261.29): WITHOUT A CART THIS REQUEST CANNOT BE SERVED, AND
+        // ASKING IS THE FATAL. ABESPEAK.BAN is a single Anim chunk of 682,996 B
+        // that LoadingFile must stage as ONE contiguous 684,032 B block -- 72.3%
+        // of the entire 945,616 B no-cart resource heap, against roughly
+        // 673,012 B of free space. It is short by about 11,020 B: 1.17% of the
+        // heap. That is a CAPACITY wall, not fragmentation, which is why six
+        // rounds of compaction changed nothing (and why the ao261.24 sticky
+        // release was inert here -- it matches no file the menu holds).
+        //   The fatal has also been NAMING THE WRONG FILE all along: it prints
+        // the latched camera (S1P01C01.CAM), which never goes through
+        // LoadingFile on Saturn. The file that wedges is this one.
+        //   Buying the 11 KB is not worth doing -- the configuration would sit
+        // at 101% occupancy even after the block landed. Skipping it costs the
+        // extra GameSpeak phrases (Laugh, Whistle, Fart, FollowMe) on the
+        // no-cart path; Abe's Hello/Idle/Ok come from STARTANM.BND and are
+        // already resident, so the page still works. With a cart the heap is
+        // 2.49 MB and nothing changes.
+        if (Tethys_gCartHeapBytes != 0)
+        {
+            ResourceManager::LoadResourceFile("ABESPEAK.BAN", Menu::OnResourceLoaded_47ADA0, this);
+        }
+#else
         ResourceManager::LoadResourceFile("ABESPEAK.BAN", Menu::OnResourceLoaded_47ADA0, this);
+#endif
     }
 }
 
@@ -1634,8 +1678,24 @@ void Menu::GoToSelectedMenuPage_47BC50()
 
             // Quit
             case MainMenuOptions::eQuit_2:
+#ifdef TETHYS_SATURN
+                // SATURN (ao261.21): A CONSOLE HAS NOWHERE TO QUIT TO. On PC
+                // this returns to the desktop; on Saturn exit() is
+                // src/syscalls.c:230 -> fatal_exit_from -> Tethys_Fatal, whose
+                // body is a `for(;;)` on the death screen. Selecting Quit from
+                // the main menu would look exactly like a crash.
+                //   The option is reachable: the navigation clamp spans
+                // eGameSpeak_0..eOptions_4 (MainMenu.cpp:1400-1417) and
+                // MainMenu.hpp:99 puts eQuit_2 inside that span, so the pad can
+                // land on it. Make it inert -- fall back to the copyright
+                // screen, which is where a "leave the game" gesture sensibly
+                // goes on a console.
+                gMap_507BA8.SetActiveCam_444660(LevelIds::eMenu_0, 1, CameraIds::Menu::eCopyright_10, CameraSwapEffects::eInstantChange_0, 0, 0);
+                field_1CC_fn_update = &Menu::ToNextMenuPage_47BD80;
+#else
                 sBreakGameLoop_507B78 = 1;
                 exit(0);
+#endif
                 break;
 
             // Load
@@ -2269,7 +2329,24 @@ void Menu::Option_GoTo_Selected_Update_47C2C0()
             {
                 // Controller
                 case OptionsMenuOptions::eController_0:
+#ifdef TETHYS_SATURN
+                    // SATURN (ao261.24): SKIP the device-select page entirely.
+                    // eController_40 is the "Keyboard / Gamepad" chooser, and on
+                    // a Saturn there is exactly one answer -- Input_JoyStickEnabled()
+                    // is a compile-time `return true` in src/sys_saturn.cxx.
+                    // ao261.22 tried to make the page honest by collapsing it to
+                    // one row; that was the wrong reading of the request AND it
+                    // shipped a defect (the surviving row keeps the LEFT column's
+                    // x position, so it renders half off the panel). A page with
+                    // one choice is not a choice. Jump to eControllerConfig_41,
+                    // which is where confirming on that page went anyway.
+                    //   The BACK path needs no change: the remap page has never
+                    // returned here -- it exits to eMotions_4 (line 3460) -- so
+                    // this leaves no orphan and no way back into the dead page.
+                    gMap_507BA8.SetActiveCam_444660(LevelIds::eMenu_0, 1, CameraIds::Menu::eControllerConfig_41, CameraSwapEffects::eInstantChange_0, 0, 0);
+#else
                     gMap_507BA8.SetActiveCam_444660(LevelIds::eMenu_0, 1, CameraIds::Menu::eController_40, CameraSwapEffects::eInstantChange_0, 0, 0);
+#endif
                     break;
 
                 // Sound
@@ -2300,6 +2377,22 @@ void Menu::Options_To_Selected_After_Cam_Change_Update_47C330()
         {
             // To controller options
             case OptionsMenuOptions::eController_0:
+#ifdef TETHYS_SATURN
+                // SATURN (ao261.24): the other half of skipping the chooser --
+                // these are the exact assignments Goto_ConfigureController_Or
+                // Save_SettingIni_Update_47F380 makes for field_230_bGoBack == 0
+                // (line 3140-3146), which is the state the confirmed chooser used
+                // to produce. Copied rather than called: that function also runs
+                // StartTrans and switches on a flag we are not in the middle of.
+                field_204_flags &= ~2u;
+                field_228 = FP_FromInteger(0);
+                field_22C = FP_FromInteger(0);
+                field_1CC_fn_update = &Menu::To_ButtonRemap_Update_47F860;
+                field_1D0_fn_render = &Menu::ButtonRemap_Render_47F940;
+                field_1E0_selected_index.remap_menu = RemapOptions::eRun_0;
+                field_230_bGoBack = -1;
+                break;
+#else
                 field_204_flags &= ~2u;
                 field_228 = FP_FromInteger(0);
                 field_1CC_fn_update = &Menu::To_Options_Controller_Update_47F2E0;
@@ -2308,6 +2401,7 @@ void Menu::Options_To_Selected_After_Cam_Change_Update_47C330()
                 field_230_bGoBack = -1;
                 field_22C = FP_FromInteger(0);
                 break;
+#endif
 
             // To sound options
             case OptionsMenuOptions::eSound_1:
@@ -2417,6 +2511,9 @@ void Menu::Options_Controller_Render_47F430(PrimHeader** ppOt)
         s32 selection = field_1E0_selected_index.raw + i - 1;
         if (selection >= 0 && selection < sAvailableControllers_4CE598)
         {
+            // SATURN (ao261.24): the ao261.22 relabel is REVERTED. This page is
+            // unreachable on Saturn -- its only entry point now jumps past it --
+            // so renaming a row here bought nothing and cost a mis-centred label.
             if (selection == 0)
             {
                 field_1F4_text = "Keyboard";
@@ -3484,6 +3581,32 @@ void Menu::SaveLoadFailed_Update_47DCD0()
         pPauseMenu_5080E0->field_6_flags.Set(Options::eDead_Bit3);
         pPauseMenu_5080E0 = nullptr;
     }
+#ifdef TETHYS_SATURN
+    // SATURN (ao261.23): A CONSOLE HAS NO "FORCE RESTART THE GAME".
+    //
+    // Upstream parks here forever on purpose (see the comment above): Abe has
+    // already been killed at :3516 and the camera is still the menu's
+    // eLoading_21, so what the player sees is a menu background with no Abe on
+    // it and no way out but the reset button. That is also indistinguishable
+    // from "the load worked but put me somewhere wrong", which is exactly what
+    // made the tester's report ambiguous.
+    //
+    // Give it an exit. After ~2 s of the error message, go back to the main
+    // menu -- the save is still intact on the device and the player can pick a
+    // different slot. Nothing else is disturbed: the error render still runs
+    // for the whole countdown, and the state is left by the same
+    // ToNextMenuPage_47BD80 every other page transition uses.
+    static s16 sTethysFailHold = 60;
+    if (sTethysFailHold > 0)
+    {
+        sTethysFailHold--;
+        return;
+    }
+    sTethysFailHold = 60;
+    gMap_507BA8.SetActiveCam_444660(LevelIds::eMenu_0, 1, CameraIds::Menu::eMainMenu_1, CameraSwapEffects::eInstantChange_0, 0, 0);
+    field_1CC_fn_update = &Menu::ToNextMenuPage_47BD80;
+    field_1D0_fn_render = &Menu::MainScreen_Render_47BED0;
+#endif
 }
 
 void Menu::SaveLoadFailed_Render_47DCF0(PrimHeader** ppOt)
@@ -3940,7 +4063,50 @@ void CC Menu::RenderElement_47A4E0(s32 xpos, s32 ypos, s32 input_command, PrimHe
 {
     char_type text[32] = {};
     strcpy(text, Input_GetButtonString(static_cast<InputCommands>(input_command), false)); // TODO: Strongly type all the way back to the button structure
+#ifdef TETHYS_SATURN
+    // SATURN (ao261.24b): 0.5, AND THE RENDERER NOW DELIVERS IT.
+    //
+    // ao261.22 asked for 1.0 here on the grounds that the text compositor draws
+    // 1:1 and ignores the quad, so at least the MEASUREMENT would agree with
+    // what came out. That fixed the centring and left the letters full size --
+    // which is the part the tester has now reported three times, correctly.
+    //
+    // The compositor decimates 2:1 when Tethys_gTextHalf is set (see sRunHalf in
+    // src/renderer_saturn.cxx): the flag is an explicit opt-in taken by THESE
+    // TWO DRAWS AND NOTHING ELSE, so no other string in the game can be affected
+    // by it. 0.5 rather than AO's 0.84/0.64 because dropping every other column
+    // is the only step the blit can take without a resampler -- and asking for
+    // exactly what is drawn is what keeps MeasureWidth honest, which is the
+    // whole cause of the mis-centring.
+    // ao261.30: BACK TO AO'S OWN SCALES. 0.5 was a concession to a compositor
+    // that could only halve; it now resamples to any ratio, so the right answer
+    // is simply what the original asks for -- and that is also what
+    // MeasureWidth_41C280 is measuring, which is what keeps the centring right.
     const FP scale_fp = strlen(text) > 1 ? FP_FromDouble(0.64) : FP_FromDouble(0.84);
+    // (the ao261.22 note this replaces, kept for the mechanism it records)
+    // ASK FOR THE SCALE THE RENDERER CAN ACTUALLY DELIVER.
+    //
+    // AO scales these button labels to 0.84 (one character) or 0.64 (more), and
+    // DrawString_41C360 honours that by shrinking the QUAD. Our text path does
+    // not read the quad: glyphs are recorded by their ATLAS extents and
+    // composited into one 4bpp strip drawn as a RAW NORMAL VDP1 sprite, which is
+    // 1:1 by construction (src/renderer_saturn.cxx, TextRunRecord/TextRunFlush).
+    // So the letter came out FULL SIZE while converted_x and text_y below were
+    // computed for a box 16-36 % smaller -- which is exactly the two symptoms
+    // reported: the glyph overflows the bottom of the button frame, and it sits
+    // right of centre because x was centred on the scaled width.
+    //
+    // Asking for 1.0 makes the measurement agree with what is drawn, so the
+    // centring is correct again. The letter is still bigger relative to the
+    // painted button than the PSX's is -- that is the honest state of it, and
+    // the real fix is per-glyph resampling inside the compositor's blit, which
+    // is the one loop in this port that has been hand-tuned three times
+    // (bt1055/bt1056/bt1058) and is not worth destabilising for a label.
+    // -- ao261.24b did it, as a SEPARATE simple loop beside that one rather than
+    // a change to it, which is what made it cheap enough to be worth doing.
+#else
+    const FP scale_fp = strlen(text) > 1 ? FP_FromDouble(0.64) : FP_FromDouble(0.84);
+#endif
 
     if (text[0])
     {
@@ -3962,7 +4128,15 @@ void CC Menu::RenderElement_47A4E0(s32 xpos, s32 ypos, s32 input_command, PrimHe
     }
 
     const s32 text_width = pFont->MeasureWidth_41C280(text, scale_fp);
+#ifdef TETHYS_SATURN
+    // SATURN (ao261.30): the glyph now comes out at the requested scale, so the
+    // ORIGINAL's own vertical formula is correct again -- it was only ever wrong
+    // here because the renderer ignored the scale. Kept as an explicit branch
+    // rather than deleted so the next reader sees that this was checked.
     const s16 text_y = static_cast<s16>(ypos + FP_GetExponent((FP_FromInteger(-9) * scale_fp)) + 1);
+#else
+    const s16 text_y = static_cast<s16>(ypos + FP_GetExponent((FP_FromInteger(-9) * scale_fp)) + 1);
+#endif
     const s16 converted_x = static_cast<s16>(PsxToPCX(xpos - text_width / 2, 11));
 
     const u8 bOldValue = sFontDrawScreenSpace_508BF4;

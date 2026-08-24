@@ -90,5 +90,6 @@ void Tethys_PalSetCompiled(s16 palX, s16 palY, s16 depth, const u8* pPalette);
 ALIVE_VAR_EXTERN(FontContext, sFontContext_4FFD68);
 ALIVE_VAR_EXTERN(s16, sDisableFontFlicker_5080E4);
 ALIVE_VAR_EXTERN(u8, sFontDrawScreenSpace_508BF4);
+ALIVE_VAR_EXTERN(s16, sFontLoaded_507688); // SATURN bt1071: set by the boot's menu-font load so the Menu ctor (MainMenu.cpp:728) skips a second LoadFontType
 
 } // namespace AO

@@ -656,6 +656,28 @@ EXPORT void CC Game_Loop_437630()
             Tethys_gAbeX = static_cast<u32>(FP_GetExponent(sActiveHero_507678->field_A8_xpos));
             Tethys_gAbeY = static_cast<u32>(FP_GetExponent(sActiveHero_507678->field_AC_ypos));
         }
+        // SATURN (ao261.21): bt816's death-respawn seed, RELOCATED FROM
+        // Game_Run_4373D0. With the menu boot there is no Abe at Init time and
+        // SaveToMemory_459490 dereferences sActiveHero_507678 unguarded
+        // (SaveGame.cpp:370 onward), so seeding at boot is a null read on SH-2.
+        //   The seed itself is still needed for exactly bt816's reason:
+        // gSaveBuffer_505668 stays zeroed until the first ContinuePoint TLV
+        // fires (Abe.cpp:3240), and a death inside that window would
+        // LoadFromMemory a (eMenu_0, path 0, cam 0) buffer -- and
+        // Path_Get_Bly_Record(eMenu_0, 0) is kNullPathBlyRec, so
+        // field_D4_pPathData is null and Map.cpp:2196 dereferences it.
+        //   So seed once, on the first tick where a real level is live AND Abe
+        // exists. -fno-threadsafe-statics is on, so the function-local static is
+        // a plain word with no guard variable.
+        {
+            static s16 sTethysSaveSeeded = 0;
+            if (!sTethysSaveSeeded && sActiveHero_507678
+                && gMap_507BA8.field_0_current_level != LevelIds::eMenu_0)
+            {
+                sTethysSaveSeeded = 1;
+                SaveGame::Tethys_SeedSaveBuffer();
+            }
+        }
 #if defined(TETHYS_START_CAM) && TETHYS_START_CAM > 0
         // SATURN (bt1017): DEBUG BOOT SPAWN, through the game's OWN respawn.
         // Not a camera jump -- bt1014 tried that and the map chased an
@@ -913,33 +935,36 @@ EXPORT void Game_Run_4373D0()
     // SATURN: no Pxtd extension chunks on the converted disc, and the retail
     // implementation opens all 16 LVLs at boot (dozens of seconds on a real
     // CD drive). The compiled-in PathData tables are the ground truth here.
-    // SATURN: boot straight into the new-game start screen (R1 path 15 cam 1,
-    // Menu::NewGameStart_47B9C0 -> MainMenu.cpp:2153) -- no menus, no FMV.
-    // The AbeStart_37 TLV of R1P15C01 creates Abe + PauseMenu via
-    // Factory_AbeStart_486050; the block below is the safety net in case the
-    // camera has no AbeStart TLV (mirrors NewGameStart_47B9C0; no
-    // gInfiniteGrenades_5076EC reset -- its static init is already 0 and
-    // Grenade.hpp is not included here).
-    gMap_507BA8.Init_443EE0(LevelIds::eRuptureFarms_1, 15, 1, CameraSwapEffects::eInstantChange_0, 0, 0);
-    if (!sActiveHero_507678)
-    {
-        sActiveHero_507678 = ao_new<Abe>();
-        sActiveHero_507678->ctor_420770(55888, 85, 57, 55);
-        sActiveHero_507678->field_A8_xpos = FP_FromInteger(1378);
-        sActiveHero_507678->field_AC_ypos = FP_FromInteger(83);
-    }
-    if (!pPauseMenu_5080E0)
-    {
-        pPauseMenu_5080E0 = ao_new<PauseMenu>();
-        pPauseMenu_5080E0->ctor_44DEA0();
-    }
-    // SATURN (bt816): the jump-start above skipped NewGameStart / the
-    // ContinuePoint TLV that seed the death-respawn buffer. Seed it now from the
-    // live R1P15C01 map + Abe so a death BEFORE any checkpoint reloads THIS
-    // resident screen, not SetActiveCam(eMenu_0,0,0) on a zeroed buffer (which
-    // loads a level the Saturn never opened -> null-handle crash). See
-    // SaveGame::Tethys_SeedSaveBuffer.
-    SaveGame::Tethys_SeedSaveBuffer();
+    // SATURN (ao261.21): BOOT TO THE MAIN MENU, exactly as the retail non-Saturn
+    // path below does. The old jump-start into R1P15C01 was design decision D10
+    // -- a P3 SCOPE choice ("one path of one level", FMVs stubbed), never a
+    // capability limit -- and every premise behind it has since been paid for:
+    //   * S1.LVL is converted and shipped (build.ps1 $lvlNames) -- all 15 menu
+    //     cameras, STARTANM.BND, ABEINTRO/DOOR/HIGHLITE/ABESPEAK, OPTSNDFX,
+    //     S1SEQ.BSQ, S1PATH.BND. Verified in the delivered cd/data/S1.LVL.
+    //   * S1P01C10 carries the MenuController_90 TLV, and the menu cameras carry
+    //     the EMBEDDED Font id 1 the menu needs (it is not a standalone file --
+    //     tools/converter/cam.py converts that chunk, and the CAM streamer
+    //     fabricates a heap resource from the on-disk type/id at
+    //     ResourceManager.cpp:2139, which happens inside Load_Path_Items
+    //     (Map.cpp:1675) two drains BEFORE the Menu is constructed at
+    //     Map.cpp:2215). So the menu font resolves itself on this path.
+    //   * FMV screen changes are inert, not fatal: movie_stub.cxx holds
+    //     sMovie_ref_count_9F309C at 0, so CameraSwapper's ePlay1FMV_5 case
+    //     finishes on its first tick and its ppCamRes guard tolerates our null
+    //     Camera::field_C_ppBits.
+    //
+    // ABE AND THE PAUSEMENU ARE DELIBERATELY *NOT* BUILT HERE any more.
+    // Menu::NewGameStart_47B9C0 (MainMenu.cpp:2115-2140) creates both when the
+    // player picks "Begin", then does SetActiveCam(eRuptureFarms_1, 15, 1).
+    // Building them at boot would strand an Abe in a level the map has never
+    // opened AND turn the menu's own `if (!sActiveHero_507678)` into a no-op.
+    //
+    // AND Tethys_SeedSaveBuffer IS NOT CALLED HERE: SaveToMemory_459490
+    // dereferences sActiveHero_507678 with no guard (SaveGame.cpp:370 onward)
+    // and there is no Abe at menu time -- on SH-2 that is a read through a null
+    // pointer. bt816's seed moved into Game_Loop_437630; see the block there.
+    gMap_507BA8.Init_443EE0(LevelIds::eMenu_0, 1, CameraIds::Menu::eCopyright_10, CameraSwapEffects::eInstantChange_0, 0, 0);
 #else
     Path_Set_NewData_FromLvls();
 

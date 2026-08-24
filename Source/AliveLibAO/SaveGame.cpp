@@ -24,6 +24,20 @@ ALIVE_VAR(1, 0x500A18, SaveData, gSaveBuffer_500A18, {});
 
 ALIVE_VAR(1, 0x505668, SaveData, gSaveBuffer_505668, {});
 
+#ifdef TETHYS_SATURN
+// SATURN (bt1071): the real blob length (256 switch-states + 2 bytes per TLV),
+// measured by Map::SaveBlyData_446900.  The save writes only 176 + this many
+// bytes (drop the PSX header, drop the tail), and the loader re-zeroes the tail
+// before re-hashing -- so the hash over field_204..end stays deterministic.
+extern "C" volatile u32 Tethys_gSaveBlobLen = 0;
+// The BUP backend (src/save_saturn.cxx): write/read the single save slot.
+// ao261.21: four slots (src/save_saturn.cxx).  Write picks the slot itself
+// (first free, else oldest) and stores `title` on the device; read takes the
+// slot index the load menu round-tripped through the filename.
+extern "C" s32 Tethys_SaveWrite(const u8* data, s32 len, const char* title);
+extern "C" s32 Tethys_SaveRead(s32 slot, u8* out, s32 maxlen);
+#endif
+
 EXPORT void Kill_Objects_451720()
 {
     ResourceManager::LoadingLoop_41EAD0(0);
@@ -445,6 +459,22 @@ void CC SaveGame::SaveToMemory_459490(SaveData* pSaveData)
     pSaveData->field_2AE_controller_idx = Input().CurrentController() == InputObject::PadIndex::First ? 0 : 1;
     gMap_507BA8.SaveBlyData_446900(pSaveData->field_2B0_pSaveBuffer);
 
+#ifdef TETHYS_SATURN
+    // SATURN (bt1071): zero the struct tail so the hash (and the truncated save)
+    // are deterministic. SaveBlyData wrote 256 + 2*TLVs blob bytes; the rest of
+    // the struct up to sizeof(SaveData) is stale from the previous level. Zero
+    // it here, right before the hash covers field_204..end -- the loader zeroes
+    // the same span before re-hashing.
+    {
+        const u32 tailStart = static_cast<u32>(offsetof(SaveData, field_2B0_pSaveBuffer))
+                              + Tethys_gSaveBlobLen;
+        if (tailStart < sizeof(SaveData))
+        {
+            memset(reinterpret_cast<u8*>(pSaveData) + tailStart, 0, sizeof(SaveData) - tailStart);
+        }
+    }
+#endif
+
     pSaveData->field_200_hashValue = Hash(pSaveData);
 }
 
@@ -467,6 +497,35 @@ s16 CC SaveGame::LoadFromFile_459D30(const char_type* name)
     strcpy(buffer, name);
     strcat(buffer, ".sav");
 
+#ifdef TETHYS_SATURN
+    // SATURN (bt1071): read the truncated save from backup RAM.  The on-device
+    // bytes are [field_200 .. field_2B0 + blobLen) -- the PSX header and the
+    // zeroed tail are not stored.  Reconstruct the full struct: zero it, copy
+    // the device bytes into field_200.., so the hash over field_204..end sees
+    // the same zeroed tail the save path wrote.
+    //
+    // ao261.21 THE NAME IS NO LONGER IGNORED -- IT CARRIES THE SLOT.  The load
+    // menu lists what IO_EnumerateDirectory reported and hands the chosen entry
+    // straight back here with ".sav" stripped (MainMenu.cpp:1852 -> :3471), so
+    // the leading digit our enumerator prefixed ("2 RuptureFarms p15") is the
+    // slot index and this is the one channel that can carry it.  Anything that
+    // does not start with a digit is a save from before this format: fall back
+    // to slot 0, which is where the old single-slot writer put it.
+    {
+        s32 slot = 0;
+        if (name && name[0] >= '1' && name[0] <= '9')
+        {
+            slot = name[0] - '1';
+        }
+        u8* pDev = reinterpret_cast<u8*>(&gSaveBuffer_500A18);
+        memset(&gSaveBuffer_500A18, 0, sizeof(SaveData));
+        if (Tethys_SaveRead(slot, pDev + 0x200, sizeof(SaveData) - 0x200) <= 0)
+        {
+            return 0;
+        }
+    }
+    (void) buffer;
+#else
     const auto file = fopen(buffer, "rb");
     if (!file)
     {
@@ -478,6 +537,7 @@ s16 CC SaveGame::LoadFromFile_459D30(const char_type* name)
     {
         return 0;
     }
+#endif
 
     auto hashVal = Hash(&gSaveBuffer_500A18);
     if (hashVal == gSaveBuffer_500A18.field_200_hashValue)
@@ -488,6 +548,19 @@ s16 CC SaveGame::LoadFromFile_459D30(const char_type* name)
         Input().SetCurrentController(InputObject::PadIndex::First);
         gSaveBuffer_505668.field_234_current_level = gSaveBuffer_505668.field_212_saved_level;
         gSaveBuffer_505668.field_236_current_path = gSaveBuffer_505668.field_214_saved_path;
+#ifdef TETHYS_SATURN
+        // SATURN (ao261.23): RE-HASH.  Those three stores land INSIDE the hashed
+        // span (Hash covers field_204 to the end of the struct) while
+        // field_200_hashValue was computed before them.  Harmless on PC, where
+        // nothing writes this buffer back out; on Saturn the pause menu's SAVE
+        // ships gSaveBuffer_505668 verbatim, so a load followed by a save would
+        // write a slot whose stored hash no longer matches its contents -- a
+        // slot that can never be loaded again.  One line, and it closes that
+        // for good.  (Post-checkpoint the three stores are copies of equal
+        // values and the hash would not move; it is the pre-checkpoint buffer,
+        // which carries path/camera -1, where they differ.)
+        gSaveBuffer_505668.field_200_hashValue = Hash(&gSaveBuffer_505668);
+#endif
         return 1;
     }
     else
@@ -502,6 +575,51 @@ Bool32 CC SaveGame::SaveToFile_45A110(const char_type* name)
 
     strcpy(buffer, name);
     strcat(buffer, ".sav");
+
+#ifdef TETHYS_SATURN
+    // SATURN (bt1071): write the truncated save.  Only [field_200 .. field_2B0
+    // + blobLen) is real -- the PSX header is PSX-specific and the tail was
+    // zeroed by SaveToMemory right before hashing.  176 + blobLen bytes against
+    // 8192 (e.g. ~1850 in R1, ~3810 in the worst level).
+    //
+    // ao261.21: `name` becomes the slot's TITLE.  It is the auto-generated
+    // "LevelName pNN" the pause menu built (PauseMenu.cpp:363-376) -- there is no
+    // keyboard, so the player never types one -- and storing it on the device is
+    // what lets the load list show four distinguishable entries instead of four
+    // identical ones.  The backend picks the slot (first free, else oldest).
+    (void) buffer;
+    {
+        // SATURN (ao261.23): CAPTURE WHERE THE PLAYER ACTUALLY IS, NOT THE LAST
+        // CHECKPOINT.  This is the "it didn't bring me back to the right place"
+        // defect, and the cause is that nothing refreshes gSaveBuffer_505668
+        // before we ship it: its only writers are the ContinuePoint TLV
+        // (Abe.cpp:3240), Tethys_SeedSaveBuffer once at boot, and LoadFromFile.
+        // The pause menu never calls SaveToMemory.  Measured on R1: EIGHT
+        // ContinuePoints across 105 camera cells, so "SAVE" could hand back a
+        // position a whole path behind the player -- while the slot's title is
+        // built from the LIVE path (PauseMenu.cpp:368), so the entry read
+        // "RuptureFarms p16" and restored p15.  The label and the payload now
+        // agree because both describe the same instant.
+        //   A DELIBERATE DIVERGENCE FROM THE ORIGINAL, stated plainly: AO is a
+        // checkpoint game and its memory-card save is the checkpoint.  On a
+        // console where the player explicitly chose SAVE at a moment of their
+        // choosing, restoring some earlier moment reads as a bug, and the
+        // machinery to restore an arbitrary position is already proven --
+        // LoadFromMemory sets Motion_62_LoadedSaveSpawn, which raycasts +-60 for
+        // a collision line and calls MapFollowMe_401D30(TRUE) (the bt1017 path).
+        //   SaveToMemory also re-measures Tethys_gSaveBlobLen and recomputes
+        // field_200_hashValue, which is what keeps the truncated write below
+        // self-consistent.  It dereferences sActiveHero_507678 unguarded
+        // (SaveGame.cpp:370 onward), hence the null test.
+        if (sActiveHero_507678)
+        {
+            SaveToMemory_459490(&gSaveBuffer_505668);
+        }
+        const s32 len = 176 + static_cast<s32>(Tethys_gSaveBlobLen);
+        const u8* pDev = reinterpret_cast<const u8*>(&gSaveBuffer_505668) + 0x200;
+        return Tethys_SaveWrite(pDev, len, name) ? 1 : 0;
+    }
+#else
     const auto file = fopen(buffer, "wb");
     if (!file)
     {
@@ -511,6 +629,7 @@ Bool32 CC SaveGame::SaveToFile_45A110(const char_type* name)
     fclose(file);
 
     return written == sizeof(SaveData) ? 1 : 0;
+#endif
 }
 
 } // namespace AO
