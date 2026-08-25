@@ -2750,123 +2750,40 @@ void CC Abe::Load_Basic_Resources_4228A0()
 }
 
 #ifdef TETHYS_SATURN
-// SATURN (ao262.11) THE POSSESSION HEAP VALVE.
+// SATURN (ao262.12) THE POSSESSION HEAP VALVE IS WITHDRAWN. IT TRADED THE
+// WRONG RESOURCE.
 //
-// ABEBASIC (Anim id 10) is 188,480 B -- 20% of the 942,420 B no-cart resource
-// heap -- and Abe's ctor pins it for the whole level. While Abe is possessing a
-// Slig his body is inert: StateToAnimResource_4204F0 routes motions 0-14 (the
-// standing/idle set) to res[45] = ABEBSIC1, and res[0] is the set for motions
-// 15-63, none of which an inert body plays. So the block is 20% of the heap held
-// for a character who is not moving, on the exact screens (Slig + explosion set)
-// the tester wedges on: at the ao262.10 field fatal, 8,080 B free of 942,420.
+// ao262.11 freed ABEBASIC (Anim id 10, 188,480 B = 20% of the 942,420 B
+// no-cart heap) at every screen change while Abe possessed a Slig, on the
+// reasoning that his body is inert then and res[45] draws it. The reasoning
+// held. The ACCOUNTING did not, and the tester saw it before the first
+// capture came back:
 //
-// THIS IS NOT A NEW IDEA, IT IS THE ENGINE'S OWN. Midi.cpp:1115 already calls
-// Free_Resources_422870() when a VAB will not fit, and SND_Load_VABS_477040
-// reloads it afterwards. Only res[0] -- never res[45] -- because res[45] is what
-// draws the standing body. That is why this valve frees exactly one chunk and
-// not the 305,608 B of Abe's four resident sets: the other three are in use.
+//   ABEBASIC IS NOT ABE'S. Mudokon.cpp:274 takes a counted ref on the same
+//   chunk -- Mudokons and Abe share the basic set -- and so does every camera
+//   whose TLV list requests it. So the valve does one of two things and both
+//   are bad. Where a Mudokon is present the refcount never reaches zero and
+//   NOTHING is freed. Where none is present the chunk really goes, and then
+//   the next screen carrying a Mudokon re-reads ABEBSIC.BAN from the CD --
+//   188 KB, synchronous, and released again at that camera's teardown, so it
+//   is re-read on the screen after that too. Rupture Farms is full of
+//   Mudokons; that is the game.
 //
-// IT IS A REF DROP, NOT AN EVICTION, AND THAT MATTERS. Abe's ctor takes a
-// counted ref (Abe.cpp:881) and res[0] is a NON-owning handle taken at :884
-// with addUseCount = 0. Mudokon.cpp:274 takes its own counted ref on the same
-// chunk -- Mudokons and Abe share the basic set -- and every camera whose TLV
-// list requests it takes one more. FreeResource_Impl_4555B0 only marks a block
-// free at refcount ZERO, so on a screen with a Mudokon this valve returns
-// nothing at all. That is why the census now prints each block's USE COUNT: if
-// the release worked, id00010 LEAVES the top-8 outright; if it did not, the row
-// stays and r%02d names how many holders are in the way. A byte counter here
-// would have been a third reading and the HWRAM pre-flight priced it out --
-// correctly, since neither of the two above needs it.
+//   THE FILE ALREADY ARGUED THIS AGAINST ITSELF. The sticky-list block in
+//   ResourceManager.cpp exists because ~105 KB of per-flip re-reads is about a
+//   second of CD on EVERY screen change, and calls that the thing worth
+//   spending permanent RAM to stop. A change that manufactures a 188 KB
+//   re-read on a large share of screens is that trade run backwards. I had
+//   read that block the same night, to withdraw ABEHOIST from it.
 //
-// WHERE IT RUNS. The tester's condition, verbatim: at a screen change only.
-// Map::ScreenChange_Common, which is entered AFTER the two dtor passes of
-// ScreenChange_4444D0 -- so the outgoing camera's refs and any Mudokon's are
-// already gone and the count is at its minimum -- and BEFORE the
-// Reclaim_Memory_455660 that coalesces and the GoTo_Camera that reloads.
+// What survives of the work is the part that was never about Abe: the
+// frame-table firewall in Animation.cpp (a null resource made
+// Set_Animation_Data apply a foreign offset to the block it kept -- a hazard
+// the ORIGINAL ships via Midi.cpp:1115, valve or no valve) and the use count
+// on the heap census, which is what made the refcount argument visible at all.
 //
-// THE RESTORE IS SYMMETRIC AND REAL. The engine's own five re-bind sites
-// (Abe.cpp:7093, 7783, 9063, 9338) all do GetLoadedResource(..., 1, 0), which
-// returns NULL when the chunk is genuinely gone -- they assume a ref drop never
-// evicted it, which was true before this valve and is not now. So the restore
-// re-reads the file when the chunk is absent. It costs one 188 KB CD read per
-// possession session, inside a stall the player is already watching.
-//
-// AND THE FRAME THAT ESCAPES IT. Depossession can happen mid-screen (the Slig
-// explodes), leaving Abe controlled with res[0] null until the next flip; the
-// engine's guards at 1768/3272/3864 hand control back but reload nothing, and
-// Set_Animation_Data_402A40 with a null resource keeps the OLD block and applies
-// the NEW offset to it. The floor for that is in Animation.cpp -- a frame-table
-// offset outside its own block is refused (`fw`) rather than read. Abe then
-// keeps his previous animation for a beat instead of walking a wild pointer.
-static u8 sTethysHeroBasicReleased = 0;
-
-extern "C" void Tethys_PossessionHeapValve()
-{
-    Abe* pHero = sActiveHero_507678;
-    if (!pHero)
-    {
-        return;
-    }
-
-    // The engine re-binds res[0] by itself in five places. If one of them beat
-    // us to it the release is over, and the latch has to say so or the restore
-    // below would take a second counted ref that nothing will ever drop.
-    if (pHero->field_1A4_resources.res[0])
-    {
-        sTethysHeroBasicReleased = 0;
-    }
-
-    // A resource load in flight owns state this must not disturb -- the same
-    // condition the engine's own re-bind sites test before touching res[0].
-    if (pHero->field_104_pending_resource_count)
-    {
-        return;
-    }
-
-    BaseAliveGameObject* pControlled = sControlledCharacter_50767C;
-
-    // HANDS OFF WHILE ABE IS ON ELUM. LoadMountElumResources_42E690 frees res[0]
-    // itself at mount time, for the same reason and with the same intent, and
-    // Motion_139's re-bind (Abe.cpp:9338) restores it at dismount. Riding Elum
-    // is not possession -- gElum carries no e10A_Bit2_bPossesed -- so without
-    // this line the restore below would fire on the next flip and re-pin the
-    // 188 KB the engine had just decided it did not want. Returning here leaves
-    // the latch set; the dismount re-bind then clears it at the top of this
-    // function on the following flip. Two owners for one chunk is how a double
-    // free or a leak gets written, so there is exactly one at a time.
-    if (pControlled == gElum_507680)
-    {
-        return;
-    }
-
-    const bool possessing = pControlled != nullptr
-        && pControlled != pHero
-        && pControlled->field_10A_flags.Get(Flags_10A::e10A_Bit2_bPossesed);
-
-    if (possessing)
-    {
-        if (pHero->field_1A4_resources.res[0])
-        {
-            pHero->Free_Resources_422870();
-            sTethysHeroBasicReleased = 1;
-        }
-        return;
-    }
-
-    if (sTethysHeroBasicReleased)
-    {
-        u8** ppRes = ResourceManager::GetLoadedResource_4554F0(
-            ResourceManager::Resource_Animation, AOResourceID::kAbebasicAOResID, 1, 0);
-        if (!ppRes)
-        {
-            ResourceManager::LoadResourceFile_455270("ABEBSIC.BAN", nullptr);
-            ppRes = ResourceManager::GetLoadedResource_4554F0(
-                ResourceManager::Resource_Animation, AOResourceID::kAbebasicAOResID, 1, 0);
-        }
-        pHero->field_1A4_resources.res[0] = ppRes;
-        sTethysHeroBasicReleased = 0;
-    }
-}
+// If the possession idea is ever revisited, the resource has to be one only
+// Abe holds -- and the census now prints the number that decides it.
 #endif
 
 void Abe::LoadMountElumResources_42E690()

@@ -1102,11 +1102,15 @@ s16 Animation::Set_Animation_Data_402A40(s32 frameTableOffset, u8** pAnimRes)
     // heap chunk, whose result is then walked as a frame table. Silent, and it
     // lands somewhere different every run.
     //
-    // The engine already ships that hazard: Abe::Free_Resources_422870 exists
-    // because Midi.cpp:1115 frees res[0] when a VAB will not fit, and nothing
-    // reloads it -- Abe.cpp:1768/3272/3864 only take CONTROL back. It was rare
-    // because that path is. The possession valve (Tethys_PossessionHeapValve)
-    // makes the state common on purpose, so the hazard gets a floor first.
+    // THE ENGINE SHIPS THAT HAZARD ALREADY, which is why this stays after the
+    // ao262.12 withdrawal of the change that first exposed it.
+    // Abe::Free_Resources_422870 exists because Midi.cpp:1115 frees res[0]
+    // when a VAB will not fit, and nothing reloads it -- Abe.cpp:1768/3272/3864
+    // only take CONTROL back, so Abe keeps playing with res[0] null and every
+    // motion in the 15-63 band asks for the block that is gone. That path is
+    // rare on a roomy heap and NOT rare on this one: it fires exactly when
+    // memory is short, which is when a wild read is least likely to land
+    // somewhere harmless.
     //
     // The bound is the block's own size, so it cannot reject a legitimate
     // in-block offset, and Tethys_AnimBlockBytes returns 0 -- pass through
