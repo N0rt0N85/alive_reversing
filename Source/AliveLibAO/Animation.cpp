@@ -1045,6 +1045,13 @@ void CC AnimationBase::AnimateAll_4034F0(DynamicArrayT<AnimationBase>* pAnimList
 // offset can never satisfy the `>= oldBase` test and passes through unchanged.
 // Reference implementation + the guard: tools/converter/anim.py
 // (fixup_table_offset / _compact_payload).
+// SATURN (ao262.11): payload bytes of an Animation chunk (ResourceManager.cpp,
+// where the Header layout lives), and the count of frame-table offsets refused
+// for being outside their block. `fw` on the MN row -- cumulative since boot,
+// like every other latch, because one rejection anywhere is the whole finding.
+extern "C" u32 Tethys_AnimBlockBytes(u8** ppRes);
+extern "C" u32 Tethys_gAnimOffRej = 0;
+
 static s32 Tethys_FixupFrameTable(const u8* pBlock, s32 off)
 {
     // A misaligned or null block is an SH-2 address error waiting to happen;
@@ -1083,6 +1090,37 @@ s16 Animation::Set_Animation_Data_402A40(s32 frameTableOffset, u8** pAnimRes)
 
 #ifdef TETHYS_SATURN
     frameTableOffset = Tethys_FixupFrameTable(*field_20_ppBlock, frameTableOffset);
+
+    // SATURN (ao262.11) A FRAME TABLE THAT IS NOT IN THIS BLOCK.
+    //
+    // Read the two branches above together: a NULL pAnimRes does not mean "no
+    // animation", it means "keep the block you already have" -- 181 callers use
+    // it that way to move within one .BAN. So when a caller passes a resource
+    // handle that came back null because the chunk is GONE, this function keeps
+    // the PREVIOUS block and applies the NEW block's frame-table offset to it.
+    // That is not a missing sprite; it is a read tens of KB past the end of a
+    // heap chunk, whose result is then walked as a frame table. Silent, and it
+    // lands somewhere different every run.
+    //
+    // The engine already ships that hazard: Abe::Free_Resources_422870 exists
+    // because Midi.cpp:1115 frees res[0] when a VAB will not fit, and nothing
+    // reloads it -- Abe.cpp:1768/3272/3864 only take CONTROL back. It was rare
+    // because that path is. The possession valve (Tethys_PossessionHeapValve)
+    // makes the state common on purpose, so the hazard gets a floor first.
+    //
+    // The bound is the block's own size, so it cannot reject a legitimate
+    // in-block offset, and Tethys_AnimBlockBytes returns 0 -- pass through
+    // unchanged -- for any handle that is not a live Animation chunk. Refusing
+    // costs the object one animation change: it keeps playing what it had.
+    {
+        const u32 blockBytes = Tethys_AnimBlockBytes(field_20_ppBlock);
+        if (blockBytes != 0
+            && static_cast<u32>(frameTableOffset) + sizeof(AnimationHeader) > blockBytes)
+        {
+            Tethys_gAnimOffRej++;
+            return 0;
+        }
+    }
 #endif
     field_18_frame_table_offset = frameTableOffset;
 

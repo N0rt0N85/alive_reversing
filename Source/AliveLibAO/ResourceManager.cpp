@@ -200,9 +200,29 @@ static bool Tethys_StickyMatch(const char_type* pFileName,
     return false;
 }
 
+// SATURN (ao262.11): THE LIST'S OWN GATE, APPLIED TO ITS OWN LAST ENTRY.
+//
+// The block above states the rule and then bt1063 walked past it. The rule:
+// "in cart mode the heap is 3.94 MB and the measured peak is 0.96 MB -- 3 MB
+// spare... WITHOUT a cart the heap is 995,328 B and that same peak is 962,580:
+// 97% FULL... There is no 105 KB to find there, so the extended entries are
+// simply not eligible." ABEHOIST was then added to the BASE list, which is
+// unconditional, on a measurement whose own justification names the cart heap:
+// "40 KB held permanently against a heap at 28% of 2,719,744 B is not a memory
+// question." At 28% it is not. At the 99.1% this build's tester photographed on
+// the wedge it is 40,364 B -- 4.3% of the whole no-cart heap -- spent to save a
+// CD read, which is the one trade a starving configuration must never make.
+//
+// So the entry stays where it was measured and is withdrawn where it was not.
+// The cost is honest and bounded: the hoist screens re-read ABEHOIST.BAN on
+// each visit without a cart, ~40 KB of CD, exactly as they did before bt1063.
+// SLG/SLIG keep their unconditional pin -- that pair was measured in S7 against
+// a specific wedge, on this heap, and the pressure ladder at state 0 already
+// drops all sticky refs when staging cannot be served.
 static bool Tethys_StickyName(const char_type* pFileName)
 {
-    return Tethys_StickyMatch(pFileName, kTethysStickyBase, 3);
+    const s32 entries = (kResHeapSize >= 2000000u) ? 3 : 2;
+    return Tethys_StickyMatch(pFileName, kTethysStickyBase, entries);
 }
 
 static bool Tethys_StickyIn(const TethysStickyEntry* pTable, s32 count, u32 type, u32 id)
@@ -891,11 +911,12 @@ s32 Tethys_HeapUsage(u32* pUsedBytes, u32* pLiveBlocks)
 // SATURN: fatal-time heap accounting (src/sys_saturn.cxx death screen) --
 // the idx-th biggest non-Free block of the resource heap, by selection scan
 // over the used chain (~174 nodes; only runs on the frozen fatal screen).
-void Tethys_HeapTop(s32 idx, u32* pType, u32* pId, u32* pSize)
+void Tethys_HeapTop(s32 idx, u32* pType, u32* pId, u32* pSize, u32* pRef)
 {
     *pType = 0;
     *pId = 0;
     *pSize = 0;
+    *pRef = 0;
     u32 prevSize = 0xFFFFFFFFu;
     u32 prevId = 0xFFFFFFFFu;
     for (s32 rank = 0; rank <= idx; rank++)
@@ -903,6 +924,7 @@ void Tethys_HeapTop(s32 idx, u32* pType, u32* pId, u32* pSize)
         u32 bestSize = 0;
         u32 bestType = 0;
         u32 bestId = 0;
+        u32 bestRef = 0;
         u32 guard = 0;
         for (ResourceManager::ResourceHeapItem* pItem = sFirstLinkedListItem_50EE2C;
              pItem && guard <= 375u;
@@ -929,6 +951,16 @@ void Tethys_HeapTop(s32 idx, u32* pType, u32* pId, u32* pSize)
                 bestSize = pHdr->field_0_size;
                 bestType = pHdr->field_8_type;
                 bestId = pHdr->field_C_id;
+                // SATURN (ao262.11): the USE COUNT, because it is what decides
+                // whether releasing one holder actually returns the bytes.
+                // FreeResource_Impl_4555B0 only marks a block Resource_Free at
+                // refcount zero, so a 188 KB chunk with three holders is
+                // untouchable by any single owner -- and a purge aimed at it is
+                // a no-op wearing a fix's clothes. It replaces the rank digit on
+                // the census row rather than adding a field: the rows already
+                // print in rank order, and Debug::Print bills for ARITY (bt1065
+                // measured 628 B for two rows going 6->7/8 args).
+                bestRef = pHdr->field_4_ref_count;
             }
         }
         prevSize = bestSize;
@@ -936,6 +968,7 @@ void Tethys_HeapTop(s32 idx, u32* pType, u32* pId, u32* pSize)
         *pType = bestType;
         *pId = bestId;
         *pSize = bestSize;
+        *pRef = bestRef;
     }
 }
 
@@ -2752,6 +2785,33 @@ ResourceManager::Header* CC ResourceManager::Get_Header_455620(u8** ppRes)
 {
     return reinterpret_cast<Header*>((*ppRes - sizeof(Header)));
 }
+
+#ifdef TETHYS_SATURN
+// SATURN (ao262.11): payload bytes of a resource block, or 0 if the handle is
+// not one. Exists so Animation.cpp can bound a frame-table offset against the
+// block it is about to be applied to WITHOUT importing the Header layout --
+// see the firewall in Set_Animation_Data_402A40 for why that is needed. The
+// type check is the guard: a handle that is not a live Animation chunk reports
+// 0 and the caller passes through unchanged, so nothing new can be refused.
+extern "C" u32 Tethys_AnimBlockBytes(u8** ppRes)
+{
+    if (!ppRes || !*ppRes || (reinterpret_cast<u32>(*ppRes) & 3u))
+    {
+        return 0;
+    }
+    const ResourceManager::Header* pHdr = ResourceManager::Get_Header_455620(ppRes);
+    if (pHdr->field_8_type != ResourceManager::Resource_Animation)
+    {
+        return 0;
+    }
+    // field_0_size counts the header too; the caller wants payload bytes.
+    if (pHdr->field_0_size <= sizeof(ResourceManager::Header))
+    {
+        return 0;
+    }
+    return pHdr->field_0_size - sizeof(ResourceManager::Header);
+}
+#endif
 
 void CC ResourceManager::Reclaim_Memory_455660(u32 sizeToReclaim)
 {
