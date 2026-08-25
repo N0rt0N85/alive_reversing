@@ -259,7 +259,11 @@ BaseGameObject* FG1::dtor_453DF0()
 
     gObjList_drawables_504618->Remove_Item(this);
 
-    for (s32 i = 0; i < field_18_render_block_count; i++)
+    // SATURN (ao262.9): belt-and-braces for the CHNK degrade above. Not needed
+    // while that path also zeroes the count -- it is here so a future edit that
+    // sets one without the other cannot turn this loop into a null walk feeding
+    // garbage rects to Vram_free.
+    for (s32 i = 0; field_20_chnk_res && i < field_18_render_block_count; i++)
     {
         if (field_20_chnk_res[i].field_58_rect.w > 0)
         {
@@ -326,16 +330,48 @@ FG1* FG1::ctor_4539C0(u8** ppRes)
     pSrcHdr->field_6_flags |= ResourceManager::ResourceHeaderFlags::eLocked;
 #endif
 
-    field_1C_ptr = ResourceManager::Allocate_New_Locked_Resource_454F80(ResourceManager::Resource_CHNK, 0, pHeader->mCount * sizeof(Fg1Block));
 #ifdef TETHYS_SATURN
-    // SATURN: on a full resource heap this alloc returns null and the
-    // deref below writes 21 render blocks through *nullptr (wild writes;
-    // cost a full S4 forensics chain). PC's 5.12 MB heap never fails here.
+    // SATURN (ao262.9): NON-FATAL, and the branch below degrades instead of
+    // dying. This was the LAST member of the ao262 unreachable-recovery class
+    // and the tester's remaining no-cart death: the RES NULL screen named it
+    // exactly -- t1263421507 (Resource_CHNK) id0 sz3168, against
+    // us939964 / cap942420 = 99.74%. 3168 = 18 blocks.
+    //
+    // Note what the old branch below actually was: its Tethys_Fatal could never
+    // run either, because Allocate_New_Locked_Resource_454F80 fatals first --
+    // which is why the tester photographed "RES NULL" and not "FG1 CHNK alloc
+    // failed". Same shape as Font.cpp's S4 recovery. Fixing it needs the
+    // never-fatal allocator, not just a guard.
+    field_1C_ptr = ResourceManager::Alloc_New_Resource_ImplEx(
+        ResourceManager::Resource_CHNK, 0, pHeader->mCount * sizeof(Fg1Block),
+        true, ResourceManager::BlockAllocMethod::eLastMatching,
+        true /*reclaim*/, false /*never fatal*/);
     if (!field_1C_ptr)
     {
-        pSrcHdr->field_6_flags = srcFlagsSaved; // restore before dying
-        Tethys_Fatal("FG1 CHNK alloc failed");
+        // THE SCREEN LOSES ITS FOREGROUND LAYER. It does not lose the run.
+        //
+        // Three things have to be true together, and the third is the one that
+        // bites:
+        //   1. restore the bt864 source lock, or the FG1 source block stays
+        //      eLocked forever and the heap can never compact past it -- a
+        //      degrade that permanently shrinks the heap is worse than a fatal;
+        //   2. null the array, so nothing derefs the handle we never got;
+        //   3. ZERO THE COUNT. field_18_render_block_count was assigned ~20
+        //      lines ABOVE this (from pHeader->mCount), so skipping the alloc
+        //      leaves a count of 18 pointing at a null array. dtor_453DF0 then
+        //      walks it and feeds garbage rects to Vram_free_450CE0 -- strictly
+        //      worse than the fatal it replaces. This line is not optional.
+        // The early return also skips Iterate() and the ctor-tail scan, so no
+        // vram_alloc and no PBuf alloc happen either: nothing to leak, nothing
+        // to free. Counted for free by `rn` on the S4 row -- the never-fatal
+        // allocator bumps Tethys_gResSoftNull on the way out.
+        pSrcHdr->field_6_flags = srcFlagsSaved;
+        field_20_chnk_res = nullptr;
+        field_18_render_block_count = 0;
+        return this;
     }
+#else
+    field_1C_ptr = ResourceManager::Allocate_New_Locked_Resource_454F80(ResourceManager::Resource_CHNK, 0, pHeader->mCount * sizeof(Fg1Block));
 #endif
     field_20_chnk_res = reinterpret_cast<Fg1Block*>(*field_1C_ptr);
 
@@ -399,6 +435,15 @@ void FG1::VRender(PrimHeader** ppOt)
 
 void FG1::VRender_453D50(PrimHeader** ppOt)
 {
+#ifdef TETHYS_SATURN
+    // SATURN (ao262.9): the CHNK degrade leaves a live FG1 object with no
+    // array. The zeroed count already makes this loop a no-op; this says so
+    // where a reader will look for it.
+    if (!field_20_chnk_res)
+    {
+        return;
+    }
+#endif
     for (s32 i = 0; i < field_18_render_block_count; i++)
     {
         Fg1Block* pBlock = &field_20_chnk_res[i];
