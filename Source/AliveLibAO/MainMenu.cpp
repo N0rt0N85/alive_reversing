@@ -2119,7 +2119,19 @@ void Menu::FMV_Or_Level_Select_Back_Update_47ECB0()
 {
     if (sNumCamSwappers_507668 <= 0)
     {
+#ifdef TETHYS_SATURN
+        // SATURN (ao261.31): the BLOCKING twin of the AbePopThroughDoor_47B620
+        // request. Same file, same 684,032 B contiguous staging block, same
+        // reason it cannot be served without a cart -- see the comment there.
+        // GetLoadedResource then returns null, which the ten GameSpeak sites
+        // now survive.
+        if (Tethys_gCartHeapBytes != 0)
+        {
+            ResourceManager::LoadResourceFile_455270("ABESPEAK.BAN", nullptr);
+        }
+#else
         ResourceManager::LoadResourceFile_455270("ABESPEAK.BAN", nullptr);
+#endif
         field_E4_res_array[0] = ResourceManager::GetLoadedResource_4554F0(ResourceManager::Resource_Animation, AOResourceID::kAbespeakAOResID, 1, 0);
         field_1E8_pMenuTrans->StartTrans_436560(Layer::eLayer_FadeFlash_40, 0, 0, 16);
         field_1E0_selected_index.mainmenu = MainMenuOptions::eBegin_1;
@@ -2809,7 +2821,25 @@ void Menu::GameSpeak_Update_47CBD0()
                     }
 
                     const AnimRecord& rec = AO::AnimRec(AnimId::MenuAbeSpeak_ChantEnd);
-                    field_10_anim.Set_Animation_Data_402A40(rec.mFrameTableOffset, field_E4_res_array[0]);
+                    // SATURN (ao261.31): A NULL BLOCK HERE IS NOT A NO-OP, IT IS AN
+                    // OUT-OF-BOUNDS READ. field_E4_res_array[0] is ABESPEAK.BAN, which
+                    // ao261.29 stopped requesting on the no-cart path (AbePopThroughDoor_47B620
+                    // above). Set_Animation_Data_402A40 treats a null pAnimRes as "keep the
+                    // current block" (Animation.cpp, Set_Animation_Data_402A40 -- the
+                    // `if (pAnimRes)` at its head), and the current block on this page is
+                    // STARTANM.BND -- 124,192 B. The ten GameSpeak sites below then index an
+                    // ABESPEAK frame table (offsets up to ~683,000) into it, roughly 550 KB past
+                    // the end, and SH-2 has no MMU to stop them. AO already guards this same
+                    // pointer the same way at :1474, :1552, :1584 and :3549; these ten sites are
+                    // the ones it did not, because on PSX the file is always resident.
+                    //   Skipping the call leaves Abe in his current STARTANM idle -- the phrase
+                    // loses its animation but keeps its sound, and the page's state machine still
+                    // advances (a looping animation still raises eBit18_IsLastFrame). Guarded, not
+                    // #ifdef'd: on PC the pointer is never null, so this is dead weight there.
+                    if (field_E4_res_array[0]) // SATURN (ao261.31)
+                    {
+                        field_10_anim.Set_Animation_Data_402A40(rec.mFrameTableOffset, field_E4_res_array[0]);
+                    }
                     field_1E0_selected_index.gamespeak_menu = GameSpeakOptions::eHello_1;
                 }
             }
@@ -2839,7 +2869,10 @@ void Menu::GameSpeak_Update_47CBD0()
 
         field_204_flags |= 1u;
         const AnimRecord& rec = AO::AnimRec(AnimId::MenuAbeSpeak_Chant);
-        field_10_anim.Set_Animation_Data_402A40(rec.mFrameTableOffset, field_E4_res_array[0]);
+        if (field_E4_res_array[0]) // SATURN (ao261.31)
+        {
+            field_10_anim.Set_Animation_Data_402A40(rec.mFrameTableOffset, field_E4_res_array[0]);
+        }
         field_1E0_selected_index.gamespeak_menu = GameSpeakOptions::eChant_8;
 
         if (!field_1EC_pObj1)
@@ -2908,7 +2941,10 @@ void Menu::GameSpeak_Update_47CBD0()
             Mudokon_SFX_42A4D0(MudSounds::eFollowMe_4, 0, 0, 0);
             field_204_flags |= 1u;
             const AnimRecord& rec = AO::AnimRec(AnimId::MenuAbeSpeak_FollowMe);
-            field_10_anim.Set_Animation_Data_402A40(rec.mFrameTableOffset, field_E4_res_array[0]);
+            if (field_E4_res_array[0]) // SATURN (ao261.31)
+            {
+                field_10_anim.Set_Animation_Data_402A40(rec.mFrameTableOffset, field_E4_res_array[0]);
+            }
             field_1E0_selected_index.gamespeak_menu = GameSpeakOptions::eFollowMe_2;
             auto pFade = ao_new<MainMenuFade>();
             if (pFade)
@@ -2921,7 +2957,10 @@ void Menu::GameSpeak_Update_47CBD0()
             Mudokon_SFX_42A4D0(MudSounds::eWait_6, 0, 0, 0);
             field_204_flags |= 1u;
             const AnimRecord& rec = AO::AnimRec(AnimId::MenuAbeSpeak_Wait);
-            field_10_anim.Set_Animation_Data_402A40(rec.mFrameTableOffset, field_E4_res_array[0]);
+            if (field_E4_res_array[0]) // SATURN (ao261.31)
+            {
+                field_10_anim.Set_Animation_Data_402A40(rec.mFrameTableOffset, field_E4_res_array[0]);
+            }
             field_1E0_selected_index.gamespeak_menu = GameSpeakOptions::eWait_0;
             auto pFade = ao_new<MainMenuFade>();
             if (pFade)
@@ -2947,7 +2986,10 @@ void Menu::GameSpeak_Update_47CBD0()
             Mudokon_SFX_42A4D0(MudSounds::eAngry_5, 0, 0, 0);
             field_204_flags |= 1u;
             const AnimRecord& rec = AO::AnimRec(AnimId::MenuAbeSpeak_Anger);
-            field_10_anim.Set_Animation_Data_402A40(rec.mFrameTableOffset, field_E4_res_array[0]);
+            if (field_E4_res_array[0]) // SATURN (ao261.31)
+            {
+                field_10_anim.Set_Animation_Data_402A40(rec.mFrameTableOffset, field_E4_res_array[0]);
+            }
             field_1E0_selected_index.gamespeak_menu = GameSpeakOptions::eAngry_3;
             auto pFade = ao_new<MainMenuFade>();
             if (pFade)
@@ -2984,7 +3026,10 @@ void Menu::GameSpeak_Update_47CBD0()
             Mudokon_SFX_42A4D0(MudSounds::eWhistleHigh_1, 0, 0, 0);
             field_204_flags |= 1u;
             const AnimRecord& rec = AO::AnimRec(AnimId::MenuAbeSpeak_WhistleHigh);
-            field_10_anim.Set_Animation_Data_402A40(rec.mFrameTableOffset, field_E4_res_array[0]);
+            if (field_E4_res_array[0]) // SATURN (ao261.31)
+            {
+                field_10_anim.Set_Animation_Data_402A40(rec.mFrameTableOffset, field_E4_res_array[0]);
+            }
             field_1E0_selected_index.gamespeak_menu = GameSpeakOptions::eWhistleHigh_4;
             auto pFade = ao_new<MainMenuFade>();
             if (pFade)
@@ -2997,7 +3042,10 @@ void Menu::GameSpeak_Update_47CBD0()
             Mudokon_SFX_42A4D0(MudSounds::eWhistleLow_2, 0, 0, 0);
             field_204_flags |= 1u;
             const AnimRecord& rec = AO::AnimRec(AnimId::MenuAbeSpeak_WhistleLow);
-            field_10_anim.Set_Animation_Data_402A40(rec.mFrameTableOffset, field_E4_res_array[0]);
+            if (field_E4_res_array[0]) // SATURN (ao261.31)
+            {
+                field_10_anim.Set_Animation_Data_402A40(rec.mFrameTableOffset, field_E4_res_array[0]);
+            }
             field_1E0_selected_index.gamespeak_menu = GameSpeakOptions::eWhistleLow_5;
             auto pFade = ao_new<MainMenuFade>();
             if (pFade)
@@ -3010,7 +3058,10 @@ void Menu::GameSpeak_Update_47CBD0()
             Mudokon_SFX_42A4D0(MudSounds::eLaugh2_11, 0, 0, 0);
             field_204_flags |= 1u;
             const AnimRecord& rec = AO::AnimRec(AnimId::MenuAbeSpeak_Laugh);
-            field_10_anim.Set_Animation_Data_402A40(rec.mFrameTableOffset, field_E4_res_array[0]);
+            if (field_E4_res_array[0]) // SATURN (ao261.31)
+            {
+                field_10_anim.Set_Animation_Data_402A40(rec.mFrameTableOffset, field_E4_res_array[0]);
+            }
             field_1E0_selected_index.gamespeak_menu = GameSpeakOptions::eLaugh_6;
             auto pFade = ao_new<MainMenuFade>();
             if (pFade)
@@ -3023,7 +3074,10 @@ void Menu::GameSpeak_Update_47CBD0()
             Mudokon_SFX_42A4D0(MudSounds::eFart_7, 0, 0, 0);
             field_204_flags |= 1u;
             const AnimRecord& rec = AO::AnimRec(AnimId::MenuAbeSpeak_Fart);
-            field_10_anim.Set_Animation_Data_402A40(rec.mFrameTableOffset, field_E4_res_array[0]);
+            if (field_E4_res_array[0]) // SATURN (ao261.31)
+            {
+                field_10_anim.Set_Animation_Data_402A40(rec.mFrameTableOffset, field_E4_res_array[0]);
+            }
             field_1E0_selected_index.gamespeak_menu = GameSpeakOptions::eFart_7;
             auto pFade = ao_new<MainMenuFade>();
             if (pFade)
@@ -3050,7 +3104,10 @@ void Menu::GameSpeak_Update_47CBD0()
 
     field_204_flags |= 1u;
     const AnimRecord& rec = AO::AnimRec(AnimId::MenuAbeSpeak_Goodbye);
-    field_10_anim.Set_Animation_Data_402A40(rec.mFrameTableOffset, field_E4_res_array[0]);
+    if (field_E4_res_array[0]) // SATURN (ao261.31)
+    {
+        field_10_anim.Set_Animation_Data_402A40(rec.mFrameTableOffset, field_E4_res_array[0]);
+    }
     field_1E0_selected_index.gamespeak_menu = GameSpeakOptions::eMainMenu_9;
 
     auto pFade2 = ao_new<MainMenuFade>();
