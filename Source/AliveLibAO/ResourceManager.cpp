@@ -342,7 +342,17 @@ extern "C" volatile s32 Tethys_gMissingRes = 0;
 // take it, instead of fataling. `rn` on the S4 row -- a rising rn is the
 // no-cart heap running out, degraded but alive.
 extern "C" volatile u32 Tethys_gResSoftNull = 0;
-extern "C" void Tethys_ResNullReport(u32 type, u32 id, u32 size, u32 used, u32 peak, u32 cap);
+// SATURN (ao262.10): ...AND WHICH ONE. `rn` said how many allocations were
+// refused, never which -- and the tester's "a Mudokon is missing" is exactly
+// the question a count cannot answer. This is the same lesson the RES NULL
+// report already paid for: a refusal that cannot name its resource cannot be
+// acted on. Largest-first, because on a 99.7%-full heap the big refusal is the
+// one that removed something from the screen.
+extern "C" volatile u32 Tethys_gSoftType = 0;
+extern "C" volatile u32 Tethys_gSoftId = 0;
+extern "C" volatile u32 Tethys_gSoftSize = 0;
+extern "C" void Tethys_ResNullReport(u32 n, u32 type, u32 id, u32 size,
+                                     u32 used, u32 peak, u32 cap, u32 vf, u32 pf);
 extern "C" volatile u32 Tethys_gLastMissType = 0; // bt1121: last CheckResourceIsLoaded miss
 extern "C" volatile u32 Tethys_gLastMissId = 0;
 
@@ -2298,6 +2308,12 @@ u8** ResourceManager::Alloc_New_Resource_ImplEx(u32 type, u32 id, u32 size, bool
         // frame or fails its init -- so hand it the null it was written to
         // expect. Counted, never silent: `rn` on the S4 row.
         Tethys_gResSoftNull++;
+        if (size > Tethys_gSoftSize) // ao262.10: keep the BIGGEST, not the last
+        {
+            Tethys_gSoftType = type;
+            Tethys_gSoftId = id;
+            Tethys_gSoftSize = size;
+        }
     }
     else if (bReclaimOnFail)
     {
@@ -2314,10 +2330,14 @@ u8** ResourceManager::Alloc_New_Resource_ImplEx(u32 type, u32 id, u32 size, bool
         // measurement that explains a RES NULL. Report type/id/size and the
         // heap totals onto rows the fatal does not touch, FIRST. This reads
         // plain globals only: no heap walk, which is what bt815 forbade here.
-        Tethys_ResNullReport(type, id, size,
+        // ao262.10: n / vf / pf are 0 here -- on the fatal path nothing
+        // survived to count. Same reporter, same two Print sites as the live
+        // survived-refusal row: adding a second pair cost 500 B of HWRAM and
+        // the 128 KB pre-flight floor refused the image.
+        Tethys_ResNullReport(0u, type, id, size,
                              static_cast<u32>(sManagedMemoryUsedSize_9F0E48),
                              static_cast<u32>(sPeakedManagedMemUsage_9F0E4C),
-                             kResHeapSize);
+                             kResHeapSize, 0u, 0u);
         Tethys_Fatal("RES NULL");
     }
 #endif

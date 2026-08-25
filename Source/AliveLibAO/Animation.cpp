@@ -47,6 +47,9 @@ extern "C" unsigned int Tethys_gDbufRaw[2];
 extern "C" unsigned int Tethys_gDbufBytes[2];
 extern "C" unsigned int Tethys_gDbufFall;
 extern "C" unsigned int Tethys_gAnimRebind; // ao242.17 'mv': FrameHeader rebinds after a heap compaction
+// SATURN (ao262.10): the two silent object-killers, see Init_402D20.
+extern "C" unsigned int Tethys_gVramFail;
+extern "C" unsigned int Tethys_gPalFail;
 extern "C" unsigned int Tethys_gInAnimate; // SATURN (ao242.6): the parent split
 extern "C" unsigned int Tethys_RawTicks(void);
 // SATURN (ao242.13) the probe gate -- see src/renderer_saturn.cxx.
@@ -1235,6 +1238,29 @@ s16 Animation::Init_402D20(s32 frameTableOffset, DynamicArray* /*animList*/, Bas
     if (bAllocateVRam)
     {
         bVramAllocOK = vram_alloc_450B20(maxW, maxH, pFrameHeader->field_6_colour_depth, &field_84_vram_rect);
+#ifdef TETHYS_SATURN
+        // SATURN (ao262.10): THE FAILURE MODE NO GAUGE COULD SEE.
+        //
+        // A failed Init_402D20 does not merely lose a frame -- it returns 0, and
+        // BaseAnimatedWithPhysicsGameObject.cpp:94-109 then sets eListAddFailed
+        // and eDead WITHOUT ever pushing the object onto gObjList_drawables. The
+        // object is reaped a tick later. That is the tester's "a Mudokon is
+        // missing": no crash, no message, a character simply absent, and not one
+        // of the four Mudokon factories checks the constructor's result.
+        //
+        // Of the ways Init can fail, the resource-heap one now bumps `rn` and
+        // names itself on the SN row. THESE TWO DID NOT COUNT ANYTHING:
+        // Vram_alloc_4956C0 returns 0 with no counter, and PalAlloc only counts
+        // successes. So a VRAM or CLUT exhaustion removed characters completely
+        // invisibly -- and it produces a symptom IDENTICAL to the heap case, so
+        // reading SN alone would have convicted the wrong subsystem.
+        // `vf`/`pf` on the AF row are the discriminator: SN names the heap,
+        // these two name the VRAM side, and exactly one of the three should move.
+        if (!bVramAllocOK)
+        {
+            Tethys_gVramFail++;
+        }
+#endif
     }
 
     bool bPalAllocOK = true;
@@ -1243,6 +1269,12 @@ s16 Animation::Init_402D20(s32 frameTableOffset, DynamicArray* /*animList*/, Bas
         IRenderer::PalRecord rec;
         rec.depth = pal_depth;
         bPalAllocOK = IRenderer::GetRenderer()->PalAlloc(rec);
+#ifdef TETHYS_SATURN
+        if (!bPalAllocOK)
+        {
+            Tethys_gPalFail++; // ao262.10: see the note on the vram leg above
+        }
+#endif
 
         field_8C_pal_vram_xy.field_0_x = rec.x;
         field_8C_pal_vram_xy.field_2_y = rec.y;
