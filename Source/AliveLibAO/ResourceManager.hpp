@@ -139,7 +139,28 @@ public:
 
     // SATURN (bt828): bReclaimOnFail=false -> best-effort (no Reclaim_Memory
     // compaction, no fatal); returns null if it doesn't fit existing free space.
+    // SATURN (ao262.2): bFatalOnFail SPLIT OUT OF bReclaimOnFail, because those
+    // are two different decisions and conflating them made a whole class of
+    // recovery code unreachable. Several callers are written to survive a null
+    // -- Animation's three decompression-buffer sites each skip the frame or
+    // fail the init -- but they allocate through the fataling path, so their
+    // guard can never run: on the 1 MB no-cart heap the game dies where it was
+    // designed to drop a frame. (With the 4 MB cart the alloc fits, which is
+    // exactly why this only ever showed up without one.) Passing
+    // bReclaimOnFail=true, bFatalOnFail=false keeps the compaction retry -- it
+    // is worth trying, the caller's fallback is visibly degraded -- and returns
+    // null instead of killing the run. Only use it where the null path is
+    // PROVEN safe: Blood.cpp derefs field_E8_pResBuf outside its own guard
+    // (:179, :243), so it stays fatal rather than trading a fatal for a wild
+    // deref.
+    // SATURN (ao262.3): the EX form is a NEW declaration, not a changed one, and
+    // that is deliberate. This Makefile does not track header dependencies, so
+    // adding a parameter to Alloc_New_Resource_Impl silently left ~170 stale
+    // objects calling the old 6-arg signature -- the link failed on
+    // ParticleBurst::ctor. Adding an overload keeps every unrebuilt object
+    // linkable; only the TUs that actually call the EX form get recompiled.
     static u8** Alloc_New_Resource_Impl(u32 type, u32 id, u32 size, bool locked, BlockAllocMethod allocType, bool bReclaimOnFail = true);
+    static u8** Alloc_New_Resource_ImplEx(u32 type, u32 id, u32 size, bool locked, BlockAllocMethod allocType, bool bReclaimOnFail, bool bFatalOnFail);
 
     static EXPORT u8** CC Alloc_New_Resource_454F20(u32 type, u32 id, u32 size);
 

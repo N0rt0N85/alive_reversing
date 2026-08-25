@@ -425,10 +425,20 @@ AliveFont* AliveFont::ctor_41C170(s32 maxCharLength, const u8* palette, FontCont
     field_28_palette_rect.h = 1;
 
     field_30_poly_count = maxCharLength;
-    field_20_fnt_poly_block_ptr = ResourceManager::Allocate_New_Locked_Resource_454F80(
+    // SATURN (ao262.4): NON-FATAL, so the block just below can finally run.
+    // The tester's fatal named this exact allocation -- FntP id 2, 5,760 B,
+    // against a no-cart heap at us933948 / cap942420 = 99.10% -- and the
+    // degrade path underneath has existed since S4 without ever being
+    // reachable, because Allocate_New_Locked_Resource_454F80 fatals first.
+    // That is also why `df` has read 00 on every capture ever taken: the gauge
+    // was watching a path that could not execute. Same locked/eLastMatching
+    // allocation as before, reclaim retry kept, null returned instead of death.
+    field_20_fnt_poly_block_ptr = ResourceManager::Alloc_New_Resource_ImplEx(
         ResourceManager::Resource_FntP,
         fontContext->field_C_resource_id,
-        sizeof(Poly_FT4) * 2 * maxCharLength);
+        sizeof(Poly_FT4) * 2 * maxCharLength,
+        true, ResourceManager::BlockAllocMethod::eLastMatching,
+        true /*reclaim*/, false /*never fatal*/);
 #ifdef TETHYS_SATURN
     // SATURN: third instance of the unchecked-null-handle class (after FG1's
     // CHNK block): on a heap at peak this alloc returns null and the *null

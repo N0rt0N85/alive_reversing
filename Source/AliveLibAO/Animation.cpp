@@ -46,6 +46,7 @@ extern "C" unsigned char* Tethys_gDbufScratch;
 extern "C" unsigned int Tethys_gDbufRaw[2];
 extern "C" unsigned int Tethys_gDbufBytes[2];
 extern "C" unsigned int Tethys_gDbufFall;
+extern "C" unsigned int Tethys_gAnimRebind; // ao242.17 'mv': FrameHeader rebinds after a heap compaction
 extern "C" unsigned int Tethys_gInAnimate; // SATURN (ao242.6): the parent split
 extern "C" unsigned int Tethys_RawTicks(void);
 // SATURN (ao242.13) the probe gate -- see src/renderer_saturn.cxx.
@@ -335,6 +336,58 @@ void Animation::UploadTexture(const FrameHeader* pFrameHeader, const PSX_RECT& v
 {
     IRenderer& renderer = *IRenderer::GetRenderer();
 #ifdef TETHYS_SATURN
+    // SATURN ROOT FIX (ao242.17) -- pFrameHeader IS A RAW DEREF OF A MOVABLE
+    // BLOCK, AND EVERYTHING BELOW CAN MOVE IT.
+    //
+    // THE POINTER. vDecode builds it as
+    //     &(*field_20_ppBlock)[pFrameInfoHeader->field_0_frame_header_offset]
+    // (this file, in VDecode just above the call to us) -- a raw u8* into this
+    // animation's own resource block, passed down here and then used both as
+    // the compression-type discriminator AND as the DECOMPRESSION SOURCE
+    // (&pFrameHeader->field_8_width2 in every arm of the switch).
+    //
+    // WHAT MOVES IT. Two allocation sites sit BETWEEN that deref and its use:
+    // the bt870 buffer growth immediately below, and EnsureDecompressionBuffer
+    // inside four of the five switch arms. Both call
+    // Alloc_New_Resource_454F20, i.e. Alloc_New_Resource_Impl with
+    // bReclaimOnFail = true, and on a first-fit miss that runs
+    // Reclaim_Memory_455660(0) -- which, because sizeToReclaim == 0 is
+    // rewritten to kResHeapSize (ResourceManager.cpp, top of the function),
+    // COMPACTS THE WHOLE HEAP and memmoves every non-locked block. The
+    // animation block is non-locked: Anim chunks are created with
+    // Alloc_New_Resource_454F20 (locked = false), including the CAM-EMBEDDED
+    // ones -- which is exactly what the R1P15C07/C08 background barrels are
+    // (kBgAnimRecords maps them to "R1P15C07.CAM" +24764 and "R1P15C08.CAM"
+    // +28752, not to any .BAN).
+    //
+    // So the sequence is: deref -> allocate -> heap compacts -> decompress from
+    // a pointer that now names somebody else's bytes. bt828 already wrote this
+    // hazard class down at the reclaim retry itself ("any live object that
+    // cached a RAW deref (u8*) of a moved block is left with a DANGLING
+    // non-null pointer"); this is that class, on the animation decode path.
+    // The handle survives the move, so the repair is free: keep the OFFSET and
+    // re-derive.
+    //
+    // WHY THIS IS SHAPED AS A HOIST RATHER THAN FIVE REBINDS. Doing the
+    // allocating UP FRONT -- both sites, before the switch -- leaves exactly
+    // ONE window to close instead of five, and the arms then find the buffer
+    // already present so their own EnsureDecompressionBuffer cannot allocate
+    // and cannot move anything. Behaviour is identical: every arm that calls it
+    // would have called it immediately anyway, and type 0 (which needs no
+    // buffer) is excluded by the same test the switch uses.
+    //
+    // WHEN IT FIRES, which is why the report is "it corrupts WHEN I pull the
+    // lever / chant" rather than "it is always wrong": the first fit only
+    // misses once the heap is fragmented, and those events are precisely what
+    // fragments it -- each new object (the lift wheel and pulley starting to
+    // animate, the BirdPortal's terminators and sparks) takes its own resource,
+    // vram and palette allocations mid-screen. 'mv' on row 7 counts the
+    // rebinds: mv00 for a whole screen means no block moved under a decode
+    // there and this fix is not what changed anything.
+    const u8* const fhBlock0 = field_20_ppBlock ? *field_20_ppBlock : nullptr;
+    const u32 fhOff = fhBlock0
+                          ? static_cast<u32>(reinterpret_cast<const u8*>(pFrameHeader) - fhBlock0)
+                          : 0u;
     // SATURN ROOT FIX (bt870): Type 4/5 (LZSS) embeds its TRUE decompressed
     // length as the first u32 of the payload, and Decompress_Type_4_5 writes
     // exactly that many bytes -- IGNORING field_28_dbuf_size. For several frames
@@ -358,14 +411,36 @@ void Animation::UploadTexture(const FrameHeader* pFrameHeader, const PSX_RECT& v
                     ResourceManager::FreeResource_455550(field_24_dbuf);
                 }
                 field_28_dbuf_size = destLen;
-                field_24_dbuf = ResourceManager::Alloc_New_Resource_454F20(
-                    ResourceManager::Resource_DecompressionBuffer, 0, destLen);
+                // SATURN (ao262.2): NON-FATAL. The `return` below is this
+                // site's whole point -- skip the frame rather than overrun --
+                // and it was unreachable, because Alloc_New_Resource_454F20
+                // fatals on failure. destLen is up to 256 KB; it fits the 4 MB
+                // cart heap and does not fit the 1 MB no-cart one, which is
+                // exactly the shape of "fatal on death, only without a cart".
+                field_24_dbuf = ResourceManager::Alloc_New_Resource_ImplEx(
+                    ResourceManager::Resource_DecompressionBuffer, 0, destLen,
+                    false, ResourceManager::BlockAllocMethod::eFirstMatching,
+                    true /*reclaim*/, false /*never fatal -- see below*/);
                 if (!field_24_dbuf)
                 {
                     return; // cannot fit this frame -> skip it, never overrun
                 }
             }
         }
+    }
+    // ao242.17: the SECOND allocating site, hoisted out of the switch arms so
+    // the rebind below covers it too. Type 0 uploads straight from the block
+    // and must not be made to allocate a buffer it never reads.
+    if (pFrameHeader->field_7_compression_type != CompressionType::eType_0_NoCompression)
+    {
+        EnsureDecompressionBuffer(); // result re-tested by each arm, unchanged
+    }
+    // ao242.17: THE ONE WINDOW, CLOSED. Nothing above this line derefs
+    // pFrameHeader after an allocation; nothing below it allocates.
+    if (fhBlock0 && field_20_ppBlock && *field_20_ppBlock != fhBlock0)
+    {
+        pFrameHeader = reinterpret_cast<const FrameHeader*>(*field_20_ppBlock + fhOff);
+        Tethys_gAnimRebind++; // 'mv' -- a block really did move under a decode
     }
 #endif
     switch (pFrameHeader->field_7_compression_type)
@@ -888,7 +963,14 @@ bool Animation::EnsureDecompressionBuffer()
 {
     if (!field_24_dbuf)
     {
-        field_24_dbuf = ResourceManager::Alloc_New_Resource_454F20(ResourceManager::Resource_DecompressionBuffer, 0, field_28_dbuf_size);
+        // SATURN (ao262.2): NON-FATAL. This function's return value is a
+        // bool that every one of the five switch arms tests -- and it could
+        // never be false, because the allocator fataled first. Now a starved
+        // heap drops the decode instead of the run.
+        field_24_dbuf = ResourceManager::Alloc_New_Resource_ImplEx(
+                    ResourceManager::Resource_DecompressionBuffer, 0, field_28_dbuf_size,
+                    false, ResourceManager::BlockAllocMethod::eFirstMatching,
+                    true /*reclaim*/, false /*never fatal -- see below*/);
     }
     return field_24_dbuf != nullptr;
 }
@@ -1229,7 +1311,13 @@ s16 Animation::Init_402D20(s32 frameTableOffset, DynamicArray* /*animList*/, Bas
     if (pFrameHeader->field_7_compression_type != CompressionType::eType_0_NoCompression)
     {
         const u32 id = ResourceManager::Get_Header_455620(field_20_ppBlock)->field_C_id;
-        field_24_dbuf = ResourceManager::Alloc_New_Resource_454F20(ResourceManager::Resource_DecompressionBuffer, id, field_28_dbuf_size);
+        // SATURN (ao262.2): NON-FATAL. The recovery below -- release the vram
+        // rect and palette this init already took, and report the failure to
+        // the caller -- is complete and was unreachable for the same reason.
+        field_24_dbuf = ResourceManager::Alloc_New_Resource_ImplEx(
+                    ResourceManager::Resource_DecompressionBuffer, id, field_28_dbuf_size,
+                    false, ResourceManager::BlockAllocMethod::eFirstMatching,
+                    true /*reclaim*/, false /*never fatal -- see below*/);
         if (!field_24_dbuf)
         {
             LOG_WARNING("Animation init failed because it couldn't alloc a new resource!");
