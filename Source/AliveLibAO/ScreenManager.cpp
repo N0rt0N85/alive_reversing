@@ -296,6 +296,36 @@ void ScreenManager::UnsetDirtyBits_FG1_406EF0()
 
 void ScreenManager::InvalidateRect_406E40(s32 x, s32 y, s32 width, s32 height, s32 idx)
 {
+#ifdef TETHYS_SATURN
+    // SATURN (ao262.18) -- THE WRITER OUTLIVED ITS READER, and that is the whole
+    // justification. ao242.12 gated the dirty-rectangle recomposition in
+    // VRender_406A60 behind `if (false)`; every GetTile in this file lives
+    // between lines 398 and 416, i.e. INSIDE that gated loop. Enumerated, not
+    // sampled: a grep of field_58_20x16_dirty_bits across AliveLibAO returns
+    // ScreenManager.cpp only, and every read of it is in the dead loop. So these
+    // bits are computed every frame for nobody.
+    //
+    // The cost is not a guess but it is also not measured, and it is deliberately
+    // NOT estimated here: the last cost model this port acted on was wrong by
+    // 40 % in the wrong direction. What can be said structurally is that this is
+    // a NESTED TILE LOOP with four SIGNED divisions by a power of two -- and the
+    // SH-2 has no multi-bit arithmetic right shift, so unless GCC can prove the
+    // operands non-negative each is a libgcc call (ao242.5 removed seven of
+    // exactly this shape from the renderer) -- run by ~36 call sites in the game
+    // core, including BaseAnimatedWithPhysicsGameObject (every animated actor,
+    // every frame) and Rope, which the `d` probe just named as the most
+    // expensive drawable type on c7 and c8.
+    //
+    // It is a PURE DELETION with nothing traded against it, which is the only
+    // shape of change this port ships since ao242.13 measured what a trade costs.
+    // The size of the win is read off `d` on row 21, not asserted here.
+    //
+    // The state is left declared and the memsets/merges are untouched, exactly as
+    // the ao242.12 note at VRender_406A60 asks: a future reader would need the
+    // invariant, and removing state is not what this change is for.
+    (void) x; (void) y; (void) width; (void) height; (void) idx;
+    return;
+#else
     x = std::max(x, 0);
     y = std::max(y, 0);
 
@@ -309,6 +339,7 @@ void ScreenManager::InvalidateRect_406E40(s32 x, s32 y, s32 width, s32 height, s
             field_58_20x16_dirty_bits[idx].SetTile(tileX, tileY, true);
         }
     }
+#endif
 }
 
 void ScreenManager::InvalidateRect_Layer3_406F20(s32 x, s32 y, s32 width, s32 height)
