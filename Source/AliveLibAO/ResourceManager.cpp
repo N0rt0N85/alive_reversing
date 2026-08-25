@@ -592,41 +592,49 @@ static void Tethys_WedgeFatal()
     // -- Tethys_Fatal cannot do it (bt815) and the overlay is no longer on to
     // do it by accident. See the block at Tethys_WedgeCensus in sys_saturn.cxx.
     Tethys_WedgeCensus();
-    static char_type msg[40];
+    // ao262.14: THE COLUMN BUDGET FORGOT ITS OWN PREFIX. ao262.13 sized this
+    // message against 40 columns and shipped "...R1P15C05.CA 2" -- Tethys_Fatal
+    // draws "TETHYS FATAL: <msg>", fourteen columns this code never counted, so
+    // the number it existed to deliver was cut to its first digit. Budget, from
+    // the left: 14 prefix + 6 "wedge " + 12 name + 1 + 5 digits + 1 'k' = 39.
+    // KILOBYTES, not bytes, and that is not a compromise: the question this
+    // number settles is "tens of KB (fragmentation) or hundreds (the working
+    // set)", and four digits answer it with two columns to spare where seven
+    // did not fit at all.
+    static char_type msg[32];
     char_type* p = msg;
-    for (const char_type* s = "LWRAM wedge "; *s; s++)
+    for (const char_type* s = "wedge "; *s; s++)
     {
         *p++ = *s;
     }
     const char_type* nm = sTethysLoadingCam[0] ? sTethysLoadingCam : "?";
-    for (const char_type* s = nm; *s && p < &msg[30]; s++)
+    for (const char_type* s = nm; *s && p < &msg[18]; s++)
     {
         *p++ = *s;
     }
     // ao262.13: ...AND THE SIZE, ON THE FATAL LINE ITSELF. Written by hand
     // rather than given a Debug::Print field because Print bills for arity and
-    // for each distinct argument signature -- two attempts at putting wz on an
+    // for each distinct argument signature -- two attempts at putting it on an
     // overlay row came in 400 and 560 B under the HWRAM floor, and this one
     // costs a loop the fatal path runs once. It also lands where it is actually
     // needed: the fatal's own census overwrites rows 3-10, so any row this
     // message pointed at would be erased by the screen it explains. That is
     // exactly how the ORIGINAL note went stale ("already on overlay row 5").
-    // Names are ~11 chars, so 30 leaves room for a 7-digit count.
-    if (p < &msg[31])
     {
         *p++ = ' ';
-        char_type digits[10];
+        char_type digits[8];
         s32 nd = 0;
-        u32 v = sTethysWedgeBytes;
+        u32 v = sTethysWedgeBytes >> 10; // KiB -- see the budget note above
         do
         {
             digits[nd++] = static_cast<char_type>('0' + static_cast<s32>(v % 10u));
             v /= 10u;
-        } while (v != 0u && nd < 10);
-        while (nd > 0 && p < &msg[39])
+        } while (v != 0u && nd < 5);
+        while (nd > 0)
         {
             *p++ = digits[--nd];
         }
+        *p++ = 'k';
     }
     *p = 0;
     ALIVE_FATAL(msg);
