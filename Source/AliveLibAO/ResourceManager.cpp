@@ -549,6 +549,7 @@ extern "C" u32 Tethys_FlipRecKb()
     return sFlipRecBytes >> 10;
 }
 
+
 // Wedge diagnostics (S7 round 6): a staging block that cannot fit is now a
 // GENUINE working-set overflow (post-round-5 the CAM no longer stages -- the
 // remaining wedges are factory BNDs like EXPLODE.BND on Slig+Mudokon+explosion
@@ -558,6 +559,32 @@ extern "C" u32 Tethys_FlipRecKb()
 // (asset reduction) vs skippable. The stuck file's sector count is already on
 // overlay row 5 (q/st/sz), so it is not re-formatted here (keeps .text down).
 extern "C" void Tethys_WedgeCensus(void);
+
+// SATURN (ao262.13): THE SIZE THE WEDGE COULD NOT PLACE.
+//
+// Tethys_WedgeFatal has never said HOW BIG the block was that would not fit,
+// and its own comment explains why: "The stuck file's sector count is already
+// on overlay row 5 (q/st/sz)". That row was re-purposed -- row 5 now carries
+// the sprite gauges (W p/u/kb/cf/rf/fp/sn) and Tethys_LoadingProbe, which fed
+// q/st/sz, is DECLARED IN sys_saturn.cxx AND NEVER CALLED. And even if it
+// still printed there, the fatal's own Tethys_WedgeCensus overwrites rows 3-10
+// before the message is drawn, so the row it pointed at could not survive the
+// screen it was meant to explain.
+//
+// The consequence is that every wedge photo for months has shown WHAT is in
+// the heap and never HOW MUCH was being asked for -- so no one could tell a
+// 20 KB shortfall (fragmentation; compaction is the fix) from a 200 KB one
+// (the working set genuinely exceeds the heap; only assets or the cart fix
+// that). Those need opposite work, and the number that separates them is one
+// multiply that was already on the stack.
+static u32 sTethysWedgeBytes = 0;
+
+// 0 until a retry actually spins, so a non-zero reading is never ambient: it is
+// the wedge, or the last one this session.
+extern "C" u32 Tethys_WedgeBytes()
+{
+    return sTethysWedgeBytes;
+}
 
 static void Tethys_WedgeFatal()
 {
@@ -572,9 +599,34 @@ static void Tethys_WedgeFatal()
         *p++ = *s;
     }
     const char_type* nm = sTethysLoadingCam[0] ? sTethysLoadingCam : "?";
-    for (const char_type* s = nm; *s && p < &msg[39]; s++)
+    for (const char_type* s = nm; *s && p < &msg[30]; s++)
     {
         *p++ = *s;
+    }
+    // ao262.13: ...AND THE SIZE, ON THE FATAL LINE ITSELF. Written by hand
+    // rather than given a Debug::Print field because Print bills for arity and
+    // for each distinct argument signature -- two attempts at putting wz on an
+    // overlay row came in 400 and 560 B under the HWRAM floor, and this one
+    // costs a loop the fatal path runs once. It also lands where it is actually
+    // needed: the fatal's own census overwrites rows 3-10, so any row this
+    // message pointed at would be erased by the screen it explains. That is
+    // exactly how the ORIGINAL note went stale ("already on overlay row 5").
+    // Names are ~11 chars, so 30 leaves room for a 7-digit count.
+    if (p < &msg[31])
+    {
+        *p++ = ' ';
+        char_type digits[10];
+        s32 nd = 0;
+        u32 v = sTethysWedgeBytes;
+        do
+        {
+            digits[nd++] = static_cast<char_type>('0' + static_cast<s32>(v % 10u));
+            v /= 10u;
+        } while (v != 0u && nd < 10);
+        while (nd > 0 && p < &msg[39])
+        {
+            *p++ = digits[--nd];
+        }
     }
     *p = 0;
     ALIVE_FATAL(msg);
@@ -666,6 +718,7 @@ public:
                     {
                         ResourceManager::Reclaim_Memory_455660(200000u);
 #ifdef TETHYS_SATURN
+                        sTethysWedgeBytes = static_cast<u32>(field_10_size) << 11;
                         // SATURN: on the 1,024,000 B heap this retry loop is
                         // the S7 wedge mode -- the whole-file staging block
                         // (field_10_size << 11) cannot fit, Reclaim no-ops
