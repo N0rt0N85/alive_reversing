@@ -55,6 +55,49 @@ extern "C" unsigned int Tethys_RawTicks(void);
 // SATURN (ao242.13) the probe gate -- see src/renderer_saturn.cxx.
 extern "C" unsigned char Tethys_gProbeOn;
 #define TETHYS_PT() (Tethys_gProbeOn ? Tethys_RawTicks() : 0u)
+extern "C" unsigned int Tethys_gTear;
+// ao262.18 TETHYS_PD -- AND THE ROOT CAUSE IS IN SRL, NOT IN THE GAUGE.
+//
+// The `d` probe printed T9999 -- the clamp -- on the busy hardware screens, and
+// held it for twenty seconds: one AO type credited with >= 999.9 ms per tick,
+// which is not a slow object, it is a poisoned accumulator. The mechanism is
+// SRL::Timer::Capture (SaturnRingLib/saturnringlib/srl_timer.hpp:1084):
+//
+//     uint16_t frtValue = (FrchReg << 8) | FrclReg;   // <-- FRT read FIRST
+//     __asm__ volatile("" : : : "memory");
+//     return Tickstamp(Timer::overflowCounter, frtValue);   // counter read AFTER
+//
+// overflowCounter is incremented by FrtHandler, an INTERRUPT HANDLER (same file,
+// :891). If the FRT wraps between those two reads, the low half is pre-wrap
+// (0xFFFF-ish) and the high half is post-wrap: the timestamp lands 65,536 ticks
+// -- 315 ms -- in the FUTURE. The next capture is normal, so `end - start`
+// underflows u32 to ~4.29e9, and one such addition owns its accumulator for the
+// rest of the screen. The FRT wraps every ~315 ms, so on a twenty-second visit
+// there are ~60 windows, and this port makes hundreds of captures a tick.
+//
+// THIS IS NOT A `d` PROBE DEFECT. Every bracket in the port reads through
+// Tethys_RawTicks and every one of them is exposed; `d` is simply where it
+// landed on 2026-08-22. It is also why an unclamped gauge used to print a
+// ten-digit field and blow the row width (bt1147).
+//
+// The fix is at the DELTA, not at the capture, and that is deliberate: reading
+// the counter twice to close the race would double the cost of every bracket
+// (K = 0.44 raw ticks = 56 SH-2 cycles per pair on hardware, ~470 pairs a tick
+// on c8), which is the tax ao242.13 built the gate to remove. A backwards delta
+// is never valid, and the tear is always exactly +/- 65,536 ticks, so ONE
+// unsigned compare against half a wrap rejects both directions. 32,768 ticks is
+// 157 ms; no frame-path bracket is within an order of magnitude of that.
+//   A statement expression, so the operands are evaluated ONCE -- `e` is a live
+// hardware read and a naive macro would call it twice and measure the wrong
+// thing. Not a static inline: bt1136 measured those NOT being inlined at -Os.
+//   E on row 21 counts the rejects. If T9999 ever comes back with E reading 000,
+// this diagnosis is refuted and the next reading is the accumulator itself.
+//   The reject path is a CALL, not an inline increment: it is cold by
+// construction (a tear is a once-per-screen event at worst), and the address
+// literal plus load-add-store it replaces was costing text at all fifteen sites
+// against a HWRAM pre-flight floor with 0.2 KB of margin left.
+#define TETHYS_PD(e, s) ({ const unsigned int tethys_pd_ = (unsigned int) ((e) - (s)); \
+    (tethys_pd_ < 32768u) ? tethys_pd_ : Tethys_TearDrop(); })
 
 // Fix pollution from windows.h
 #undef min
@@ -566,7 +609,7 @@ void Animation::UploadTexture(const FrameHeader* pFrameHeader, const PSX_RECT& v
                     // only [0] was ever written. Both raw AND bytes are split, so
                     // row 7's r stays a true rate over its own population.
                     const u32 kPar = Tethys_gInAnimate ? 0u : 1u;
-                    Tethys_gDbufRaw[kPar] += TETHYS_PT() - t0;
+                    Tethys_gDbufRaw[kPar] += TETHYS_PT() - t0; // ao262.18: unguarded
                     Tethys_gDbufBytes[kPar] += *reinterpret_cast<const u32*>(&pFrameHeader->field_8_width2);
                 }
                 renderer.Upload(AnimFlagsToBitDepth(field_4_flags), vram_rect, pDst);
@@ -1011,7 +1054,7 @@ void CC AnimationBase::AnimateAll_4034F0(DynamicArrayT<AnimationBase>* pAnimList
                     {
                         const unsigned int tDc0 = TETHYS_PT(); // SATURN bt1135
                         pAnim->vDecode();
-                        Tethys_gDcRaw += TETHYS_PT() - tDc0;
+                        Tethys_gDcRaw += TETHYS_PT() - tDc0; // ao262.18: unguarded
                     }
                 }
             }

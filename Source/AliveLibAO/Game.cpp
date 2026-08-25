@@ -72,6 +72,50 @@ extern "C" u32 Tethys_RawTicks(void);
 // a static inline: bt1136 measured `static inline` not being inlined at -Os.
 extern "C" u8 Tethys_gProbeOn;
 #define TETHYS_PT() (Tethys_gProbeOn ? Tethys_RawTicks() : 0u)
+extern "C" unsigned int Tethys_gTear;
+extern "C" unsigned int Tethys_TearDrop(void);
+// ao262.18 TETHYS_PD -- AND THE ROOT CAUSE IS IN SRL, NOT IN THE GAUGE.
+//
+// The `d` probe printed T9999 -- the clamp -- on the busy hardware screens, and
+// held it for twenty seconds: one AO type credited with >= 999.9 ms per tick,
+// which is not a slow object, it is a poisoned accumulator. The mechanism is
+// SRL::Timer::Capture (SaturnRingLib/saturnringlib/srl_timer.hpp:1084):
+//
+//     uint16_t frtValue = (FrchReg << 8) | FrclReg;   // <-- FRT read FIRST
+//     __asm__ volatile("" : : : "memory");
+//     return Tickstamp(Timer::overflowCounter, frtValue);   // counter read AFTER
+//
+// overflowCounter is incremented by FrtHandler, an INTERRUPT HANDLER (same file,
+// :891). If the FRT wraps between those two reads, the low half is pre-wrap
+// (0xFFFF-ish) and the high half is post-wrap: the timestamp lands 65,536 ticks
+// -- 315 ms -- in the FUTURE. The next capture is normal, so `end - start`
+// underflows u32 to ~4.29e9, and one such addition owns its accumulator for the
+// rest of the screen. The FRT wraps every ~315 ms, so on a twenty-second visit
+// there are ~60 windows, and this port makes hundreds of captures a tick.
+//
+// THIS IS NOT A `d` PROBE DEFECT. Every bracket in the port reads through
+// Tethys_RawTicks and every one of them is exposed; `d` is simply where it
+// landed on 2026-08-22. It is also why an unclamped gauge used to print a
+// ten-digit field and blow the row width (bt1147).
+//
+// The fix is at the DELTA, not at the capture, and that is deliberate: reading
+// the counter twice to close the race would double the cost of every bracket
+// (K = 0.44 raw ticks = 56 SH-2 cycles per pair on hardware, ~470 pairs a tick
+// on c8), which is the tax ao242.13 built the gate to remove. A backwards delta
+// is never valid, and the tear is always exactly +/- 65,536 ticks, so ONE
+// unsigned compare against half a wrap rejects both directions. 32,768 ticks is
+// 157 ms; no frame-path bracket is within an order of magnitude of that.
+//   A statement expression, so the operands are evaluated ONCE -- `e` is a live
+// hardware read and a naive macro would call it twice and measure the wrong
+// thing. Not a static inline: bt1136 measured those NOT being inlined at -Os.
+//   E on row 21 counts the rejects. If T9999 ever comes back with E reading 000,
+// this diagnosis is refuted and the next reading is the accumulator itself.
+//   The reject path is a CALL, not an inline increment: it is cold by
+// construction (a tear is a once-per-screen event at worst), and the address
+// literal plus load-add-store it replaces was costing text at all fifteen sites
+// against a HWRAM pre-flight floor with 0.2 KB of margin left.
+#define TETHYS_PD(e, s) ({ const unsigned int tethys_pd_ = (unsigned int) ((e) - (s)); \
+    (tethys_pd_ < 32768u) ? tethys_pd_ : Tethys_TearDrop(); })
 // SATURN (ao242.13) `d` IS THE LAST UNSPLIT NODE IN THE FRAME, and on c8 it is
 // the biggest: 11.8 ms of a 57.8 ms tick for 26 drawables, 0.45 ms each, with no
 // column able to say whether that is one expensive object or twenty-six ordinary
@@ -86,7 +130,15 @@ extern "C" u8 Tethys_gProbeOn;
 //   The table is indexed by AO type id (0..103, BaseGameObject::Types is s16) and
 // reset per SCREEN with everything else on rows 16-22, bt1007/bt1008: a boot
 // cumulative on a per-screen row reports the past forever.
-extern "C" u32 Tethys_gDrawByType[128];
+extern "C" u16 Tethys_gDrawByType[104];
+// ao262.18: the table is sized to the enum (AO Types run 0..103), so the index
+// is CLAMPED rather than masked -- 103 is not a power of two, and field_4_typeId
+// is an s16 that a corrupt object could carry anything in.
+static inline unsigned int TethysDrawBucket(AO::Types t)
+{
+    const int i = static_cast<int>(t);
+    return (i >= 0 && i < 104) ? static_cast<unsigned int>(i) : 0u;
+}
 extern "C" u32 Tethys_gPhRend;
 // SATURN (ao242.6) the frame hierarchy -- definitions in src/sys_saturn.cxx
 extern "C" u32 Tethys_gUStamp;   // the running stamp S0..S3 differences
@@ -617,7 +669,7 @@ EXPORT void CC Game_Loop_437630()
 #ifdef TETHYS_SATURN
         {   // SATURN (ao242.6) S3: uB closes. u - uT - uA - uB is the while
             // back-edge and must read <= 2 tenths of a ms.
-            Tethys_gUbRaw += TETHYS_PT() - Tethys_gUStamp;
+            Tethys_gUbRaw += TETHYS_PT() - Tethys_gUStamp; // ao262.18: unguarded
             Tethys_gVuList += (u32) gLoadingFiles->Size();
         }
 #endif
@@ -728,7 +780,7 @@ EXPORT void CC Game_Loop_437630()
 #ifdef TETHYS_SATURN
         Tethys_gInAnimate = 0; // SATURN (ao242.6): back under `u`'s parentage
         Tethys_gPhAnim += SYS_GetTicks() - tPhase0;
-        Tethys_gPhAnimRaw += TETHYS_PT() - tAnimRaw0; // SATURN: bt1134
+        Tethys_gPhAnimRaw += TETHYS_PT() - tAnimRaw0; // SATURN: bt1134 (unguarded)
         tPhase0 = SYS_GetTicks();
 #endif
 
@@ -766,9 +818,16 @@ EXPORT void CC Game_Loop_437630()
                     pDrawable->VRender(ppOt);
                     // & 127 never collides: AO Types run 0..103 (eElectrocute_103
                     // is the last), so the mask is a bound, not a hash.
-                    Tethys_gDrawByType[static_cast<u32>(
-                        static_cast<s32>(pDrawable->field_4_typeId)) & 127u]
-                        += Tethys_RawTicks() - tD0;
+                    // ao262.18: under the tear guard. This is the bucket
+                    // that printed T9999 on hardware for twenty seconds -- see
+                    // the TETHYS_PD banner at the head of the file. The table is
+                    // the ONLY accumulator here with no per-screen base, so a
+                    // poisoned sample owns it until the next flip, and the
+                    // poisoned bucket then wins the argmax and hides the real
+                    // answer (D057 eMine_57 displaced D073 eRope_73 on c8).
+                    // quarter raw ticks -- see the declaration in sys_saturn.cxx
+                    Tethys_gDrawByType[TethysDrawBucket(pDrawable->field_4_typeId)]
+                        += static_cast<u16>(TETHYS_PD(Tethys_RawTicks(), tD0) >> 2);
                 }
                 else
                 {
@@ -793,7 +852,7 @@ EXPORT void CC Game_Loop_437630()
             // priced. A CALL boundary, one execution a tick.
             const u32 tScr0 = TETHYS_PT();
             pScreenManager_4FF7C8->VRender(ppOt);
-            Tethys_gScrRaw += TETHYS_PT() - tScr0;
+            Tethys_gScrRaw += TETHYS_PT() - tScr0; // ao262.18: unguarded
         }
 #else
         pScreenManager_4FF7C8->VRender(ppOt);
