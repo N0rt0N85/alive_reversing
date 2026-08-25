@@ -578,6 +578,18 @@ extern "C" void Tethys_WedgeCensus(void);
 // that). Those need opposite work, and the number that separates them is one
 // multiply that was already on the stack.
 static u32 sTethysWedgeBytes = 0;
+// ao262.15: ...AND WHICH FILE. The size alone got us from "is this 20 KB or
+// 200?" to a shortlist, and the shortlist is FIVE: reading the delivered
+// cd/data/R1.LVL directory, exactly five records occupy 12 sectors --
+// ABETHROW.BAN, HIVE.BND, MUDCHSL.BAN, MUDLOTUS.BND, SLGSLEEP.BAN. They call
+// for different fixes (SLGSLEEP would mean the pressure ladder frees a set the
+// CURRENT screen immediately re-requests, which is a bug; the Mudokon pair
+// would mean nothing but weight), so one more field settles it.
+//   The three BCD bytes of the CdlLOC, RAW. Decoding them on target would cost
+// two divisions and a subtraction of sLvlArchive's base; six nibbles cost a
+// shift and a table, and the conversion is free offline where the LVL
+// directory already lives. A fatal path should carry evidence out, not compute.
+static u8 sTethysWedgeLoc[3] = {0, 0, 0};
 
 // 0 until a retry actually spins, so a non-zero reading is never ambient: it is
 // the wedge, or the last one this session.
@@ -601,14 +613,19 @@ static void Tethys_WedgeFatal()
     // number settles is "tens of KB (fragmentation) or hundreds (the working
     // set)", and four digits answer it with two columns to spare where seven
     // did not fit at all.
+    // ao262.15 budget, counted with the fourteen columns Tethys_Fatal prepends
+    // (the miss that truncated ao262.13): 14 + 3 "wz " + 8 name + 1 + 5 digits
+    // + 1 'k' + 1 + 6 nibbles = 39 of 40, worst case; 36 for real numbers. The
+    // ".CAM" is dropped from the name -- every camera ends in it, so those four
+    // columns were carrying no information while the CdlLOC needs six.
     static char_type msg[32];
     char_type* p = msg;
-    for (const char_type* s = "wedge "; *s; s++)
+    for (const char_type* s = "wz "; *s; s++)
     {
         *p++ = *s;
     }
     const char_type* nm = sTethysLoadingCam[0] ? sTethysLoadingCam : "?";
-    for (const char_type* s = nm; *s && p < &msg[18]; s++)
+    for (const char_type* s = nm; *s && *s != '.' && p < &msg[11]; s++)
     {
         *p++ = *s;
     }
@@ -635,6 +652,15 @@ static void Tethys_WedgeFatal()
             *p++ = digits[--nd];
         }
         *p++ = 'k';
+    }
+    {
+        static const char_type kHex[] = "0123456789abcdef";
+        *p++ = ' ';
+        for (s32 b = 0; b < 3; b++)
+        {
+            *p++ = kHex[(sTethysWedgeLoc[b] >> 4) & 15];
+            *p++ = kHex[sTethysWedgeLoc[b] & 15];
+        }
     }
     *p = 0;
     ALIVE_FATAL(msg);
@@ -727,6 +753,9 @@ public:
                         ResourceManager::Reclaim_Memory_455660(200000u);
 #ifdef TETHYS_SATURN
                         sTethysWedgeBytes = static_cast<u32>(field_10_size) << 11;
+                        sTethysWedgeLoc[0] = field_2A_cdLoc.field_0_minute;
+                        sTethysWedgeLoc[1] = field_2A_cdLoc.field_1_second;
+                        sTethysWedgeLoc[2] = field_2A_cdLoc.field_2_sector;
                         // SATURN: on the 1,024,000 B heap this retry loop is
                         // the S7 wedge mode -- the whole-file staging block
                         // (field_10_size << 11) cannot fit, Reclaim no-ops
