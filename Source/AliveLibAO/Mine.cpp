@@ -184,7 +184,49 @@ void Mine::VScreenChanged()
 
 void Mine::VScreenChanged_43AC10()
 {
-    if (gMap_507BA8.field_0_current_level != gMap_507BA8.field_A_level || gMap_507BA8.field_2_current_path != gMap_507BA8.field_C_path || !(field_1B0_flags & 2))
+    if (gMap_507BA8.field_0_current_level != gMap_507BA8.field_A_level || gMap_507BA8.field_2_current_path != gMap_507BA8.field_C_path || !(field_1B0_flags & 2)
+#ifdef TETHYS_SATURN
+        // SATURN (ao262.17): persists_offscreen KEEPS A MINE THAT IS COUNTING
+        // DOWN, NOT ONE THAT HAS NEVER BEEN TOUCHED.
+        //
+        // The measurement. R1P15C05 wedges without a cartridge: us 934,316 of
+        // cap 942,420, 8,104 free, staging 24,576 contiguous for MUDCHSL.BAN --
+        // short by 16,472 B. The death screen's occupant list names every block
+        // and seven of the eight have a user standing on the screen. The eighth
+        // does not: id00300 BGEXPLD, 33,764 B, at ref count SEVEN. R1P15C03 --
+        // two cells away -- holds Mine x7, and all seven carry
+        // persists_offscreen = 1 in the delivered pack (decoded from
+        // cd/data/R1.LVL, type 46 field_20). Seven mines, seven refs, exact
+        // match: the flag above is why they are still alive, and each ctor pins
+        // ABEBOMB + DEBRIS00 + BGEXPLD + ABEBLOW (:80-88; their
+        // disabled_resources = 6 masks ELMBLOW and SLOGBLOW only) = 48,212 B
+        // that no object on this screen can name. That is three times the gap.
+        //
+        // Why the idle case is free to give up. field_10C_detonating is 0 from
+        // the ctor (:32) until something triggers the mine (:222/248/260/335).
+        // At 0 the object carries NO state that its TLV does not already carry,
+        // so destroying it and letting the camera rebuild it is not an
+        // approximation -- Mine::dtor_43A640 calls TLV_Reset_446870 with
+        // bSetDestroyed = (detonating == 1), so an untouched mine goes back to
+        // Created = 0 / Destroyed = 0 and Loader_446590's ConstructObject_0 pass
+        // re-creates it on the next visit, with its resources already re-loaded
+        // by the same camera's LoadResourceFromList_1 pass (that mode ignores
+        // the Created bit, Map.cpp:2325). A mine mid-countdown is the case the
+        // flag exists for and it still persists, untouched by this clause.
+        //
+        // Cost: returning to C03 re-reads the 48,212 B explosion set once per
+        // visit. Not gated on heap size -- for an idle mine the two behaviours
+        // are equivalent, so the cart build gets the same saving for the same
+        // reason.
+        //
+        // SAME CLASS, NOT PATCHED: MovingBomb::VScreenChanged_43BC90 (:190)
+        // has the identical shape on field_12A_persist_offscreen, and Mudokon
+        // carries a `persist` TLV field too. R1P15 has no MovingBomb and every
+        // one of its ten Mudokons reads persist = 0, so neither is measured
+        // here and neither is touched.
+        || field_10C_detonating == 0
+#endif
+    )
     {
         field_6_flags.Set(BaseGameObject::eDead_Bit3);
     }

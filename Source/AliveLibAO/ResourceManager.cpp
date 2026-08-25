@@ -219,6 +219,34 @@ static bool Tethys_StickyMatch(const char_type* pFileName,
 // SLG/SLIG keep their unconditional pin -- that pair was measured in S7 against
 // a specific wedge, on this heap, and the pressure ladder at state 0 already
 // drops all sticky refs when staging cannot be served.
+// SATURN (ao262.16, REFUTED AND REVERTED -- DO NOT RE-INVENT IT).
+// The idea was to scope the pin to ONE flip: release it at the end of
+// GoTo_Camera so the incoming screen must re-claim it or lose it. Two
+// independent reasons it cannot work, both found after it shipped and
+// measured nothing.
+//   (1) IT RUNS AFTER THE POINT THAT DIES. The wedge is in LoadingFile's
+// state 0, driven by the LoadingLoop at Map.cpp:2196 -- inside the flip,
+// ~60 lines BEFORE the end of GoTo_Camera. On the flip that fatals, an
+// end-of-flip release never executes. It also emptied sTethysStickyHeld on
+// every SUCCESSFUL flip, which disarmed the pressure ladder at :800 that
+// releases the same refs at the retry where it still matters.
+//   (2) THE RE-CLAIM DOES NOT EXIST. Tethys_StickyRequest above returns
+// early when the id is already in sTethysStickyHeld, so a screen that
+// re-requests a still-pinned file takes NO new sticky ref. A blanket
+// release therefore drops the pin for good: the mechanism is not bounded,
+// it is DISABLED, back to the pre-S7 behaviour that wedged C02->C03.
+// Implementing the intended semantics needs a per-flip `touched` mark set
+// in Tethys_StickyRequest and a release that drops only UNtouched entries.
+//   AND THE PIN WAS NEVER THE HOLDER ANYWAY. The R1P15C05 death screen
+// shows id00412 SLGBASIC at ref 1 on a screen with no Slig TLV, and that
+// ref is the Slig OBJECT's own: Slig::ctor_464D40 takes addUseCount=1
+// (Slig.cpp:297), Init_46B890 does the same for every other Slig bank
+// (:493-541), and Slig::VScreenChanged_465480 (:482-489) only marks eDead
+// on a level change -- or a path change when the Slig is not the
+// controlled character. A Slig therefore survives every camera flip inside
+// its path and legitimately holds ~98 KB until the path ends. That is the
+// same class as the persistent mines fixed in Mine.cpp, and unlike a mine
+// a Slig has real state to keep, so it has no cheap answer.
 static bool Tethys_StickyName(const char_type* pFileName)
 {
     const s32 entries = (kResHeapSize >= 2000000u) ? 3 : 2;
