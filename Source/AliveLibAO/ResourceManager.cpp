@@ -338,6 +338,11 @@ extern "C" volatile s32 Tethys_gAbsentRes = 0; // overlay gauge: absent-name ski
 // event that predicts a visibly missing sprite was unreadable inside a
 // number whose own comment says a non-zero reading is expected.
 extern "C" volatile s32 Tethys_gMissingRes = 0;
+// SATURN (ao262.2): allocations that returned null to a caller that can
+// take it, instead of fataling. `rn` on the S4 row -- a rising rn is the
+// no-cart heap running out, degraded but alive.
+extern "C" volatile u32 Tethys_gResSoftNull = 0;
+extern "C" void Tethys_ResNullReport(u32 type, u32 id, u32 size, u32 used, u32 peak, u32 cap);
 extern "C" volatile u32 Tethys_gLastMissType = 0; // bt1121: last CheckResourceIsLoaded miss
 extern "C" volatile u32 Tethys_gLastMissId = 0;
 
@@ -2250,6 +2255,13 @@ extern "C" [[noreturn]] void Tethys_Fatal(const char_type* msg); // SATURN bt814
 #endif
 u8** ResourceManager::Alloc_New_Resource_Impl(u32 type, u32 id, u32 size, bool locked, BlockAllocMethod allocType, bool bReclaimOnFail)
 {
+    // SATURN (ao262.3): original behaviour EXACTLY -- bReclaimOnFail used to
+    // gate the fatal as well, so pass it through as both.
+    return Alloc_New_Resource_ImplEx(type, id, size, locked, allocType, bReclaimOnFail, bReclaimOnFail);
+}
+
+u8** ResourceManager::Alloc_New_Resource_ImplEx(u32 type, u32 id, u32 size, bool locked, BlockAllocMethod allocType, bool bReclaimOnFail, bool bFatalOnFail)
+{
     u8** ppNewRes = Allocate_New_Block_454FE0(size + sizeof(Header), allocType);
     if (!ppNewRes && bReclaimOnFail)
     {
@@ -2280,6 +2292,13 @@ u8** ResourceManager::Alloc_New_Resource_Impl(u32 type, u32 id, u32 size, bool l
         pHeader->field_6_flags = locked ? ResourceHeaderFlags::eLocked : 0;
     }
 #ifdef TETHYS_SATURN
+    else if (bReclaimOnFail && !bFatalOnFail)
+    {
+        // SATURN (ao262.2): the caller has a real recovery path -- it skips the
+        // frame or fails its init -- so hand it the null it was written to
+        // expect. Counted, never silent: `rn` on the S4 row.
+        Tethys_gResSoftNull++;
+    }
     else if (bReclaimOnFail)
     {
         // SATURN (bt814): the null-handle bug class. Upstream callers do NOT check
@@ -2289,6 +2308,16 @@ u8** ResourceManager::Alloc_New_Resource_Impl(u32 type, u32 id, u32 size, bool l
         // fourcc+hex detail dropped to save pool; the resource type shows as the
         // faulting call site's map address on the death screen.) best-effort
         // callers (bReclaimOnFail=false) intentionally tolerate null and skip this.
+        // SATURN (ao262.2): NAME THE ALLOCATION BEFORE DYING. Tethys_Fatal
+        // prints on row 1, and row 1 is where the live overlay puts S4 -- the
+        // resource-heap occupancy row. So a RES NULL screen was erasing the one
+        // measurement that explains a RES NULL. Report type/id/size and the
+        // heap totals onto rows the fatal does not touch, FIRST. This reads
+        // plain globals only: no heap walk, which is what bt815 forbade here.
+        Tethys_ResNullReport(type, id, size,
+                             static_cast<u32>(sManagedMemoryUsedSize_9F0E48),
+                             static_cast<u32>(sPeakedManagedMemUsage_9F0E4C),
+                             kResHeapSize);
         Tethys_Fatal("RES NULL");
     }
 #endif
