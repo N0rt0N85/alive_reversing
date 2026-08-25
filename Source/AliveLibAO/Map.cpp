@@ -792,23 +792,8 @@ void Map::RemoveObjectsWithPurpleLight_4440D0(s16 bMakeInvisible)
     }
 }
 
-#ifdef TETHYS_SATURN
-// SATURN (ao262.11): release / restore ABEBASIC around a possession. The full
-// account is at its definition in Abe.cpp; what matters HERE is the position.
-// This runs after both dtor passes of ScreenChange_4444D0, so every ref the
-// outgoing camera and its Mudokons held is already dropped and the chunk's use
-// count is at its minimum -- and before the Reclaim_Memory_455660 below, which
-// is what turns a freed block into usable space. Either boundary alone makes it
-// a no-op, which is the bt1045 lesson about a window's edges, re-paid.
-extern "C" void Tethys_PossessionHeapValve();
-#endif
-
 void Map::ScreenChange_Common()
 {
-#ifdef TETHYS_SATURN
-    Tethys_PossessionHeapValve();
-#endif
-
     if (field_6_state == CamChangeStates::eSliceCam_1)
     {
         ResourceManager::Reclaim_Memory_455660(0);
