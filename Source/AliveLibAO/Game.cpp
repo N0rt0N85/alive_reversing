@@ -116,29 +116,6 @@ extern "C" unsigned int Tethys_TearDrop(void);
 // against a HWRAM pre-flight floor with 0.2 KB of margin left.
 #define TETHYS_PD(e, s) ({ const unsigned int tethys_pd_ = (unsigned int) ((e) - (s)); \
     (tethys_pd_ < 32768u) ? tethys_pd_ : Tethys_TearDrop(); })
-// SATURN (ao242.13) `d` IS THE LAST UNSPLIT NODE IN THE FRAME, and on c8 it is
-// the biggest: 11.8 ms of a 57.8 ms tick for 26 drawables, 0.45 ms each, with no
-// column able to say whether that is one expensive object or twenty-six ordinary
-// ones. ao242.12 gated ScreenManager::VRender off, so `v` IS `d` now -- the two
-// columns row 21 used to spend on `s` and on the dropped-Sprts count are free,
-// and they are worth more spent naming who is inside it.
-//   Cost: ONE bracket per drawable, and bt1055 is the rule it has to answer to.
-// bt1055 forbade a per-iteration counter in the VUpdate loop because that loop
-// runs ~250 times a tick for a few cycles apiece; this one runs 15-26 times for
-// ~450,000 cycles apiece. 26 pairs at the measured K = 0.49 raw ticks is 12.7
-// ticks = 0.06 ms against 11.8 -- 0.5%, and it is switched off with the rest.
-//   The table is indexed by AO type id (0..103, BaseGameObject::Types is s16) and
-// reset per SCREEN with everything else on rows 16-22, bt1007/bt1008: a boot
-// cumulative on a per-screen row reports the past forever.
-extern "C" u16 Tethys_gDrawByType[104];
-// ao262.18: the table is sized to the enum (AO Types run 0..103), so the index
-// is CLAMPED rather than masked -- 103 is not a power of two, and field_4_typeId
-// is an s16 that a corrupt object could carry anything in.
-static inline unsigned int TethysDrawBucket(AO::Types t)
-{
-    const int i = static_cast<int>(t);
-    return (i >= 0 && i < 104) ? static_cast<unsigned int>(i) : 0u;
-}
 extern "C" u32 Tethys_gPhRend;
 // SATURN (ao242.6) the frame hierarchy -- definitions in src/sys_saturn.cxx
 extern "C" u32 Tethys_gUStamp;   // the running stamp S0..S3 differences
@@ -812,51 +789,14 @@ EXPORT void CC Game_Loop_437630()
                 // SATURN (ao242.13): the `d` probe -- see the head of the file.
                 // The whole bracket, table lookup included, is behind the gate,
                 // so with the overlay off this is one predicted-not-taken branch.
-                if (Tethys_gProbeOn)
-                {
-                    const u32 tD0 = Tethys_RawTicks();
-                    pDrawable->VRender(ppOt);
-                    // & 127 never collides: AO Types run 0..103 (eElectrocute_103
-                    // is the last), so the mask is a bound, not a hash.
-                    // ao262.18: under the tear guard. This is the bucket
-                    // that printed T9999 on hardware for twenty seconds -- see
-                    // the TETHYS_PD banner at the head of the file. The table is
-                    // the ONLY accumulator here with no per-screen base, so a
-                    // poisoned sample owns it until the next flip, and the
-                    // poisoned bucket then wins the argmax and hides the real
-                    // answer (D057 eMine_57 displaced D073 eRope_73 on c8).
-                    // ao262.19 -- SIXTEENTHS, AND THE ADD SATURATES. THE u16
-                    // I SHRANK THIS TO IN ao262.18 WRAPS, AND IT WAS CAUGHT IN
-                    // THE FIELD, NOT HERE.
-                    //   The table is reset per SCREEN, not per tick, so a bucket
-                    // accumulates for as long as the player stands still. In
-                    // quarter raw ticks a u16 holds 65535*4/208 = 1260 ms of
-                    // accumulated time; eRope_73 on c7 costs 1.0 ms a tick, so
-                    // the bucket wrapped after ~1150 ticks -- 38 SECONDS on one
-                    // screen. Two ao262.18 photographs of the SAME screen proved
-                    // it by observation: fr1870-2318 read D073 T0010, fr35934
-                    // read D051 T0000. It did not fail loudly, it degraded into
-                    // a plausible wrong answer, and it nearly bought a false
-                    // "InvalidateRect made Rope free" (v moved 0.3 ms, not 1.1,
-                    // which is the contradiction that caught it).
-                    //   >> 4 buys 4x the range (~150 s) for a resolution of
-                    // 0.077 ms, which is nothing against a mean over a thousand
-                    // ticks. The saturating add is the part that matters: a
-                    // clamped bucket still WINS the argmax, so D stays right and
-                    // T pins at its ceiling instead of decaying quietly to 0000.
-                    // An instrument may run out of range; it may not lie.
-                    u16& tethysBucket
-                        = Tethys_gDrawByType[TethysDrawBucket(pDrawable->field_4_typeId)];
-                    const u32 tethysAdd
-                        = static_cast<u32>(tethysBucket)
-                          + (TETHYS_PD(Tethys_RawTicks(), tD0) >> 4);
-                    tethysBucket = static_cast<u16>(
-                        (tethysAdd > 65535u) ? 65535u : tethysAdd);
-                }
-                else
-                {
-                    pDrawable->VRender(ppOt);
-                }
+                // 281.ao.1: `d` RETIRES WITH ITS ANSWER. Over ~20 captures the
+                // top drawable type on c7/c8 was eRope_73 at 1.0-1.1 ms a tick,
+                // and eNone_0 -- LCDScreen/LCDStatusBoard, the only classes that
+                // never set field_4_typeId -- won whenever tg >= 24 (5/5, and
+                // 4/4 the other way). Recorded in docs/FRAME_BUDGET.md. What
+                // goes with it: a u16[104] in .bss, an argmax loop on row 21,
+                // and one RawTicks pair per drawable per tick.
+                pDrawable->VRender(ppOt);
 #else
                 pDrawable->VRender(ppOt);
 #endif
