@@ -825,9 +825,33 @@ EXPORT void CC Game_Loop_437630()
                     // poisoned sample owns it until the next flip, and the
                     // poisoned bucket then wins the argmax and hides the real
                     // answer (D057 eMine_57 displaced D073 eRope_73 on c8).
-                    // quarter raw ticks -- see the declaration in sys_saturn.cxx
-                    Tethys_gDrawByType[TethysDrawBucket(pDrawable->field_4_typeId)]
-                        += static_cast<u16>(TETHYS_PD(Tethys_RawTicks(), tD0) >> 2);
+                    // ao262.19 -- SIXTEENTHS, AND THE ADD SATURATES. THE u16
+                    // I SHRANK THIS TO IN ao262.18 WRAPS, AND IT WAS CAUGHT IN
+                    // THE FIELD, NOT HERE.
+                    //   The table is reset per SCREEN, not per tick, so a bucket
+                    // accumulates for as long as the player stands still. In
+                    // quarter raw ticks a u16 holds 65535*4/208 = 1260 ms of
+                    // accumulated time; eRope_73 on c7 costs 1.0 ms a tick, so
+                    // the bucket wrapped after ~1150 ticks -- 38 SECONDS on one
+                    // screen. Two ao262.18 photographs of the SAME screen proved
+                    // it by observation: fr1870-2318 read D073 T0010, fr35934
+                    // read D051 T0000. It did not fail loudly, it degraded into
+                    // a plausible wrong answer, and it nearly bought a false
+                    // "InvalidateRect made Rope free" (v moved 0.3 ms, not 1.1,
+                    // which is the contradiction that caught it).
+                    //   >> 4 buys 4x the range (~150 s) for a resolution of
+                    // 0.077 ms, which is nothing against a mean over a thousand
+                    // ticks. The saturating add is the part that matters: a
+                    // clamped bucket still WINS the argmax, so D stays right and
+                    // T pins at its ceiling instead of decaying quietly to 0000.
+                    // An instrument may run out of range; it may not lie.
+                    u16& tethysBucket
+                        = Tethys_gDrawByType[TethysDrawBucket(pDrawable->field_4_typeId)];
+                    const u32 tethysAdd
+                        = static_cast<u32>(tethysBucket)
+                          + (TETHYS_PD(Tethys_RawTicks(), tD0) >> 4);
+                    tethysBucket = static_cast<u16>(
+                        (tethysAdd > 65535u) ? 65535u : tethysAdd);
                 }
                 else
                 {
