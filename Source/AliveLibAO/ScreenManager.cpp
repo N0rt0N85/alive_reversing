@@ -305,20 +305,31 @@ void ScreenManager::InvalidateRect_406E40(s32 x, s32 y, s32 width, s32 height, s
     // ScreenManager.cpp only, and every read of it is in the dead loop. So these
     // bits are computed every frame for nobody.
     //
-    // The cost is not a guess but it is also not measured, and it is deliberately
-    // NOT estimated here: the last cost model this port acted on was wrong by
-    // 40 % in the wrong direction. What can be said structurally is that this is
-    // a NESTED TILE LOOP with four SIGNED divisions by a power of two -- and the
-    // SH-2 has no multi-bit arithmetic right shift, so unless GCC can prove the
-    // operands non-negative each is a libgcc call (ao242.5 removed seven of
-    // exactly this shape from the renderer) -- run by ~36 call sites in the game
-    // core, including BaseAnimatedWithPhysicsGameObject (every animated actor,
-    // every frame) and Rope, which the `d` probe just named as the most
-    // expensive drawable type on c7 and c8.
+    // MEASURED (ao262.19), not estimated -- and the first draft of this comment
+    // guessed the generated code wrong, so both corrections live here.
+    //
+    // THE WIN: -0.3 ms on `v` per tick, c7, A/B matched on tn052, ao262.18
+    // against ao262.99 (this function restored, one #ifdef, nothing else). Seven
+    // control columns identical TO THE DIGIT -- w0074, p0064, q0017, r0010,
+    // b0004, N043, f0019 -- while v went 0036 -> 0033 and y went 0176 -> 0179.
+    // The time did not vanish, it moved from work into the idle wait, which is
+    // the signature that makes it a measurement instead of a difference: the
+    // screen was pinned at h100/00/00/00, so `t` could not move and did not.
+    // eRope_73 alone gave 0.1 ms; the other 0.2 is spread over ~19 drawables,
+    // consistent with ~36 call sites each paying a little. The A/B capture even
+    // carried one drawable MORE (n020 vs n019), so the figure is biased low.
+    //
+    // THE CORRECTION: the first draft said the four signed divides would each be
+    // a libgcc call. Read at ao262.99's disassembly they are NOT -- GCC emitted
+    // inline `shar` chains (5 for /32, 4 for /16) plus the sign-rounding
+    // branches. What it did emit, and the draft missed, is ONE libgcc call PER
+    // TILE inside the loop: `jsr @r9` -> ___ashlsi3_r0 for SetTile's mask, next
+    // to a read-modify-write halfword. 0xc0 bytes of code against 0x4 for this
+    // neutralised form. bt1136 again: an optimisation is read in the generated
+    // code, never in the source -- including when the source is a comment.
     //
     // It is a PURE DELETION with nothing traded against it, which is the only
     // shape of change this port ships since ao242.13 measured what a trade costs.
-    // The size of the win is read off `d` on row 21, not asserted here.
     //
     // The state is left declared and the memsets/merges are untouched, exactly as
     // the ao242.12 note at VRender_406A60 asks: a future reader would need the
