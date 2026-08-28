@@ -118,10 +118,6 @@ extern "C" unsigned int Tethys_TearDrop(void);
     (tethys_pd_ < 32768u) ? tethys_pd_ : Tethys_TearDrop(); })
 extern "C" u32 Tethys_gPhRend;
 // SATURN (ao242.6) the frame hierarchy -- definitions in src/sys_saturn.cxx
-extern "C" u32 Tethys_gUStamp;   // the running stamp S0..S3 differences
-extern "C" u32 Tethys_gUtRaw;    // uT tail | uA loop A | uB loop B
-extern "C" u32 Tethys_gUaRaw;
-extern "C" u32 Tethys_gUbRaw;
 extern "C" u32 Tethys_gScrRaw;   // vs  ScreenManager::VRender
 extern "C" u32 Tethys_gDrawWalk; // n   drawables walked
 extern "C" u32 Tethys_gInAnimate;// the parent flag for Upload's two callers
@@ -553,13 +549,16 @@ EXPORT void CC Game_Loop_437630()
 
         // Update objects
         GetGameAutoPlayer().SyncPoint(SyncPoints::ObjectsUpdateStart);
-#ifdef TETHYS_SATURN
-        {   // SATURN (ao242.6) S1: uT closes, uA opens
-            const u32 tS1 = TETHYS_PT();
-            Tethys_gUtRaw += tS1 - Tethys_gUStamp;
-            Tethys_gUStamp = tS1;
-        }
-#endif
+// SATURN 300.ao.1: the uT/uA/uB split of the update phase RETIRES, and it pays
+// for the SubmitTexturedRect split (see renderer_saturn.cxx, HandleSubRect).
+// Three brackets, four stamp sites and four globals that have never had an
+// overlay column since ao242.6 -- latched into kPhase[15..17] and read by
+// nothing, which is bt1070's definition of rent. What they would have split is
+// the SMALLEST node in the frame: 299's captures put update at 0.6-0.9 ms of a
+// 33.7 ms tick, 7 % of all work, against a renderer at 77-82 %. Trading an
+// unread split of the smallest phase for the top measured lever is the trade,
+// and it is recorded here rather than in a commit message so the next reader
+// finds it at the site.
         for (s32 i = 0; i < gBaseGameObject_list_9F2DF0->Size(); i++)
         {
             BaseGameObject* pObjIter = gBaseGameObject_list_9F2DF0->ItemAt(i);
@@ -613,10 +612,8 @@ EXPORT void CC Game_Loop_437630()
         }
 
 #ifdef TETHYS_SATURN
-        {   // SATURN (ao242.6) S2: uA closes, uB opens
-            const u32 tS2 = TETHYS_PT();
-            Tethys_gUaRaw += tS2 - Tethys_gUStamp;
-            Tethys_gUStamp = tS2;
+        {   // SATURN: the uA bracket retired (see S1 above); gVuList stays --
+            // it rides kPhase[5], inside the sPeak argmax that row 12 prints.
             Tethys_gVuList += (u32) gBaseGameObject_list_9F2DF0->Size();
         }
 #endif
@@ -644,9 +641,7 @@ EXPORT void CC Game_Loop_437630()
         }
 
 #ifdef TETHYS_SATURN
-        {   // SATURN (ao242.6) S3: uB closes. u - uT - uA - uB is the while
-            // back-edge and must read <= 2 tenths of a ms.
-            Tethys_gUbRaw += TETHYS_PT() - Tethys_gUStamp; // ao262.18: unguarded
+        {   // SATURN: the uB bracket retired (see S1 above); gVuList stays.
             Tethys_gVuList += (u32) gLoadingFiles->Size();
         }
 #endif
@@ -841,7 +836,6 @@ EXPORT void CC Game_Loop_437630()
         // (gLoadingFiles -- the synchronous-CD suspect). Stamps, not nested
         // brackets: four RawTicks reads a tick, and every span is a difference of
         // two of them, so no span can double-count another.
-        Tethys_gUStamp = TETHYS_PT();
 #endif
 
         GetGameAutoPlayer().SyncPoint(SyncPoints::RenderStart);
