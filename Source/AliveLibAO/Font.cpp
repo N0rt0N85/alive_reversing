@@ -462,7 +462,10 @@ EXPORT u32 AliveFont::MeasureWidth_41C2B0(const char_type* text)
 {
     s32 result = 0;
 
-    for (u32 i = 0; i < strlen(text); i++)
+    // SATURN: same quadratic strlen-as-loop-condition as DrawString_41C360 --
+    // see the block there. MeasureWidth runs per string on the layout path.
+    const u32 textLen = static_cast<u32>(strlen(text));
+    for (u32 i = 0; i < textLen; i++)
     {
         const char_type c = text[i];
         s32 charIndex = 0;
@@ -592,7 +595,21 @@ EXPORT s32 AliveFont::DrawString_41C360(PrimHeader** ppOt, const char_type* text
     const s32 tpage = PSX_getTPage_4965D0(TPageMode::e4Bit_0, abr, field_34_font_context->field_0_rect.x & ~63, field_34_font_context->field_0_rect.y);
     const s32 clut = PSX_getClut_496840(field_28_palette_rect.x, field_28_palette_rect.y);
 
-    for (u32 i = 0; i < strlen(text); i++)
+    // SATURN: strlen was the LOOP CONDITION, re-evaluated on every character.
+    // Read in the GENERATED code, not guessed (bt1136): Font.o disassembles at
+    // the loop head to `mov.l <strlen>,r0 / jsr @r0 / cmp/hs r0,r1 / bf body`
+    // with the back-edge branching straight to it, so GCC did NOT hoist it --
+    // it cannot prove the Prim writes in the body leave `text` alone. The cost
+    // is quadratic in the message length: N calls each scanning N bytes, plus
+    // N jsr/rts pairs, on a core with no cache to spare. c7 only draws ~15
+    // glyphs a frame so it is small HERE -- but DrawString is also the marquee
+    // and the GameSpeak subtitle path, where N is 60+ and this is ~0.6 ms a
+    // tick. `text` is const and nothing in either loop writes through it.
+    // BOTH sites are fixed: MeasureWidth_41C2B0 has the identical loop, and
+    // the rule this project paid for is to find the CLASS before patching the
+    // second instance.
+    const u32 textLen = static_cast<u32>(strlen(text));
+    for (u32 i = 0; i < textLen; i++)
     {
         if (offsetX >= maxRenderX)
         {
