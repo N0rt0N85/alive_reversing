@@ -220,6 +220,9 @@ ALIVE_VAR(1, 0x4CE598, s32, sAvailableControllers_4CE598, 0);
 // SATURN (ao261.29): the cart-heap size, 0 when no RAM cart is present.
 // Defined in src/main.cxx.
 extern "C" volatile u32 Tethys_gCartHeapBytes;
+// SATURN (306.ao.1): hands the console back to the BIOS.  Defined in
+// src/sys_saturn.cxx, which carries the whole rationale and the prior art.
+extern "C" void Tethys_ReturnToBios(void);
 #endif
 ALIVE_VAR(1, 0x5079A4, s32, gJoystickAvailable_5079A4, 0);
 
@@ -1708,17 +1711,26 @@ void Menu::GoToSelectedMenuPage_47BC50()
             // Quit
             case MainMenuOptions::eQuit_2:
 #ifdef TETHYS_SATURN
-                // SATURN (ao261.21): A CONSOLE HAS NOWHERE TO QUIT TO. On PC
-                // this returns to the desktop; on Saturn exit() is
-                // src/syscalls.c:230 -> fatal_exit_from -> Tethys_Fatal, whose
-                // body is a `for(;;)` on the death screen. Selecting Quit from
-                // the main menu would look exactly like a crash.
-                //   The option is reachable: the navigation clamp spans
-                // eGameSpeak_0..eOptions_4 (MainMenu.cpp:1400-1417) and
-                // MainMenu.hpp:99 puts eQuit_2 inside that span, so the pad can
-                // land on it. Make it inert -- fall back to the copyright
-                // screen, which is where a "leave the game" gesture sensibly
-                // goes on a console.
+                // SATURN (306.ao.1): A CONSOLE DOES HAVE SOMEWHERE TO QUIT TO,
+                // AND ao261.21 WAS WRONG THAT IT DOES NOT.
+                //   That patch reasoned correctly that exit() on Saturn is
+                // src/syscalls.c:230 -> fatal_exit_from -> Tethys_Fatal, a
+                // `for(;;)` on the death screen, so Quit would look exactly
+                // like a crash -- and then drew the wrong conclusion, parking
+                // Quit on the copyright camera.  302.ao.1 had to unpark it
+                // again because the park itself soft-locked (no eQuit_2 case
+                // in ToNextMenuPage_47BD80's switch).  Two patches spent
+                // working around a seam that was never consulted: SYS_Exit
+                // returns to the BIOS, which is this platform's desktop, so
+                // Tethys_ReturnToBios is the faithful reading of the #else
+                // branch below rather than a substitute for it.  Evidence and
+                // the four reference projects: src/sys_saturn.cxx.
+                //   This is the right SITE for it: GoToSelectedMenuPage runs
+                // only once the fade-out reports done (:1663), so Abe's
+                // Goodbye has finished and the screen is already black.
+                Tethys_ReturnToBios();
+                // Should SYS_Exit ever return, degrade to the 302.ao.1 park --
+                // field-tested behaviour -- instead of spinning here.
                 gMap_507BA8.SetActiveCam_444660(LevelIds::eMenu_0, 1, CameraIds::Menu::eCopyright_10, CameraSwapEffects::eInstantChange_0, 0, 0);
                 field_1CC_fn_update = &Menu::ToNextMenuPage_47BD80;
 #else
