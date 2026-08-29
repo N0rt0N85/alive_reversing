@@ -37,11 +37,25 @@ const AnimId buttonAnimIds_4BB1B8[4] = {
 // TODO: Move out
 ALIVE_VAR(1, 0x507690, s16, sSoundMono_507690, 0);
 
+#ifdef TETHYS_SATURN
+// SATURN (307.ao.1): THE MONO SWITCH HAD NO CONSUMER, ANYWHERE.
+// The two setters below are the whole of it -- the original's nullsub_63/64
+// calls are commented out, and a grep of AliveLibAO + AliveLibAE + Common for
+// sSoundMono_507690 returns THESE THREE LINES and nothing else. So the option
+// was inert at the source, not merely unported. Forward it to the SCSP mix word
+// (src/sound_saturn.cxx, MixWordFromPans) so the page does what it says.
+// Declared here rather than in a header: one symbol, one caller.
+extern "C" void Tethys_SndSetMono(s32 mono);
+#endif
+
 // TODO: Move out
 EXPORT void SND_Set_Mono_477020()
 {
     //nullsub_63();
     sSoundMono_507690 = 1;
+#ifdef TETHYS_SATURN
+    Tethys_SndSetMono(1);
+#endif
 }
 
 // TODO: Move out
@@ -49,6 +63,9 @@ EXPORT void SND_Set_Stereo_477030()
 {
     //nullsub_64();
     sSoundMono_507690 = 0;
+#ifdef TETHYS_SATURN
+    Tethys_SndSetMono(0);
+#endif
 }
 
 ALIVE_VAR(1, 0x9F2DE8, s16, bWaitingForRemapInput_9F2DE8, 0);
@@ -3474,8 +3491,16 @@ void Menu::ButtonRemap_Render_47F940(PrimHeader** ppOt)
             FP_FromInteger(1),
             640,
             0);
+#ifdef TETHYS_SATURN
+        // SATURN (307.ao.1): there is no Esc, and "none" is not a state our
+        // eight-button bijection can hold (src/sys_saturn.cxx, sBind). START is
+        // the one unbindable button, so it is what cancels -- say so.
+        field_1F4_text = "or Start to cancel";
+        auto fontWidth3 = field_FC_font.MeasureWidth_41C280("or Start to cancel", FP_FromInteger(1));
+#else
         field_1F4_text = "or Esc for none";
         auto fontWidth3 = field_FC_font.MeasureWidth_41C280("or Esc for none", FP_FromInteger(1));
+#endif
         s16 calculatedXposBasedOnWidth3 = 0;
         if (fontWidth3 >= maxFontWidth)
         {
@@ -4202,7 +4227,23 @@ void CC Menu::RenderElement_47A4E0(s32 xpos, s32 ypos, s32 input_command, PrimHe
     // that could only halve; it now resamples to any ratio, so the right answer
     // is simply what the original asks for -- and that is also what
     // MeasureWidth_41C280 is measuring, which is what keeps the centring right.
-    const FP scale_fp = strlen(text) > 1 ? FP_FromDouble(0.64) : FP_FromDouble(0.84);
+    // 307.ao.1: AND NOW THE REQUEST IS ACTUALLY HONOURED, so this line finally
+    // means something. Until this build the compositor derived ONE scale from
+    // the WIDTH pair and applied it to the height too, so what reached the
+    // screen was 1-3 rows short of whatever was asked here and varied per
+    // glyph -- see the measurement table in TextRunRecord
+    // (src/renderer_saturn.cxx). Three passes tuned this number against that
+    // error, which is why "les lettres sont a peine trop grandes" kept coming
+    // back on four screens.
+    //   The numbers below are chosen against the MEASURED old output rather
+    // than by eye: AO's 0.84 now renders 18 rows where the old path drew 15-16,
+    // and AO's 0.64 renders 14 where the old path drew 11-13. Keeping AO's own
+    // values would therefore make the reported symptom WORSE. 0.64/0.50 land at
+    // 14 and 11 rows -- just under what the tester was already looking at, and
+    // deterministic for the first time.
+    //   THIS IS THE ONE KNOB NOW. If the letters are still off, the size moves
+    // predictably with this line and nothing else; before, it did not.
+    const FP scale_fp = strlen(text) > 1 ? FP_FromDouble(0.50) : FP_FromDouble(0.64);
     // (the ao261.22 note this replaces, kept for the mechanism it records)
     // ASK FOR THE SCALE THE RENDERER CAN ACTUALLY DELIVER.
     //
