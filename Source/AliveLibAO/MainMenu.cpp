@@ -1521,6 +1521,35 @@ EXPORT void Menu::MainScreen_Update_47AF60()
         }
         else
         {
+#ifdef TETHYS_SATURN
+            // SATURN (302.ao.1): THE ATTRACT DEMO CANNOT RUN HERE, AND WAITING
+            // FOR IT IS A SOFT-LOCK. Field report: "en idle, au bout d'un certain
+            // temps abe dit bye et lance quelque chose, qui freeze le jeu" -- the
+            // menu parks on the Loading camera, loop and music still running, pad dead.
+            //
+            // The mechanism, read at source. This branch arms gAttract_507698 and asks
+            // for PLAYBK%02d.JOY; Loading_Update_47B870 then gates on
+            // `!gAttract_507698 || GetLoadedResource(Resource_Plbk, ...)` (:2151). That
+            // resource can NEVER appear: the .JOY records ship byte-for-byte
+            // little-endian, so the chunk fourcc reads back REVERSED on a big-endian
+            // SH-2 and no Plbk chunk is ever registered. The gate is false for ever and
+            // field_1CC_fn_update is never reassigned -- the same shape as the Quit
+            // case below.
+            //
+            // WHY NOT FIX IT IN THE CONVERTER. Swapping the Plbk header only moves the
+            // failure downstream: DemoPlayback::ctor then reads a whole little-endian
+            // PlaybackData/SaveData and a u32 input stream, which turns a freeze into a
+            // wild SetActiveCam -- a worse defect wearing a better disguise. The demo is
+            // a P7 item; the menu must not soft-lock in the meantime.
+            //
+            // So the idle timeout RE-ARMS and arms nothing else. gDemoPlay and gAttract
+            // stay defined and at 0, the value Factory.cpp and Abe.cpp already exercise
+            // on every normal boot.
+            field_1DC_idle_input_counter = 0;
+        }
+        if (false)
+        {
+#endif
             // Play a demo
             gDemoPlay_507694 = 1;
             field_1E0_selected_index.mainmenu = MainMenuOptions::eBegin_1;
@@ -1775,6 +1804,28 @@ void Menu::ToNextMenuPage_47BD80()
                     field_1D0_fn_render = &Menu::Render_NoRefs_47E5B0;
                     field_1E0_selected_index.raw = 0;
                     break;
+
+#ifdef TETHYS_SATURN
+                // SATURN (302.ao.1): ao261.21 MADE QUIT INERT AND LEFT IT PARKED.
+                // That patch replaced exit(0) with "go to the copyright camera,
+                // then ToNextMenuPage" (:1680-1697) -- correct as far as it went,
+                // except THIS switch has no eQuit_2 case, so the very next tick
+                // falls to `default: LOG_ERROR` without ever reassigning
+                // field_1CC_fn_update. ToNextMenuPage then re-runs for ever,
+                // re-issuing its transition: a SECOND soft-lock, in the same file
+                // and of the same class as the attract one above. Field-visible as
+                // "Quit goes to the copyright screen" and never comes back.
+                //   Park it somewhere LIVE instead: the main screen, cursor on the
+                // first entry. To_MainScreen_Update_47BB60 is the handler the
+                // options and load pages already use to come back (:2144, :2432),
+                // so this is the existing return path, not a new one.
+                case MainMenuOptions::eQuit_2:
+                    field_204_flags &= ~2u;
+                    field_1CC_fn_update = &Menu::To_MainScreen_Update_47BB60;
+                    field_1D0_fn_render = &Menu::MainScreen_Render_47BED0;
+                    field_1E0_selected_index.mainmenu = MainMenuOptions::eGameSpeak_0;
+                    break;
+#endif
 
                 case MainMenuOptions::eLoad_3:
                     field_204_flags &= ~2u;

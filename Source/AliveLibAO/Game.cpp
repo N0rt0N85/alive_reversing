@@ -51,6 +51,14 @@ extern "C" unsigned int Tethys_gVuList;
 namespace AO {
 
 #ifdef TETHYS_SATURN
+// SATURN (302.ao.1): set here on the first real game tick, and PRE-SET by
+// SaveGame::LoadFromFile_459D30 on a successful load so the seeder can never
+// overwrite a buffer that was just read off the device. See the note at the
+// use site in Game_Loop for the one-tick window this closes.
+u32 Tethys_gSaveBufferSeeded = 0;
+#endif
+
+#ifdef TETHYS_SATURN
 // SATURN (bt1012): tick-phase accumulators, defined in src/sys_saturn.cxx and
 // reset there on every screen change, so they share the scope of lt/tt and
 // divide by tt for per-tick figures. See the long note at the first timer in
@@ -693,14 +701,31 @@ EXPORT void CC Game_Loop_437630()
         //   So seed once, on the first tick where a real level is live AND Abe
         // exists. -fno-threadsafe-statics is on, so the function-local static is
         // a plain word with no guard variable.
+        // SATURN (302.ao.1): THE SEED MUST NOT OUTLIVE A LOAD.
+        // Field report: the FIRST load after a cold boot puts Abe in the wrong
+        // place; quit to the menu and load the same slot again and it is
+        // correct. That asymmetry is this latch. LoadFromFile parks Abe in
+        // Motion_62_LoadedSaveSpawn with field_114_gnFrame = 0, and the motion
+        // reads field_224_xpos/field_228_ypos on its SECOND call -- so there is
+        // a one-tick window in which the buffer must survive untouched. On a
+        // cold boot the latch below is still clear, this runs inside that
+        // window, and SaveToMemory_459490 overwrites the freshly loaded buffer
+        // with Abe's CURRENT position, which is wherever the spawn has not put
+        // him yet. On the second load the latch is already set, nothing writes,
+        // and the load is correct -- which is exactly the reported asymmetry.
+        //   So the latch becomes a global the load path can pre-set, and the two
+        // spawn motions are excluded outright: neither is a moment at which
+        // Abe's position means anything, and Motion_61 covers the respawn and
+        // the TETHYS_START_CAM debug boot as well.
+        if (!Tethys_gSaveBufferSeeded && sActiveHero_507678
+            && gMap_507BA8.field_0_current_level != LevelIds::eMenu_0
+            && sActiveHero_507678->field_FC_current_motion
+                   != eAbeMotions::Motion_62_LoadedSaveSpawn_45ADD0
+            && sActiveHero_507678->field_FC_current_motion
+                   != eAbeMotions::Motion_61_Respawn_42CD20)
         {
-            static s16 sTethysSaveSeeded = 0;
-            if (!sTethysSaveSeeded && sActiveHero_507678
-                && gMap_507BA8.field_0_current_level != LevelIds::eMenu_0)
-            {
-                sTethysSaveSeeded = 1;
-                SaveGame::Tethys_SeedSaveBuffer();
-            }
+            Tethys_gSaveBufferSeeded = 1;
+            SaveGame::Tethys_SeedSaveBuffer();
         }
 #if defined(TETHYS_START_CAM) && TETHYS_START_CAM > 0
         // SATURN (bt1017): DEBUG BOOT SPAWN, through the game's OWN respawn.

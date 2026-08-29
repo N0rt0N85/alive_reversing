@@ -12,6 +12,10 @@
 
 namespace AO {
 
+#ifdef TETHYS_SATURN
+extern u32 Tethys_gSaveBufferSeeded; // SATURN (302.ao.1): defined in Game.cpp
+#endif
+
 ALIVE_VAR_EXTERN(s32, sGasTimer_507700);
 ALIVE_VAR_EXTERN(s16, sRescuedMudokons_5076C0);
 ALIVE_VAR_EXTERN(s16, sKilledMudokons_5076BC);
@@ -560,6 +564,15 @@ s16 CC SaveGame::LoadFromFile_459D30(const char_type* name)
         // values and the hash would not move; it is the pre-checkpoint buffer,
         // which carries path/camera -1, where they differ.)
         gSaveBuffer_505668.field_200_hashValue = Hash(&gSaveBuffer_505668);
+        // SATURN (302.ao.1): CLAIM THE BUFFER SO THE BOOT SEED CANNOT TAKE IT.
+        // Game_Loop seeds gSaveBuffer_505668 once per boot on the first tick
+        // where a real level is live, and on a cold boot that tick lands inside
+        // Motion_62_LoadedSaveSpawn's one-tick window and overwrites what we
+        // just read -- the reported "first load goes to the wrong place". Set
+        // it ONLY here, in the success branch: on the failure branch a New Game
+        // started after a failed load would run with a zeroed buffer and reopen
+        // the bt816 null-path fatal on the first death.
+        Tethys_gSaveBufferSeeded = 1;
 #endif
         return 1;
     }
