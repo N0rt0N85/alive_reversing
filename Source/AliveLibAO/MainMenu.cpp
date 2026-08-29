@@ -4243,7 +4243,15 @@ void CC Menu::RenderElement_47A4E0(s32 xpos, s32 ypos, s32 input_command, PrimHe
     // deterministic for the first time.
     //   THIS IS THE ONE KNOB NOW. If the letters are still off, the size moves
     // predictably with this line and nothing else; before, it did not.
-    const FP scale_fp = strlen(text) > 1 ? FP_FromDouble(0.50) : FP_FromDouble(0.64);
+    // 308.ao.1: 0.64/0.50 rendered 14 and 11 rows and came back "illisible".
+    // The size was not the fault -- point-sampling a 22-row font down to 14
+    // deletes whole strokes, and which stroke it deletes depends on the glyph.
+    // The compositor now prefers the ink over the hole (the 2x2 probe in
+    // renderer_saturn.cxx), so these go back up one notch rather than being
+    // guessed at again: 15 rows for a single character, 12 for a word -- still
+    // under the 15-16 the tester called "a peine trop grandes", and legible at
+    // that size for the first time.
+    const FP scale_fp = strlen(text) > 1 ? FP_FromDouble(0.55) : FP_FromDouble(0.68);
     // (the ao261.22 note this replaces, kept for the mechanism it records)
     // ASK FOR THE SCALE THE RENDERER CAN ACTUALLY DELIVER.
     //
