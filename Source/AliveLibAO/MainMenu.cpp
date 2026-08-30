@@ -2916,7 +2916,7 @@ void Menu::GameSpeak_Update_47CBD0()
                     // loses its animation but keeps its sound, and the page's state machine still
                     // advances (a looping animation still raises eBit18_IsLastFrame). Guarded, not
                     // #ifdef'd: on PC the pointer is never null, so this is dead weight there.
-                    if (field_E4_res_array[0]) // SATURN (ao261.31)
+                    if (Tethys_SpeakRes(rec)) // SATURN (313.ao.1; was ao261.31)
                     {
                         field_10_anim.Set_Animation_Data_402A40(rec.mFrameTableOffset, field_E4_res_array[0]);
                     }
@@ -2949,7 +2949,7 @@ void Menu::GameSpeak_Update_47CBD0()
 
         field_204_flags |= 1u;
         const AnimRecord& rec = AO::AnimRec(AnimId::MenuAbeSpeak_Chant);
-        if (field_E4_res_array[0]) // SATURN (ao261.31)
+        if (Tethys_SpeakRes(rec)) // SATURN (313.ao.1; was ao261.31)
         {
             field_10_anim.Set_Animation_Data_402A40(rec.mFrameTableOffset, field_E4_res_array[0]);
         }
@@ -3021,7 +3021,7 @@ void Menu::GameSpeak_Update_47CBD0()
             Mudokon_SFX_42A4D0(MudSounds::eFollowMe_4, 0, 0, 0);
             field_204_flags |= 1u;
             const AnimRecord& rec = AO::AnimRec(AnimId::MenuAbeSpeak_FollowMe);
-            if (field_E4_res_array[0]) // SATURN (ao261.31)
+            if (Tethys_SpeakRes(rec)) // SATURN (313.ao.1; was ao261.31)
             {
                 field_10_anim.Set_Animation_Data_402A40(rec.mFrameTableOffset, field_E4_res_array[0]);
             }
@@ -3037,7 +3037,7 @@ void Menu::GameSpeak_Update_47CBD0()
             Mudokon_SFX_42A4D0(MudSounds::eWait_6, 0, 0, 0);
             field_204_flags |= 1u;
             const AnimRecord& rec = AO::AnimRec(AnimId::MenuAbeSpeak_Wait);
-            if (field_E4_res_array[0]) // SATURN (ao261.31)
+            if (Tethys_SpeakRes(rec)) // SATURN (313.ao.1; was ao261.31)
             {
                 field_10_anim.Set_Animation_Data_402A40(rec.mFrameTableOffset, field_E4_res_array[0]);
             }
@@ -3066,7 +3066,7 @@ void Menu::GameSpeak_Update_47CBD0()
             Mudokon_SFX_42A4D0(MudSounds::eAngry_5, 0, 0, 0);
             field_204_flags |= 1u;
             const AnimRecord& rec = AO::AnimRec(AnimId::MenuAbeSpeak_Anger);
-            if (field_E4_res_array[0]) // SATURN (ao261.31)
+            if (Tethys_SpeakRes(rec)) // SATURN (313.ao.1; was ao261.31)
             {
                 field_10_anim.Set_Animation_Data_402A40(rec.mFrameTableOffset, field_E4_res_array[0]);
             }
@@ -3106,7 +3106,7 @@ void Menu::GameSpeak_Update_47CBD0()
             Mudokon_SFX_42A4D0(MudSounds::eWhistleHigh_1, 0, 0, 0);
             field_204_flags |= 1u;
             const AnimRecord& rec = AO::AnimRec(AnimId::MenuAbeSpeak_WhistleHigh);
-            if (field_E4_res_array[0]) // SATURN (ao261.31)
+            if (Tethys_SpeakRes(rec)) // SATURN (313.ao.1; was ao261.31)
             {
                 field_10_anim.Set_Animation_Data_402A40(rec.mFrameTableOffset, field_E4_res_array[0]);
             }
@@ -3122,7 +3122,7 @@ void Menu::GameSpeak_Update_47CBD0()
             Mudokon_SFX_42A4D0(MudSounds::eWhistleLow_2, 0, 0, 0);
             field_204_flags |= 1u;
             const AnimRecord& rec = AO::AnimRec(AnimId::MenuAbeSpeak_WhistleLow);
-            if (field_E4_res_array[0]) // SATURN (ao261.31)
+            if (Tethys_SpeakRes(rec)) // SATURN (313.ao.1; was ao261.31)
             {
                 field_10_anim.Set_Animation_Data_402A40(rec.mFrameTableOffset, field_E4_res_array[0]);
             }
@@ -3138,7 +3138,7 @@ void Menu::GameSpeak_Update_47CBD0()
             Mudokon_SFX_42A4D0(MudSounds::eLaugh2_11, 0, 0, 0);
             field_204_flags |= 1u;
             const AnimRecord& rec = AO::AnimRec(AnimId::MenuAbeSpeak_Laugh);
-            if (field_E4_res_array[0]) // SATURN (ao261.31)
+            if (Tethys_SpeakRes(rec)) // SATURN (313.ao.1; was ao261.31)
             {
                 field_10_anim.Set_Animation_Data_402A40(rec.mFrameTableOffset, field_E4_res_array[0]);
             }
@@ -3154,7 +3154,7 @@ void Menu::GameSpeak_Update_47CBD0()
             Mudokon_SFX_42A4D0(MudSounds::eFart_7, 0, 0, 0);
             field_204_flags |= 1u;
             const AnimRecord& rec = AO::AnimRec(AnimId::MenuAbeSpeak_Fart);
-            if (field_E4_res_array[0]) // SATURN (ao261.31)
+            if (Tethys_SpeakRes(rec)) // SATURN (313.ao.1; was ao261.31)
             {
                 field_10_anim.Set_Animation_Data_402A40(rec.mFrameTableOffset, field_E4_res_array[0]);
             }
@@ -3184,7 +3184,7 @@ void Menu::GameSpeak_Update_47CBD0()
 
     field_204_flags |= 1u;
     const AnimRecord& rec = AO::AnimRec(AnimId::MenuAbeSpeak_Goodbye);
-    if (field_E4_res_array[0]) // SATURN (ao261.31)
+    if (Tethys_SpeakRes(rec)) // SATURN (313.ao.1; was ao261.31)
     {
         field_10_anim.Set_Animation_Data_402A40(rec.mFrameTableOffset, field_E4_res_array[0]);
     }
@@ -4198,6 +4198,92 @@ void Menu::GameSpeak_To_MainScreen_Update_47D690()
         field_134_anim.LoadPal_403090(field_E4_res_array[5], 0);
     }
 }
+
+#ifdef TETHYS_SATURN
+// SATURN (313.ao.1) ONE PHRASE AT A TIME INSTEAD OF NONE AT ALL.
+//
+// ao261.29 stopped requesting ABESPEAK.BAN without a cart, because
+// LoadResourceFile_455270 stages a file as ONE contiguous block and this one
+// is 684,032 B -- 72% of the no-cart resource heap, against roughly 673,012 B
+// free. Short by ~11 KB, and even if it landed the configuration would sit at
+// 101% occupancy. ao261.31 then had to guard ten call sites, because a null
+// block is not a no-op here: Set_Animation_Data treats null as "keep the
+// current block", and the current block is STARTANM.BND (124,192 B), so an
+// ABESPEAK frame-table offset indexes ~550 KB past its end with no MMU to
+// stop it. The result the tester sees is Abe speaking with no animation.
+//
+// THE FILE IS ONE CHUNK BUT NOT ONE ANIMATION. Measured with the converter's
+// own parser: ten phrases, 189 distinct cels, and ZERO cels shared between
+// phrases. So it splits with no duplication, and the menu only ever plays one
+// phrase at a time. tools/converter emits ABESPK0..9.BAN beside the original;
+// staged sizes are 12,288 B (ChantEnd) to 120,832 B (Laugh), so the WORST one
+// leaves ~552 KB of the heap free where the whole chunk was 11 KB short.
+//
+// NO NEW RUNTIME MECHANISM. _compact_payload already writes the TSAT record
+// ('TSAT', old table base, new table base) that Tethys_FixupFrameTable
+// translates compiled kAnimRecords offsets with, and it is ONE shift for the
+// whole table region -- so a phrase's compiled offset still resolves inside
+// its own file. That is why the ten sites keep their AnimRec offsets and this
+// function needs no per-phrase table on the AO side beyond a name.
+//
+// KEYED ON rec.mFrameTableOffset, not on an AnimId, because that offset is
+// literally the number the converter used to select the table. One list of
+// ten integers, the same ten on both sides of the toolchain, so a phrase that
+// moves cannot silently map to the wrong file -- it maps to none, and the
+// caller falls back to the ao261.31 behaviour (no animation, sound intact).
+//
+// WITH A CART NOTHING CHANGES: the whole file is resident and this returns the
+// handle it already had.
+static const s32 kTethysSpeakOff[10] = {
+    2115120, 2115180, 2115300, 2115368, 2115452,
+    2115472, 2115576, 2115712, 2115824, 2115912};
+static const char_type* const kTethysSpeakFile[10] = {
+    "ABESPK0.BAN", "ABESPK1.BAN", "ABESPK2.BAN", "ABESPK3.BAN", "ABESPK4.BAN",
+    "ABESPK5.BAN", "ABESPK6.BAN", "ABESPK7.BAN", "ABESPK8.BAN", "ABESPK9.BAN"};
+static s32 sTethysSpeakLoaded = -1;
+
+u8** Menu::Tethys_SpeakRes(const AnimRecord& rec)
+{
+    if (Tethys_gCartHeapBytes != 0)
+    {
+        return field_E4_res_array[0];
+    }
+    s32 want = -1;
+    for (s32 i = 0; i < 10; i++)
+    {
+        if (kTethysSpeakOff[i] == rec.mFrameTableOffset)
+        {
+            want = i;
+            break;
+        }
+    }
+    if (want < 0)
+    {
+        return field_E4_res_array[0]; // not an ABESPEAK phrase -- unchanged
+    }
+    if (want == sTethysSpeakLoaded && field_E4_res_array[0])
+    {
+        return field_E4_res_array[0];
+    }
+    if (field_E4_res_array[0])
+    {
+        ResourceManager::FreeResource_455550(field_E4_res_array[0]);
+        field_E4_res_array[0] = nullptr;
+    }
+    sTethysSpeakLoaded = -1;
+    // nullptr camera, exactly as the pre-existing ABESPEAK load two callers
+    // down: with no camera the load does not ref-count, and the
+    // GetLoadedResource below takes the single reference this object owns.
+    ResourceManager::LoadResourceFile_455270(kTethysSpeakFile[want], nullptr);
+    field_E4_res_array[0] = ResourceManager::GetLoadedResource_4554F0(
+        ResourceManager::Resource_Animation, AOResourceID::kAbespeakAOResID, 1, 0);
+    if (field_E4_res_array[0])
+    {
+        sTethysSpeakLoaded = want;
+    }
+    return field_E4_res_array[0];
+}
+#endif
 
 void CC Menu::OnResourceLoaded_47ADA0(Menu* pMenu)
 {
