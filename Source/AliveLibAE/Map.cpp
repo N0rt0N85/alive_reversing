@@ -607,6 +607,37 @@ void Map::GoTo_Camera()
         bShowLoadingIcon = true;
     }
 
+#ifdef TETHYS_SATURN
+    // SATURN: THE SECOND FMV SITE, found by census rather than by freezing.
+    //
+    // The door fix (6d38b6219) guarded the ePlay1FMV_5 swapper below; this
+    // block is the OTHER way an FMV swapper is built, for eUnknown_11.  It
+    // reads as a synchronous wait for the movie -- it is not.  It is ONE pass
+    // over the object list, and under a live swapper the Movie object never
+    // updates (Movie::VUpdate is where DDV_Play would run), so the pass ends
+    // with the swapper alive, gNumCamSwappers at 1, and the world frozen
+    // exactly as it was on the path-1 door -- without even an overlay frame
+    // to read, since this runs inside the screen change.
+    //
+    // Two Mines TLVs use it (census over all 12 paths, all TLV types carrying
+    // mWipeEffect): the PathTransition on path 3 to path 4, and the one on
+    // path 6 that leaves the level.  Skipped like its sibling, with the same
+    // destructor duty done here: the swapper's dtor was the only thing that
+    // disarmed gMap_bDoPurpleLightEffect.
+    if (mCameraSwapEffect == CameraSwapEffects::eUnknown_11)
+    {
+        if (gMap_bDoPurpleLightEffect)
+        {
+            RemoveObjectsWithPurpleLight(0);
+            gMap_bDoPurpleLightEffect = 0;
+        }
+        if (sSoundChannelsMask)
+        {
+            SND_Stop_Channels_Mask(sSoundChannelsMask);
+        }
+        sSoundChannelsMask = SND_MIDI(0, 0, 36, 70, 0, 0);
+    }
+#else
     if (mCameraSwapEffect == CameraSwapEffects::eUnknown_11)
     {
         CamResource nullRes;
@@ -654,6 +685,7 @@ void Map::GoTo_Camera()
         }
         sSoundChannelsMask = SND_MIDI(0, 0, 36, 70, 0, 0);
     }
+#endif
 
     if (mCurrentLevel != EReliveLevelIds::eMenu && mCurrentLevel != EReliveLevelIds::eNone)
     {
