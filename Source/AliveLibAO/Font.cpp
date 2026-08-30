@@ -10,6 +10,13 @@
 #include "../AliveLibCommon/FunctionFwd.hpp"
 #include "ScreenManager.hpp"
 #include "Math.hpp"
+
+#ifdef TETHYS_SATURN
+// SATURN (310.ao.1): the font-sheet width exception. Defined in
+// src/renderer_saturn.cxx, which carries the whole rationale.
+extern "C" void Tethys_NoteFontRect(s16 x, s16 y);
+extern "C" void Tethys_ForgetFontRect(s16 x, s16 y);
+#endif
 #include "../AliveLibAE/Renderer/IRenderer.hpp"
 
 namespace AO {
@@ -356,6 +363,14 @@ void FontContext::LoadFontType_41C040(s16 resourceID)
     auto fontFile = reinterpret_cast<File_Font*>(*loadedResource);
 
     vram_alloc_450B20(fontFile->field_0_width, fontFile->field_2_height, fontFile->field_4_color_depth, &field_0_rect);
+#ifdef TETHYS_SATURN
+    // SATURN (310.ao.1): tell the seam this slot is a FONT SHEET, i.e. the
+    // one 4bpp upload whose texels are NOT pre-decimated 2:1. Without it
+    // ContractDims derives tw = SatTexW(width) = 64 for a 120-wide sheet and
+    // reads every row at half stride. Registered by rect rather than by a
+    // flag around the Upload below, so it survives any call path.
+    Tethys_NoteFontRect(field_0_rect.x, field_0_rect.y);
+#endif
 
     const PSX_RECT rect = {field_0_rect.x, field_0_rect.y, static_cast<s16>(fontFile->field_0_width / 4), fontFile->field_2_height};
 
@@ -393,6 +408,9 @@ void FontContext::dtor_41C110()
 {
     if (field_0_rect.x > 0)
     {
+#ifdef TETHYS_SATURN
+        Tethys_ForgetFontRect(field_0_rect.x, field_0_rect.y); // 310.ao.1
+#endif
         Vram_free_450CE0(
             {field_0_rect.x, field_0_rect.y},
             {field_0_rect.w, field_0_rect.h});
