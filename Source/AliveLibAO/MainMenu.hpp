@@ -5,6 +5,11 @@
 #include "Primitives.hpp"
 #include "Font.hpp"
 
+// SATURN (313.ao.1): Menu::Tethys_SpeakRes takes one. GLOBAL scope, not AO --
+// AnimResources.hpp declares AnimRecord before its own `namespace AO`, so a
+// forward declaration inside AO would name a DIFFERENT, incomplete type.
+struct AnimRecord;
+
 namespace AO {
 
 enum buttonType : u16
@@ -270,6 +275,12 @@ public:
     EXPORT void FMV_Or_Level_Select_Back_Update_47ECB0();
 
     EXPORT static void CC OnResourceLoaded_47ADA0(Menu* pMenu);
+#ifdef TETHYS_SATURN
+    // SATURN (313.ao.1): load Abe's menu phrase on demand -- see the block
+    // above the definition in MainMenu.cpp for why the file had to be split
+    // and why the compiled frame-table offsets still work unchanged.
+    u8** Tethys_SpeakRes(const AnimRecord& rec);
+#endif
 
     EXPORT static void CC RenderElement_47A4E0(s32 xpos, s32 ypos, s32 input_command, PrimHeader** ot, AliveFont* pFont, s32* pPolyOffset);
 
