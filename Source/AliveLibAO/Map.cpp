@@ -817,7 +817,7 @@ void Map::ScreenChange_Common()
 // ScreenChange while PSX_VSync keeps re-submitting the stale list through
 // the synchronous CD stall) and stamps the flip-timer T0 (T1 = the flip's
 // single Tethys_UploadCamBlob).
-extern "C" void Tethys_OnScreenChange();
+extern "C" void Tethys_OnScreenChange(s32 inMenu);
 #endif
 
 void Map::ScreenChange_4444D0()
@@ -830,7 +830,10 @@ void Map::ScreenChange_4444D0()
 #ifdef TETHYS_SATURN
     // SATURN: a screen change is committed past this point (see the extern
     // above).
-    Tethys_OnScreenChange();
+    // 310.ao.1: the level is passed IN rather than sampled by the seam --
+    // the flip ramp it gates is consumed several frames later, by which
+    // time field_0_current_level may already be the next one.
+    Tethys_OnScreenChange(field_0_current_level == LevelIds::eMenu_0 ? 1 : 0);
 #endif
 
     if (sMap_bDoPurpleLightEffect_507C9C && field_0_current_level != LevelIds::eBoardRoom_12)
