@@ -4322,7 +4322,43 @@ void CC Menu::RenderElement_47A4E0(s32 xpos, s32 ypos, s32 input_command, PrimHe
 #else
     const s16 text_y = static_cast<s16>(ypos + FP_GetExponent((FP_FromInteger(-9) * scale_fp)) + 1);
 #endif
+#ifdef TETHYS_SATURN
+    // SATURN (311.ao.1) TWO SPACES WERE BEING SUBTRACTED FROM EACH OTHER.
+    //
+    // The original is PsxToPCX(xpos - text_width / 2, 11), and the two operands
+    // do not live in the same space. xpos comes from the button tables and is
+    // in the menu's 368-wide authoring space -- that is what PsxToPCX(x) =
+    // (40x + 11) / 23 converts from. text_width is MeasureWidth_41C280, which
+    // sums the ATLAS widths and scales them, i.e. exactly the units
+    // DrawString_41C360 uses to build the quad (widthScaled = charWidth *
+    // scale) -- 640-wide space. Subtracting the second from the first and then
+    // converting the difference multiplies the half-width by 40/23, so the text
+    // is placed 0.37 * text_width too far LEFT.
+    //
+    // MEASURED against the real atlas and the real button tables, in Saturn
+    // pixels (the error scales with the string, which is why the tester saw
+    // SOME labels misaligned and not others):
+    //     'l' / 'r' / 'x'   -1.5 px      'a'      -2.0 px
+    //     'l+r'             -6.0 px      'start'  -8.5 px
+    // His report names exactly that spread: the single letters in the GameSpeak
+    // menu slightly off, the Abe-motions rows (two-key combinations) clearly so.
+    //
+    // It only became visible with 310.ao.1. Before it the compositor drew every
+    // glyph narrower than AO asked -- the atlas was decimated twice -- and a
+    // letter too small for its button reads as centred whatever the offset. The
+    // alignment bug was always there; fixing the width is what exposed it.
+    //
+    // Convert the POSITION, then subtract the half-width in the space the glyph
+    // is actually drawn in. Same two quantities, one of them no longer scaled.
+    //
+    // NOT APPLIED to the other centring site in this file: ButtonRemap_Render's
+    // (368 - fontWidth) / 2 mixes the same two spaces, but nobody has reported
+    // it and its long strings take the maxFontWidth clamp before the centring
+    // ever runs. Reported defect, measured fix, one site.
+    const s16 converted_x = static_cast<s16>(PsxToPCX(xpos, 11) - text_width / 2);
+#else
     const s16 converted_x = static_cast<s16>(PsxToPCX(xpos - text_width / 2, 11));
+#endif
 
     const u8 bOldValue = sFontDrawScreenSpace_508BF4;
     sFontDrawScreenSpace_508BF4 = 1;
