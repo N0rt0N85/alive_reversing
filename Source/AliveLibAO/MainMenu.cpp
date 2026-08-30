@@ -4251,7 +4251,23 @@ void CC Menu::RenderElement_47A4E0(s32 xpos, s32 ypos, s32 input_command, PrimHe
     // guessed at again: 15 rows for a single character, 12 for a word -- still
     // under the 15-16 the tester called "a peine trop grandes", and legible at
     // that size for the first time.
-    const FP scale_fp = strlen(text) > 1 ? FP_FromDouble(0.55) : FP_FromDouble(0.68);
+    // 308.ao.2: BACK TO AO'S OWN 0.84/0.64, and this time for a reason that
+    // survives being checked rather than a fourth guess at a number.
+    //   WIDTH is what is binding, not height. AO computes the quad in 640-wide
+    // space and the seam halves X to reach a 320-wide screen, so a 13-texel
+    // letter lands on floor(13 * scale) / 2 Saturn columns: 5 at scale 0.78,
+    // 5 at 0.84, 4 at 0.68, 6 only at 1.0. Between 0.68 and 0.84 the letter
+    // gains a whole column and costs three rows -- so every notch I took OFF
+    // this line to answer "trop grandes" was paying for height with the
+    // legibility the tester was actually asking for. That is why 0.64/0.50 came
+    // back "illisible" and 0.68/0.55 came back "encore tres complique".
+    //   Five or six pixels for a B is the floor of a 320-wide screen with AO's
+    // own menu layout, and the PSX gets the same five or six -- 13 of its pixels
+    // at half width. What it does NOT do is throw half of them away first, and
+    // that is what 308.ao.2 fixes in the converter. At AO's own scale, off a
+    // full-resolution atlas, this is now as close to the original as the
+    // hardware allows; anything smaller loses a column one for one.
+    const FP scale_fp = strlen(text) > 1 ? FP_FromDouble(0.64) : FP_FromDouble(0.84);
     // (the ao261.22 note this replaces, kept for the mechanism it records)
     // ASK FOR THE SCALE THE RENDERER CAN ACTUALLY DELIVER.
     //
