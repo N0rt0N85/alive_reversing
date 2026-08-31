@@ -1181,6 +1181,72 @@ EXPORT void CC SND_Load_VABS_477040(SoundBlockInfo* pSoundBlockInfo, s32 reverb)
     }
 }
 
+// SATURN: P7 exit-FMV bank re-upload (AUDIO_VIDEO_PLAN §6.3).  After a Tier-2
+// Cinepak movie the SGL 68K driver owned sound RAM, so every sample of the
+// resident banks must be re-uploaded through the re-initialized SCSP backend.
+// A naive re-load fails three ways: SND_Load_VABS_477040 no-ops on unchanged
+// block info (:1153); a direct SND_VAB_Load_476CB0 re-runs
+// Allocate_New_Locked_Resource and leaks one locked VH per movie (the bt832
+// orphan class -- Allocate_New_Locked never reuses); and SsVabTransBody ticks
+// the sequencer every 8 records into a half-uploaded bank.  This entry reuses
+// the still-RESIDENT locked VH (field_C_pVabHeader survives Reclaim_Memory)
+// and must run with all SEQs closed and sbDisableSeqs still set -- the
+// caller (src/movie_cinepak.cxx) owns that ordering.
+static void CC Tethys_Reload_One_Vab(SoundBlockInfo* pInfo)
+{
+    if (!pInfo || !pInfo->field_C_pVabHeader || !pInfo->field_4_vab_body_name
+        || pInfo->field_8_vab_id < 0 || pInfo->field_8_vab_id >= kMaxVabs)
+    {
+        return; // never loaded (e.g. MONK on a level without it): nothing to restore
+    }
+    LvlFileRecord* pVabBodyFile = sLvlArchive_4FFD60.Find_File_Record_41BED0(pInfo->field_4_vab_body_name);
+    if (!pVabBodyFile)
+    {
+        return; // the VH-without-VB class (:1096)
+    }
+    const s32 vabBodySize = pVabBodyFile->field_10_num_sectors << 11;
+    u8** ppVabBody = ResourceManager::Alloc_New_Resource_454F20(ResourceManager::Resource_VabBody, pInfo->field_8_vab_id, vabBodySize);
+    if (!ppVabBody)
+    {
+        // Soft retry only -- never the Abe free/reload dance of :1107-1117:
+        // Abe's resources are LIVE mid-level and the movie is blocking.
+        ResourceManager::Reclaim_Memory_455660(0);
+        ppVabBody = ResourceManager::Alloc_New_Resource_454F20(ResourceManager::Resource_VabBody, pInfo->field_8_vab_id, vabBodySize);
+        if (!ppVabBody)
+        {
+            return; // bank stays silent until the next level load -- safe
+        }
+    }
+    sLvlArchive_4FFD60.Read_File_41BE40(pVabBodyFile, *ppVabBody);
+    // Reuse the resident locked VH -- the whole point of this entry.  Its
+    // internal SsVabClose/SND_Free sweep is inert on the fresh SndState and
+    // its SsSeqCalledTbyT call is gated off by sbDisableSeqs.
+    pInfo->field_8_vab_id = SsVabOpenHead_49CFB0(reinterpret_cast<VabHeader*>(pInfo->field_C_pVabHeader));
+    if (pInfo->field_8_vab_id < 0 || pInfo->field_8_vab_id >= kMaxVabs)
+    {
+        ResourceManager::FreeResource_455550(ppVabBody);
+        return; // :1136 VDP1-tail overrun guard, verbatim policy
+    }
+    SsVabTransBody_49D3E0(reinterpret_cast<VabBodyRecord*>(*ppVabBody), static_cast<s16>(pInfo->field_8_vab_id));
+    SsVabTransCompleted_4FE060(SS_WAIT_COMPLETED);
+    ResourceManager::FreeResource_455550(ppVabBody);
+}
+
+// SATURN: see Tethys_Reload_One_Vab above.  MONK first, then the level chain
+// (the walk shape of SND_Free_All_VABS, AE/Sound/Midi.cpp:147-155).
+// sLastLoadedSoundBlockInfo is deliberately left untouched so the
+// SND_Load_VABS no-op gate keeps suppressing duplicate full loads.
+EXPORT void CC Tethys_SND_VAB_Reload_Saturn()
+{
+    Tethys_Reload_One_Vab(reinterpret_cast<SoundBlockInfo*>(&GetMidiVars()->sMonkVh_Vb()));
+    SoundBlockInfo* pIter = reinterpret_cast<SoundBlockInfo*>(GetMidiVars()->sLastLoadedSoundBlockInfo());
+    while (pIter && pIter->field_0_vab_header_name)
+    {
+        Tethys_Reload_One_Vab(pIter);
+        pIter++;
+    }
+}
+
 EXPORT void CC SND_Load_Seqs_477AB0(OpenSeqHandleAE* pSeqTable, const char_type* bsqFileName)
 {
     SND_Load_Seqs_Impl(
