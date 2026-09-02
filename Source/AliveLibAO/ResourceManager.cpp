@@ -355,6 +355,65 @@ void Tethys_ReleaseStickyResources()
     // level change that actually needs it.
 }
 
+// SATURN (P7 Tier-2 no-cart): the movie-time heap borrow. A playing movie
+// pauses the whole game (nothing else allocates), so the Cinepak buffers
+// (~367 KB: ring 204,800 + decode 153,600 + work 8,656) borrow ONE locked
+// block from this heap instead of requiring a RAM cart. Stage 1 is a plain
+// last-fit allocation (eLastMatching parks it at heap top, away from the
+// compaction flow; locked keeps any reclaim from moving it). Stage 2 -- only
+// when nothing is mid-read -- is the shipped ao261.24 pressure recipe:
+// sticky refs dropped + compaction, then ONE retry with bReclaimOnFail (its
+// internal reclaim is the third pass). Fails soft (nullptr): the caller
+// falls back to the Tier-1 slideshow. The peak gauge is snapshotted and
+// restored on release so a 367 KB transient never contaminates pk, the
+// project's budget instrument. Holds 1-2 of the 375 ResourceHeapItem nodes
+// while borrowed. Type Resource_DecompressionBuffer: never swept by type
+// (only Animation/Palt are, Map.cpp level change) and self-documenting in a
+// death screen's heap top-8. Sticky re-pin after a stage-2 movie rides the
+// next screen flip's request path (one extra CD read, the pre-S7 cost).
+static u32 sTethysMovieBorrowPeakSnap;
+static const u32 kTethysMovieResId = 0x49564F4D; // 'MOVI'
+
+EXPORT u8** CC Tethys_MovieBorrowHeap(u32 bytes)
+{
+    sTethysMovieBorrowPeakSnap = sPeakedManagedMemUsage_9F0E4C;
+    u8** ppBlock = nullptr;
+    // Cheap pre-check: don't even walk the list when the arithmetic says no
+    // (16 = the block Header the allocator adds).
+    if (kResHeapSize - sManagedMemoryUsedSize_9F0E48 >= bytes + 16)
+    {
+        ppBlock = ResourceManager::Alloc_New_Resource_ImplEx(
+            ResourceManager::Resource_DecompressionBuffer, kTethysMovieResId,
+            bytes, true, ResourceManager::eLastMatching,
+            false /*bReclaimOnFail*/, false /*bFatalOnFail*/);
+    }
+    if (!ppBlock && sResources_Pending_Loading_9F0E38 == 0
+        && gFilesPending_507714 == 0)
+    {
+        Tethys_ReleaseStickyResources();
+        ResourceManager::Reclaim_Memory_455660(0);
+        ResourceManager::Reclaim_Memory_455660(0);
+        ppBlock = ResourceManager::Alloc_New_Resource_ImplEx(
+            ResourceManager::Resource_DecompressionBuffer, kTethysMovieResId,
+            bytes, true, ResourceManager::eLastMatching,
+            true /*bReclaimOnFail*/, false /*bFatalOnFail*/);
+    }
+    if (!ppBlock)
+    {
+        sPeakedManagedMemUsage_9F0E4C = sTethysMovieBorrowPeakSnap;
+    }
+    return ppBlock;
+}
+
+EXPORT void CC Tethys_MovieReleaseHeap(u8** ppBlock)
+{
+    if (ppBlock)
+    {
+        ResourceManager::FreeResource_455550(ppBlock);
+    }
+    sPeakedManagedMemUsage_9F0E4C = sTethysMovieBorrowPeakSnap;
+}
+
 // SATURN (bt990): NAMES THIS LEVEL'S LVL GENUINELY DOES NOT CONTAIN.
 // R1.LVL ships 209 file records and DOGBLOW.BAN is not one of them -- there are
 // no Slogs in RuptureFarms, so the PSX data never shipped the Slog gib
