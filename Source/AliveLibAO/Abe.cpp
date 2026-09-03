@@ -4170,20 +4170,73 @@ void Abe::Motion_0_Idle_423520()
                     field_FC_current_motion = eAbeMotions::Motion_80_430EF0;
                     return;
                 }
-                case TlvTypes::MovieStone_51:
                 case TlvTypes::BellSongStone_54:
-                case TlvTypes::DemoPlaybackStone_96:
                 case TlvTypes::HandStone_100:
                 {
+                    // SATURN (346.ao.1): the HandStone -- the "Directoire"
+                    // board naming the Mudokons still to rescue -- is LIVE
+                    // again, on the OG path, and it is split out of the group
+                    // below because the S7 glue had nothing to do with the
+                    // board-view flip the old comment blamed.
+                    //
+                    // BELLSONG COMES WITH IT, AND IT IS NOT A FLOURISH: the
+                    // bell-song stone is how the player HEARS the code for a
+                    // chime lock, and there are 13 of those across both
+                    // temples.  Inert, it left every one of them unopenable by
+                    // anyone who did not already know the tune -- a progression
+                    // block, sitting behind a comment that only ever argued
+                    // about the other three stones.  It also costs nothing:
+                    // BellSong.cpp is pure SFX (BellChime 50/51/52, or Mudokon
+                    // whistles for the type-0 stones), it holds no animation
+                    // and no resource, its factory loads nothing, and all 17
+                    // bell-song cameras already carry Anim 21 AND Anim 316 in
+                    // their own .CAM -- measured by walking every .CAM in
+                    // cd/data, not assumed.  It needs neither the Factory.cpp
+                    // repair nor one new resident byte.
+                    //
+                    // The single mechanical cause was Factory.cpp:2363: the
+                    // factory stopped loading ABESTONE.BAN, which is Abe's own
+                    // Motion_88/89 cel block, so this motion ran on a garbage
+                    // frame table that can never complete.  The autopsy is
+                    // written at that repair site.  Everything the old comment
+                    // listed as a blocker has since shipped: Prim_Tile is no
+                    // longer a no-op (bt992 S8, renderer_saturn.cxx:10206) and
+                    // the camera-flip wedge the same field session was fighting
+                    // was fixed in S7 rounds 2-3.
+                    //
+                    // Measured cost of the flip, decoded from the shipped BE
+                    // pack: R1's one HandStone (R1P15C02) points at
+                    // camera1 = (level 1, path 15, cam 19) and
+                    // camera2 = (1, 15, 20); camera3.level is eForestChase_14,
+                    // which is the loop TERMINATOR the state machine tests at
+                    // :8630 -- so two board screens, three flips, all inside
+                    // level 1 / path 15.  No level change, so GoTo_Camera never
+                    // enters the LVL-close / sticky-release teardown.  Both
+                    // board .CAMs decompress to a Bits chunk and End! with no
+                    // FG1 and no Anim, and each carries exactly one TLV, a
+                    // ContinueZone whose factory is empty -- zero heap chunks,
+                    // zero objects, zero resource files.
+                    field_F0_pTlv = pTlv;
+                    field_FC_current_motion = eAbeMotions::Motion_88_HandstoneBegin_430590;
+                    field_110_state.stone = StoneStates::eHandstoneStart_0;
+                    return;
+                }
+                case TlvTypes::MovieStone_51:
+                case TlvTypes::DemoPlaybackStone_96:
+                {
 #ifdef TETHYS_SATURN
-                    // SATURN: stones are inert until S8+ -- MovieStone needs
-                    // the (stubbed) Movie class, HandStone flips to its
-                    // board-view camera and back (two full camera loads
-                    // against the tight heap; its DeathFadeOut renders as a
-                    // no-op Tile until S8) and DemoPlayback replays need the
-                    // demo path validated. S7 field report: using the C02
-                    // "Directoire" stone glued Abe to it. Play the shrug
-                    // instead of entering the stone state machine.
+                    // SATURN (346.ao.1; was the four-stone gate): two stones
+                    // stay inert, and neither for the reason the 2026-07
+                    // comment gave.  MovieStone is the closest to viable now
+                    // that the FMV backend ships -- there is exactly ONE in the
+                    // whole game (R2P11C03, HALTS.DDV) and its camera already
+                    // carries both anims -- but it has never been exercised and
+                    // it re-enters DecompressCameraToVRam on the way out, which
+                    // is its own S7 story; it wants a build of its own.
+                    // DemoPlayback is moot: walking every converted PATH.BND
+                    // finds ZERO DemoPlaybackStone_96 TLVs on the disc, so the
+                    // case is unreachable whatever we do with it.
+                    // Play the shrug, as before.
                     field_FC_current_motion = eAbeMotions::Motion_36_DunnoBegin_423260;
                     break;
 #else
@@ -8367,18 +8420,52 @@ void Abe::Motion_88_HandstoneBegin_430590()
                     1,
                     0);
 
+#ifdef TETHYS_SATURN
+                // SATURN (346.ao.1): leave rather than wedge if the iris was
+                // born dead.  A CircularFade whose Animation_Init fails is
+                // marked eDead by BaseAnimatedWithPhysicsGameObject, and Abe
+                // never takes a ref on it -- there is no
+                // field_164_pCircularFade->field_C_refCount++ anywhere,
+                // although the dtor at :1110 decrements -- so Game.cpp:877
+                // reaps it at the END OF THIS TICK and eGetHandstoneType_1
+                // would then poll freed memory forever.  With SPOTLITE.BAN
+                // loaded this cannot fire on the resource path; what keeps the
+                // guard here is palette allocation: the Circular_Fade cel is a
+                // genuine 256-colour sheet (max texel index 148 measured), so
+                // a CRAM home failure reproduces the same silent death.  Take
+                // the exit the OG already uses when the TLV lookup fails.
+                if (!field_164_pCircularFade || field_164_pCircularFade->field_6_flags.Get(Options::eDead_Bit3))
+                {
+                    field_164_pCircularFade = nullptr;
+                    field_FC_current_motion = eAbeMotions::Motion_89_HandstoneEnd_430E80;
+                    break;
+                }
+#endif
                 field_164_pCircularFade->field_10_anim.field_4_flags.Set(
                     AnimFlags::eBit5_FlipX,
                     field_10_anim.field_4_flags.Get(AnimFlags::eBit5_FlipX));
 
                 field_110_state.stone = StoneStates::eGetHandstoneType_1;
                 SFX_Play_43AD70(SoundEffect::IngameTransition_107, 90, 0);
+#ifndef TETHYS_SATURN
                 field_F0_pTlv = gMap_507BA8.TLV_Get_At_446260(
                     FP_GetExponent(field_A8_xpos),
                     FP_GetExponent(field_AC_ypos),
                     FP_GetExponent(field_A8_xpos),
                     FP_GetExponent(field_AC_ypos),
                     TlvTypes::DemoPlaybackStone_96);
+#else
+                // SATURN (346.ao.1): search only for the stone types we are
+                // allowed to ENTER.  This block re-reads the world at Abe's
+                // exact position and REASSIGNS field_F0_pTlv, so the OG order
+                // Demo -> Bell -> Movie -> Hand could route us into a branch
+                // the dispatch above deliberately declined -- the type Abe
+                // entered on and the type this state acts on are not the same
+                // variable.  Only the Demo and Movie lookups are dropped; Bell
+                // and Hand keep their OG order, and the transition SFX keeps
+                // its OG placement on the leg we take.
+                field_F0_pTlv = nullptr;
+#endif
                 if (!field_F0_pTlv)
                     field_F0_pTlv = gMap_507BA8.TLV_Get_At_446260(
                         FP_GetExponent(field_A8_xpos),
@@ -8388,12 +8475,14 @@ void Abe::Motion_88_HandstoneBegin_430590()
                         TlvTypes::BellSongStone_54);
                 if (!field_F0_pTlv)
                 {
+#ifndef TETHYS_SATURN
                     field_F0_pTlv = gMap_507BA8.TLV_Get_At_446260(
                         FP_GetExponent(field_A8_xpos),
                         FP_GetExponent(field_AC_ypos),
                         FP_GetExponent(field_A8_xpos),
                         FP_GetExponent(field_AC_ypos),
                         TlvTypes::MovieStone_51);
+#endif
                     sAbeSound_507730 = SFX_Play_43AE60(SoundEffect::HandstoneTransition_13, 127, -300, 0);
                     if (!field_F0_pTlv)
                         field_F0_pTlv = gMap_507BA8.TLV_Get_At_446260(
