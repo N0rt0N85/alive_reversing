@@ -2360,12 +2360,43 @@ EXPORT void Factory_HandStone_487480(Path_TLV* /*pTlv*/, Map* /*pMap*/, TlvItemI
 {
     if (loadMode == LoadMode::LoadResourceFromList_1 || loadMode == LoadMode::LoadResource_2)
     {
-#ifndef TETHYS_SATURN
-        // SATURN: stones are inert until S8+ (Abe.cpp skips the stone state
-        // machine) -- don't spend ~20 K of the tight heap on their anims.
+        // SATURN (346.ao.1): both loads are back.  This factory is the ONLY
+        // loader of either file in AO, and the two ids are Abe's own cel block
+        // for motions 88/89/90 (kAbestoneAOResID 21, StateToAnimResource_4204F0
+        // res_idx 11) and AnimId::Circular_Fade, the iris (kSpotliteAOResID
+        // 316, AnimResources.cpp:1430).
+        //
+        // What the skip cost, decoded out of the shipped pack rather than
+        // reasoned about: with ABESTONE absent, GetLoadedResource returns null,
+        // Set_Animation_Data_402A40 KEEPS Abe's previous block (ABEBSIC1) and
+        // applies ABESTONE's frame-table offset 15484 to it.  15484 is in range
+        // for that block, so the ao262.11 bound guard stays silent and Abe
+        // decodes a garbage header: fps 3859, 13606 frames, loop bit clear.
+        // eBit12_ForwardLoopCompleted never arrives and eHandstoneStart_0 waits
+        // on it for ever.  That IS the S7 field report "the C02 Directoire
+        // stone glued Abe to it" -- no crash, no fatal, a frame table that can
+        // never finish.
+        //
+        // SCOPE, MEASURED ON THE SHIPPED PACKS AND NOT ASSUMED -- an earlier
+        // draft of this comment claimed the skip also broke the grenade
+        // machine, because Factory_GrenadeMachine_487860 CheckResourceIsLoaded's
+        // id 21 (:2311) without ever loading it.  It does not.  Walking every
+        // .CAM in cd/data and listing its Anim chunk ids says the PSX authoring
+        // embedded these two resources in exactly the cameras that have no
+        // factory to load them:
+        //     BoomMachine   16 cameras, Anim 21 only     (R1: 4, R2: 12)
+        //     BellSongStone 17 cameras, Anim 21 AND 316  (D1 2, D2 8, F1 1,
+        //                                                 F2 5, L1 1)
+        //     MovieStone     1 camera,  Anim 21 AND 316  (R2P11C03)
+        //     HandStone     27 cameras, NEITHER          (R1P15C02 holds only
+        //                                                 Bits + FG1 + End!)
+        // The handstone cameras are bare precisely because THIS factory is
+        // their loader.  So the skip broke the HandStone and nothing else, and
+        // the price of undoing it is paid on handstone cameras alone:
+        // ABESTONE.BAN 12,184 B + SPOTLITE.BAN 1,196 B = 13,380 B, transient
+        // (released at Abe.cpp:8586 and at camera teardown).
         ResourceManager::LoadResource_446C90("ABESTONE.BAN", ResourceManager::Resource_Animation, AOResourceID::kAbestoneAOResID, loadMode);
         ResourceManager::LoadResource_446C90("SPOTLITE.BAN", ResourceManager::Resource_Animation, AOResourceID::kSpotliteAOResID, loadMode);
-#endif
     }
     else
     {
