@@ -47,7 +47,30 @@ ParticleBurst* ParticleBurst::ctor_40D0F0(FP xpos, FP ypos, s16 particleCount, F
     // burst to a small budget. Cosmetic only -- a few debris sprites instead of a
     // shower. Raise TETHYS_MAX_BURST_PARTICLES once a higher value is HW/Ymir-
     // verified stable (the true SGL sort-table headroom depends on scene sprites).
-    #define TETHYS_MAX_BURST_PARTICLES 3
+    //
+    // 347.ao.1 -- 3 -> 12, AND THE CAP STOPS BEING A GUESS.  The note above
+    // asked for exactly this: a higher value, once stable.  Two things changed
+    // since bt829.  The overflow is no longer a silent reset -- SglAcceptCap
+    // bounds the frame at the MEASURED 128-command ceiling and drops the
+    // excess (bt1089), so the failure mode is now a missing debris sprite, not
+    // a dead console.  And the tester has run explosions on hardware with the
+    // stone build and reports them working.
+    //
+    // 12 is not a round number: it is the largest value the worst REAL case
+    // survives without reaching that ceiling.  The bound is not one burst, it
+    // is FallingItem.cpp:262/275/287, which can create THREE bursts of 25 in
+    // the same block -- 3 x 12 = 36 debris on top of a scene measured at 49-82
+    // commands = 118 at worst, still under 128.  At 16 the same case reaches
+    // 130 and SglAcceptCap starts dropping, and what it drops might be Abe.
+    // Heap: 136 B per particle (ParticleBurst_Item), so 1,632 B per burst and
+    // 4,896 B for that triple, still on the best-effort allocation below that
+    // never forces compaction.
+    //
+    // The cap STAYS.  RollingBall.cpp:263 asks for 150 = 20,400 B of resource
+    // heap for one boulder.  The OG counts are 20 (bombs, Shrykull), 25
+    // (falling items), 35 (the mine) and that 150, so at 12 every site except
+    // the boulder gets most of its shower back.
+    #define TETHYS_MAX_BURST_PARTICLES 12
     if (particleCount > TETHYS_MAX_BURST_PARTICLES) { particleCount = TETHYS_MAX_BURST_PARTICLES; }
 #endif
     SetVTable(this, 0x4BA480);
