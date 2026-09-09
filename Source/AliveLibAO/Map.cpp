@@ -46,6 +46,7 @@ extern "C" volatile s32 Tethys_gLastTlvType;
 // So `l` has always been a LOWER BOUND on a screen change, quoted as if it were
 // the whole thing. One number, latched per flip, ends that.
 extern "C" u32 Tethys_RawTicks();           // ~208/ms; ms would round this to 0 (bt1021)
+extern "C" bool Tethys_gSuppressCamPaint;   // renderer_saturn.cxx (359.ao.2)
 extern "C" volatile u32 Tethys_gFlipPostMs; // renderer_saturn.cxx, next to l/lc
 // bt1046: THE GAP THAT bt1044'S OWN BANNER DENIED. `l` is latched in FlipEnd,
 // which fires from Tethys_CamStreamEnd inside Tethys_StreamCamFile -- called at
@@ -1675,7 +1676,20 @@ void Map::Load_Path_Items_445DA0(Camera* pCamera, LoadMode loadMode)
             // DecompressCameraToVRam guards no-op; the VDP2 bitmap holds the
             // image). Kills the 72-111 KB flip-time staging peak that wedged
             // the heap at C09->C10 (round 4).
+            // SATURN 359.ao.2: an FMV swap must not flash the camera it is
+            // about to cover.  field_10_screenChangeEffect is already set by
+            // SetActiveCam_444660 when GoTo_Camera runs, and Init_48C830 makes
+            // the same test to skip DecompressCameraToVRam upstream -- this is
+            // the streaming path's half of that decision.  RestoreBackground
+            // (movie_stub.cxx) repaints once the movie ends.
+            {
+                const CameraSwapEffects eff = gMap_507BA8.field_10_screenChangeEffect;
+                Tethys_gSuppressCamPaint = (eff == CameraSwapEffects::ePlay1FMV_5
+                                            || eff == CameraSwapEffects::ePlay2FMVs_9
+                                            || eff == CameraSwapEffects::ePlay3FMVs_10);
+            }
             ResourceManager::Tethys_StreamCamFile(pCamera);
+            Tethys_gSuppressCamPaint = false;
 #else
             // Async camera load
             ResourceManager::LoadResourceFile(
