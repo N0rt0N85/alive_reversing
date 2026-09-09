@@ -47,6 +47,7 @@ extern "C" volatile s32 Tethys_gLastTlvType;
 // the whole thing. One number, latched per flip, ends that.
 extern "C" u32 Tethys_RawTicks();           // ~208/ms; ms would round this to 0 (bt1021)
 extern "C" bool Tethys_gSuppressCamPaint;   // renderer_saturn.cxx (359.ao.2)
+extern "C" bool Tethys_gFmvPrePlay;         // movie_stub.cxx (360.ao.4)
 extern "C" volatile u32 Tethys_gFlipPostMs; // renderer_saturn.cxx, next to l/lc
 // bt1046: THE GAP THAT bt1044'S OWN BANNER DENIED. `l` is latched in FlipEnd,
 // which fires from Tethys_CamStreamEnd inside Tethys_StreamCamFile -- called at
@@ -1683,10 +1684,16 @@ void Map::Load_Path_Items_445DA0(Camera* pCamera, LoadMode loadMode)
             // the streaming path's half of that decision.  RestoreBackground
             // (movie_stub.cxx) repaints once the movie ends.
             {
+                // 360.ao.4: and NOT when the movie already played (the pre-play
+                // in GoTo_Camera_445050).  With the old ordering this paint came
+                // BEFORE the film and had to be suppressed; with the new one it
+                // comes AFTER, so it is the paint that ENDS the movie -- keeping
+                // the suppression would leave the last frame on screen forever.
                 const CameraSwapEffects eff = gMap_507BA8.field_10_screenChangeEffect;
-                Tethys_gSuppressCamPaint = (eff == CameraSwapEffects::ePlay1FMV_5
-                                            || eff == CameraSwapEffects::ePlay2FMVs_9
-                                            || eff == CameraSwapEffects::ePlay3FMVs_10);
+                Tethys_gSuppressCamPaint = !Tethys_gFmvPrePlay
+                    && (eff == CameraSwapEffects::ePlay1FMV_5
+                        || eff == CameraSwapEffects::ePlay2FMVs_9
+                        || eff == CameraSwapEffects::ePlay3FMVs_10);
             }
             ResourceManager::Tethys_StreamCamFile(pCamera);
             Tethys_gSuppressCamPaint = false;
@@ -2189,6 +2196,69 @@ void Map::GoTo_Camera_445050()
     // nominated -- is bounded by that 280 because it is the whole phase. The
     // answer that mattered came from the column beside it: lc 1030 of 1443.
     // THE SCREEN CHANGE IS 71% CD, so lh's column goes to splitting lc.
+
+    // SATURN 360.ao.4 -- THE FMV PLAYS HERE, NOT AT THE TAIL, and the reason is
+    // a measurement rather than a preference.  The tail call below runs AFTER
+    // the five Load_Path_Items calls, i.e. with the whole new path resident:
+    // field capture 360.ao.3 read the borrow asking for its buffer against
+    // us780748 of a 937,288 B no-cart heap, so 156,540 B free against a 293,344
+    // B ask, and the MB row proved the pressure recipe recovers EXACTLY ZERO
+    // (u1 == u0 to the byte -- Reclaim_Memory only merges already-free blocks,
+    // it cannot lower `us`, and every sticky ref it drops still has a real
+    // owner underneath).  780,748 + 293,344 = 1,074,092 for 937,288 available:
+    // no encoding could ever close that, so the no-cart tier fell to the
+    // slideshow on every in-game movie.
+    //
+    // This point is the emptiest the heap ever is on a transition: the old
+    // cameras were freed by the loop immediately above and the new path has
+    // not been read yet.  And an FMV is BY NATURE a transition -- owner's call,
+    // 2026-09-09 -- so paying a reload after it is the right trade against a
+    // slideshow.
+    //
+    // Shape copied verbatim from the eUnknown_11 branch at the top of this
+    // function: the engine already knows how to create the swapper and pump the
+    // object list until the movie is done.  ppBits is nullptr and that costs
+    // nothing HERE -- round-5 .CAM streaming leaves field_C_ppBits null anyway,
+    // which is why the tail's argument was already dead on Saturn.
+    if (field_10_screenChangeEffect == CameraSwapEffects::ePlay1FMV_5)
+    {
+        Tethys_gFmvPrePlay = true;
+        CameraSwapper* pFmvRet = FMV_Camera_Change_4458D0(nullptr, this, field_A_level);
+        for (s32 i = 0; i < gBaseGameObject_list_9F2DF0->Size(); i++)
+        {
+            SYS_EventsPump_44FF90();
+
+            BaseGameObject* pBaseGameObj = gBaseGameObject_list_9F2DF0->ItemAt(i);
+            if (!pBaseGameObj)
+            {
+                break;
+            }
+
+            if (pBaseGameObj->field_6_flags.Get(BaseGameObject::eDead_Bit3) && pBaseGameObj->field_C_refCount == 0)
+            {
+                i = gBaseGameObject_list_9F2DF0->RemoveAt(i);
+                pBaseGameObj->VDestructor(1);
+                if (pBaseGameObj == pFmvRet)
+                {
+                    break; // FMV trans done
+                }
+            }
+            else if (pBaseGameObj->field_6_flags.Get(BaseGameObject::eUpdatable_Bit2))
+            {
+                if (!pBaseGameObj->field_6_flags.Get(BaseGameObject::eDead_Bit3) && (!sNumCamSwappers_507668 || pBaseGameObj->field_6_flags.Get(BaseGameObject::eUpdateDuringCamSwap_Bit10)))
+                {
+                    if (pBaseGameObj->field_8_update_delay > 0)
+                    {
+                        pBaseGameObj->field_8_update_delay--;
+                    }
+                    else
+                    {
+                        pBaseGameObj->VUpdate();
+                    }
+                }
+            }
+        }
+    }
 #endif
     Load_Path_Items_445DA0(field_34_camera_array[0], LoadMode::ConstructObject_0);
 #ifdef TETHYS_SATURN
@@ -2274,6 +2344,17 @@ void Map::GoTo_Camera_445050()
 
     if (field_10_screenChangeEffect == CameraSwapEffects::ePlay1FMV_5)
     {
+#ifdef TETHYS_SATURN
+        // SATURN 360.ao.4: already played, above, while the heap was empty.
+        // Clearing the flag HERE and not at the top of the next transition is
+        // deliberate -- this is the one site that can prove the pre-play was
+        // consumed exactly once.
+        if (Tethys_gFmvPrePlay)
+        {
+            Tethys_gFmvPrePlay = false;
+        }
+        else
+#endif
         FMV_Camera_Change_4458D0(field_34_camera_array[0]->field_C_ppBits, this, field_A_level);
     }
 
