@@ -374,10 +374,44 @@ void Tethys_ReleaseStickyResources()
 static u32 sTethysMovieBorrowPeakSnap;
 static const u32 kTethysMovieResId = 0x49564F4D; // 'MOVI'
 
+// SATURN 360.ao.2 -- DIAGNOSTIC LATCHES, and they exist because everything
+// cheaper has already been spent.  The no-cart BEGIN borrow is refused in the
+// field and TWO source-level explanations were built and then REFUTED by
+// reading the code they claimed to describe:
+//   * "the resident camera Bits fill the heap" -- on Saturn the Bits never
+//     enter the heap at all, they stream to VDP2 (Map.cpp round-5 comment).
+//   * "the 417,792 B VabBody is resident across the movie" -- it is freed the
+//     instant its samples reach sound RAM (Midi.cpp: "Now the sound samples
+//     are loaded we don't need the VB data anymore").
+// What is left is unmeasurable from here: how full the heap actually is AT THE
+// MOMENT BEGIN asks, and whether stage 2 even runs.  Every field capture we
+// have is from fr1879+, deep in play; none is from the borrow itself.  So the
+// three numbers that separate every remaining hypothesis get latched, and the
+// row that shows them says which one it is:
+//   u0 high, gate 0, u1 high -> supply: the recipe ran and the heap is genuinely
+//                               full.  Only a smaller ASK can win.
+//   u0 high, gate != 0       -> gating: the recipe never ran because a load was
+//                               pending.  Retry later instead of shrinking.
+//   u0 low, gate 0, u1 low   -> neither: the heap had room and the allocator
+//                               still failed -> contiguity, so split the one
+//                               block into its three independent buffers.
+extern "C" u32 Tethys_gMbUsed0 = 0; // used BEFORE stage 1
+extern "C" u32 Tethys_gMbGate = 0;  // bit0 resources pending, bit1 files pending
+extern "C" u32 Tethys_gMbUsed1 = 0; // used AFTER the pressure recipe (0 = skipped)
+// ask = what was actually requested.  It is a constant, and it is on the row
+// for the same reason `cap` is on the RN row: it is the row's SELF-TEST.  If it
+// does not read 293328 the image is not the one I think it is, and every other
+// number on the line is being read against the wrong build.
+extern "C" u32 Tethys_gMbAsk = 0;
+
 EXPORT u8** CC Tethys_MovieBorrowHeap(u32 bytes)
 {
     sTethysMovieBorrowPeakSnap = sPeakedManagedMemUsage_9F0E4C;
     u8** ppBlock = nullptr;
+    Tethys_gMbUsed0 = sManagedMemoryUsedSize_9F0E48;
+    Tethys_gMbGate = 0;
+    Tethys_gMbUsed1 = 0;
+    Tethys_gMbAsk = bytes;
     // Cheap pre-check: don't even walk the list when the arithmetic says no
     // (16 = the block Header the allocator adds).
     if (kResHeapSize - sManagedMemoryUsedSize_9F0E48 >= bytes + 16)
@@ -387,12 +421,20 @@ EXPORT u8** CC Tethys_MovieBorrowHeap(u32 bytes)
             bytes, true, ResourceManager::eLastMatching,
             false /*bReclaimOnFail*/, false /*bFatalOnFail*/);
     }
-    if (!ppBlock && sResources_Pending_Loading_9F0E38 == 0
-        && gFilesPending_507714 == 0)
+    if (sResources_Pending_Loading_9F0E38 != 0)
+    {
+        Tethys_gMbGate |= 1u;
+    }
+    if (gFilesPending_507714 != 0)
+    {
+        Tethys_gMbGate |= 2u;
+    }
+    if (!ppBlock && Tethys_gMbGate == 0)
     {
         Tethys_ReleaseStickyResources();
         ResourceManager::Reclaim_Memory_455660(0);
         ResourceManager::Reclaim_Memory_455660(0);
+        Tethys_gMbUsed1 = sManagedMemoryUsedSize_9F0E48;
         ppBlock = ResourceManager::Alloc_New_Resource_ImplEx(
             ResourceManager::Resource_DecompressionBuffer, kTethysMovieResId,
             bytes, true, ResourceManager::eLastMatching,
