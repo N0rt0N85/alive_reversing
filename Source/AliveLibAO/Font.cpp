@@ -261,7 +261,36 @@ extern "C" volatile u32 Tethys_gFontNullPolys = 0;
 // (build.ps1 emits Tethys.bin from the FR install and Tethys_ES.bin from the
 // ES one), and the localized FONT SHEETS are laid out differently from the US
 // ones, so the US sFont*Atlas_* tables above are simply wrong for our data.
+//
+// SATURN (Tier A, 2026-09-09): THE ATLAS IS A LANGUAGE CHOICE, NOT A CONSTANT.
+// The include above used to be unconditional, which quietly made this port
+// unable to serve anything but a localized executable: an English data set got
+// Euro glyph rects, i.e. the whole printable range registered against the wrong
+// sheet, with no error anywhere.  TETHYS_LANG=EN now selects the stock US
+// tables RELIVE already carries above -- no generated file, and not one byte
+// read out of the user's executable.
+//
+// The Euro arm is deliberately NOT wrapped in __has_include.  For FR/ES the
+// generated table is MANDATORY: a missing one must break the build loudly,
+// never fall back to US rects underneath localized data, which is a defect no
+// one would see until a tester read a garbled screen.  EN is an explicit
+// request; it is never a fallback.
+#if defined(TETHYS_LANG_EN)
+// The index rule below is derived, not chosen: BIAS = CTRL_BASE - 8 and
+// PRINTABLE_HI = CTRL_BASE - 1 + 31 (tools/euro_font.py V4).  The US sheet puts
+// the control block at CTRL_BASE = 92, giving 84 and 122 -- and the arithmetic
+// checks against the array lengths above: font1 = 92 printable + 24 control
+// glyphs (chars 8..31) = 116 entries, font2 = 92 + 12 (chars 8..19) = 104.
+#define kTethysFont1AtlasEuro sFont1Atlas_4C56E8
+#define kTethysFont2AtlasEuro sFont2Atlas_4C58B8
+enum : int
+{
+    kTethysEuroFontCtrlBias    = 84,
+    kTethysEuroFontPrintableHi = 122,
+};
+#else
 #include "tethys_euro_atlas.inc"
+#endif
 
 // SATURN: atlas index rule, ONE definition for the four call sites below.
 // The Euro tables push the control block from index 92 (US) to 145, so the

@@ -104,10 +104,18 @@ const u8 sLCDScreen_Palette2_4C7588[32] = {
 // ASCII and always renders. That is the honest degradation -- English text is
 // wrong for a Spanish disc, but it is text; a missing file must never be a
 // build failure, and must never silently ship the OTHER language's strings.
-#if defined(TETHYS_SATURN) && defined(TETHYS_LANG_ES) && __has_include("tethys_lcd_es.inc")
+// SATURN (Tier A, 2026-09-09): TETHYS_LANG=EN asks for the English table
+// EXPLICITLY, and must get it even on a machine where the localized .inc files
+// exist -- which is every machine that has ever built the FR disc.  Without
+// this, "English" was only reachable by the accident of a missing file, so an
+// English data set silently shipped French marquee text.  Both arms below are
+// therefore additionally gated on !TETHYS_LANG_EN; the English array further
+// down is the arm EN falls through to, and it is pure ASCII, so it renders
+// against any sheet.
+#if defined(TETHYS_SATURN) && !defined(TETHYS_LANG_EN) && defined(TETHYS_LANG_ES) && __has_include("tethys_lcd_es.inc")
 #include "tethys_lcd_es.inc"
 #define sLCDMessageTable_4C7420 kTethysLcdMsgs
-#elif defined(TETHYS_SATURN) && !defined(TETHYS_LANG_ES) && __has_include("tethys_lcd_fr.inc")
+#elif defined(TETHYS_SATURN) && !defined(TETHYS_LANG_EN) && !defined(TETHYS_LANG_ES) && __has_include("tethys_lcd_fr.inc")
 #include "tethys_lcd_fr.inc"
 #define sLCDMessageTable_4C7420 kTethysLcdMsgs
 #else
