@@ -1205,17 +1205,43 @@ static void CC Tethys_Reload_One_Vab(SoundBlockInfo* pInfo)
         return; // the VH-without-VB class (:1096)
     }
     const s32 vabBodySize = pVabBodyFile->field_10_num_sectors << 11;
-    u8** ppVabBody = ResourceManager::Alloc_New_Resource_454F20(ResourceManager::Resource_VabBody, pInfo->field_8_vab_id, vabBodySize);
+    // SATURN 368.ao.5 -- THE FREEZE COMING OUT OF BEGIN, AND THE GUARD BELOW WAS
+    // DEAD CODE THE WHOLE TIME.
+    //
+    // This used to call Alloc_New_Resource_454F20, whose chain is
+    //     Alloc_New_Resource_Impl(..., bReclaimOnFail = true)
+    //       -> Alloc_New_Resource_ImplEx(..., bReclaimOnFail, bReclaimOnFail)
+    // i.e. it passes the SAME flag as bFatalOnFail.  So on failure ImplEx takes
+    // the `else if (bReclaimOnFail)` arm, reports, and calls
+    // Tethys_Fatal("RES NULL") -- it NEVER returns null here, and the "bank
+    // stays silent, safe" recovery under it could never run.  A guard whose
+    // allocator fatals first is not a guard.
+    //
+    // That is the BEGIN freeze.  The reload runs from RestoreScspBackend after
+    // the movie, with a level resident: ~156 KB free against a VabBody of
+    // several hundred KB, so it fatals every time.  It looks like a hang rather
+    // than a death screen because Tethys_MovieDisplayEnter disabled NBG3 and
+    // 359.ao.2 deliberately stopped calling MovieDisplayExit here -- the fatal
+    // paints into an invisible layer while the movie's last frame stays up.
+    // The menu FMVs never reach it: they play with an empty heap, so the same
+    // allocation succeeds.
+    //
+    // The fix is to ask for what this function was always written to handle: a
+    // null.  ImplEx with bReclaimOnFail = true keeps the compaction retry, and
+    // bFatalOnFail = false takes the soft-null arm -- COUNTED via
+    // Tethys_gResSoftNull (the `rn` row), never silent.  The explicit retry that
+    // used to sit here is exactly what that arm does internally, so it goes.
+    u8** ppVabBody = ResourceManager::Alloc_New_Resource_ImplEx(
+        ResourceManager::Resource_VabBody, pInfo->field_8_vab_id, vabBodySize,
+        false, ResourceManager::BlockAllocMethod::eFirstMatching,
+        /*bReclaimOnFail*/ true, /*bFatalOnFail*/ false);
     if (!ppVabBody)
     {
-        // Soft retry only -- never the Abe free/reload dance of :1107-1117:
-        // Abe's resources are LIVE mid-level and the movie is blocking.
-        ResourceManager::Reclaim_Memory_455660(0);
-        ppVabBody = ResourceManager::Alloc_New_Resource_454F20(ResourceManager::Resource_VabBody, pInfo->field_8_vab_id, vabBodySize);
-        if (!ppVabBody)
-        {
-            return; // bank stays silent until the next level load -- safe
-        }
+        // Never the Abe free/reload dance of :1107-1117: Abe's resources are
+        // LIVE mid-level and the movie is blocking.  Losing this bank costs the
+        // level's sound effects until the next level load; keeping the fatal
+        // cost the whole game.
+        return;
     }
     sLvlArchive_4FFD60.Read_File_41BE40(pVabBodyFile, *ppVabBody);
     // Reuse the resident locked VH -- the whole point of this entry.  Its
