@@ -8,6 +8,7 @@
 #include "Abe.hpp"
 #include "ResourceManager.hpp"
 #include "LvlArchive.hpp"
+#include "Psx.hpp" // SATURN 373.ao.1: sector reads for the streamed VAB reload
 #include "BackgroundMusic.hpp"
 #include "MusicController.hpp"
 #include "AmbientSound.hpp"
@@ -1192,7 +1193,210 @@ EXPORT void CC SND_Load_VABS_477040(SoundBlockInfo* pSoundBlockInfo, s32 reverb)
 // the still-RESIDENT locked VH (field_C_pVabHeader survives Reclaim_Memory)
 // and must run with all SEQs closed and sbDisableSeqs still set -- the
 // caller (src/movie_cinepak.cxx) owns that ordering.
-static void CC Tethys_Reload_One_Vab(SoundBlockInfo* pInfo)
+// SATURN 373.ao.1 -- THE BANK NOW STREAMS, BECAUSE IT NEVER FITTED.
+//
+// 368.ao.5 turned the VabBody refusal soft and that cured the BEGIN freeze,
+// but the field capture read it straight back: RN t=VABB id0 sz481280 against
+// cap937288 / us780748, i.e. 481,280 B asked with 156,540 B free.  The bank
+// was refused twice and the level played mute.  Making the refusal survivable
+// was right; it was never the whole repair.
+//
+// The bank does not have to be resident to be uploaded.  SsVabTransBody walks
+// the .VB strictly FORWARD -- record i is {s32 len, s32 rate, u8 pcm[len]} at
+// the running offset -- and each payload goes straight to sound RAM.  So a
+// single sliding sector window is enough, and the heap transient becomes the
+// WINDOW (32 KB) instead of the bank (481 KB).  Two consequences worth
+// naming: it is level-resident-safe by construction, and it is the same code
+// on cart and no-cart.
+//
+// Everything here below the reader is SsVabTransBody_49D3E0 (:981) verbatim
+// except the byte source.  Keep them in step.
+struct TethysVbStream final
+{
+    const LvlFileRecord* pRec;
+    u8* pWin;
+    s32 winBytes;  // capacity, floored to a whole number of 2048 B sectors
+    s32 winStart;  // file offset of pWin[0]; -1 = nothing read yet
+    s32 winFill;   // valid bytes in pWin
+    s32 fileBytes;
+    bool bad;
+};
+
+static bool CC TethysVbFill(TethysVbStream& s, s32 pos)
+{
+    const s32 base = pos & ~2047;
+    if (base < 0 || base >= s.fileBytes)
+    {
+        s.bad = true;
+        return false;
+    }
+    s32 want = s.fileBytes - base;
+    if (want > s.winBytes)
+    {
+        want = s.winBytes;
+    }
+    const s32 sectors = want >> 11;
+    if (sectors <= 0)
+    {
+        s.bad = true;
+        return false;
+    }
+    CdlLOC loc = {};
+    PSX_Pos_To_CdLoc_49B340(s.pRec->field_C_start_sector + sLvlArchive_4FFD60.field_4_cd_pos + (base >> 11), &loc);
+    PSX_CD_File_Seek_49B670(2, &loc);
+    // The RESULT is checked, unlike Read_File_41BE40 (:172), which only tests
+    // FileIOWait -- and FileIOWait on Saturn only asks whether a handle exists
+    // (cd_saturn.cxx:519).  A short or failed read would otherwise upload the
+    // previous window's bytes as if they were this one's.
+    if (PSX_CD_File_Read_49B8B0(sectors, s.pWin) <= 0 || PSX_CD_FileIOWait_49B900(0) == -1)
+    {
+        s.bad = true;
+        return false;
+    }
+    s.winStart = base;
+    s.winFill = sectors << 11;
+    return true;
+}
+
+// Bytes readable at `pos` without another CD read.  0 means the stream is done
+// or broken -- callers must re-read s.winStart AFTER this, the window moves.
+static s32 CC TethysVbAvail(TethysVbStream& s, s32 pos)
+{
+    if (s.bad || pos < 0 || pos >= s.fileBytes)
+    {
+        return 0;
+    }
+    if (s.winStart < 0 || pos < s.winStart || pos >= s.winStart + s.winFill)
+    {
+        if (!TethysVbFill(s, pos))
+        {
+            return 0;
+        }
+    }
+    return s.winStart + s.winFill - pos;
+}
+
+// Byte-at-a-time on purpose: a record header can straddle the window edge, and
+// the explicit BE assembly is what a raw s32 deref gives on SH-2 anyway (the
+// converter writes s32be, tools/converter/vab.py).  Two per record, ~250
+// records: the cost is noise against the CD reads.
+static bool CC TethysVbReadS32(TethysVbStream& s, s32 pos, s32* pOut)
+{
+    u32 v = 0;
+    for (s32 k = 0; k < 4; k++)
+    {
+        if (TethysVbAvail(s, pos + k) <= 0)
+        {
+            return false;
+        }
+        v = (v << 8) | s.pWin[pos + k - s.winStart];
+    }
+    *pOut = static_cast<s32>(v);
+    return true;
+}
+
+extern "C" s32 Tethys_SND_LoadChunk(void* pEntry, const void* pWaveData, s32 byteOffset, s32 byteLen);
+extern "C" u32 Tethys_gSnd[10];
+
+static bool CC Tethys_TransBody_Streamed(const LvlFileRecord* pRec, s16 vabId, u8* pWin, s32 winBytes)
+{
+    if (vabId < 0 || vabId >= kMaxVabs || !pRec || !pWin || winBytes < 2048)
+    {
+        return false;
+    }
+    VabHeader* pVabHeader = GetSpuApiVars()->spVabHeaders()[vabId];
+    if (!pVabHeader)
+    {
+        return false;
+    }
+    const s32 vagCount = GetSpuApiVars()->sVagCounts()[vabId];
+
+    TethysVbStream st = {};
+    st.pRec = pRec;
+    st.pWin = pWin;
+    st.winBytes = winBytes & ~2047;
+    st.winStart = -1;
+    st.fileBytes = pRec->field_10_num_sectors << 11;
+
+    s32 pos = 0;
+    for (s32 i = 0; i < vagCount; i++)
+    {
+        SoundEntry* pEntry = &GetSpuApiVars()->sSoundEntryTable16().table[vabId][i];
+
+        if (!(i & 7))
+        {
+            SsSeqCalledTbyT_49E9F0();
+        }
+
+        memset(pEntry, 0, sizeof(SoundEntry));
+
+        s32 sampleLen = 0;
+        s32 recRateRaw = 0;
+        if (!TethysVbReadS32(st, pos, &sampleLen) || !TethysVbReadS32(st, pos + 4, &recRateRaw))
+        {
+            return false;
+        }
+        // The converter pins every payload length to a multiple of 4 so the
+        // next header stays 4-aligned (vab.py, "misalignment = SH-2 address
+        // error").  A walk that leaves that contract is not our bank -- stop,
+        // never upload a guessed length.
+        if (sampleLen < 0 || (sampleLen & 3) || pos + 8 + sampleLen > st.fileBytes)
+        {
+            return false;
+        }
+
+        if (sampleLen > 0)
+        {
+            const u8 unused_field = recRateRaw >= 0 ? 0 : 4;
+            for (s32 prog = 0; prog < 128; prog++)
+            {
+                for (s32 tone = 0; tone < 16; tone++)
+                {
+                    auto pVag = &GetSpuApiVars()->sConvertedVagTable().table[vabId][prog][tone];
+                    if (pVag->field_10_vag == i)
+                    {
+                        pVag->field_C = unused_field;
+
+                        if (!(unused_field & 4) && !pVag->field_0_adsr_attack && pVag->field_6_adsr_release)
+                        {
+                            pVag->field_6_adsr_release = 0;
+                        }
+                    }
+                }
+            }
+
+            const s32 recRate = recRateRaw >= 0 ? recRateRaw : -recRateRaw;
+            if (!SND_New_492790(pEntry, sampleLen, recRate, 8u, 0))
+            {
+                s32 done = 0;
+                while (done < sampleLen)
+                {
+                    const s32 at = pos + 8 + done;
+                    s32 n = TethysVbAvail(st, at);
+                    if (n <= 0)
+                    {
+                        return false;
+                    }
+                    if (n > sampleLen - done)
+                    {
+                        n = sampleLen - done;
+                    }
+                    // AFTER TethysVbAvail: the call may have moved the window.
+                    if (Tethys_SND_LoadChunk(pEntry, st.pWin + (at - st.winStart), done, n) != 0)
+                    {
+                        return false;
+                    }
+                    done += n;
+                }
+            }
+        }
+
+        pos += 8 + sampleLen;
+    }
+    return true;
+}
+
+static void CC Tethys_Reload_One_Vab(SoundBlockInfo* pInfo, u8* pWin, s32 winBytes)
 {
     if (!pInfo || !pInfo->field_C_pVabHeader || !pInfo->field_4_vab_body_name
         || pInfo->field_8_vab_id < 0 || pInfo->field_8_vab_id >= kMaxVabs)
@@ -1204,58 +1408,27 @@ static void CC Tethys_Reload_One_Vab(SoundBlockInfo* pInfo)
     {
         return; // the VH-without-VB class (:1096)
     }
-    const s32 vabBodySize = pVabBodyFile->field_10_num_sectors << 11;
-    // SATURN 368.ao.5 -- THE FREEZE COMING OUT OF BEGIN, AND THE GUARD BELOW WAS
-    // DEAD CODE THE WHOLE TIME.
-    //
-    // This used to call Alloc_New_Resource_454F20, whose chain is
-    //     Alloc_New_Resource_Impl(..., bReclaimOnFail = true)
-    //       -> Alloc_New_Resource_ImplEx(..., bReclaimOnFail, bReclaimOnFail)
-    // i.e. it passes the SAME flag as bFatalOnFail.  So on failure ImplEx takes
-    // the `else if (bReclaimOnFail)` arm, reports, and calls
-    // Tethys_Fatal("RES NULL") -- it NEVER returns null here, and the "bank
-    // stays silent, safe" recovery under it could never run.  A guard whose
-    // allocator fatals first is not a guard.
-    //
-    // That is the BEGIN freeze.  The reload runs from RestoreScspBackend after
-    // the movie, with a level resident: ~156 KB free against a VabBody of
-    // several hundred KB, so it fatals every time.  It looks like a hang rather
-    // than a death screen because Tethys_MovieDisplayEnter disabled NBG3 and
-    // 359.ao.2 deliberately stopped calling MovieDisplayExit here -- the fatal
-    // paints into an invisible layer while the movie's last frame stays up.
-    // The menu FMVs never reach it: they play with an empty heap, so the same
-    // allocation succeeds.
-    //
-    // The fix is to ask for what this function was always written to handle: a
-    // null.  ImplEx with bReclaimOnFail = true keeps the compaction retry, and
-    // bFatalOnFail = false takes the soft-null arm -- COUNTED via
-    // Tethys_gResSoftNull (the `rn` row), never silent.  The explicit retry that
-    // used to sit here is exactly what that arm does internally, so it goes.
-    u8** ppVabBody = ResourceManager::Alloc_New_Resource_ImplEx(
-        ResourceManager::Resource_VabBody, pInfo->field_8_vab_id, vabBodySize,
-        false, ResourceManager::BlockAllocMethod::eFirstMatching,
-        /*bReclaimOnFail*/ true, /*bFatalOnFail*/ false);
-    if (!ppVabBody)
-    {
-        // Never the Abe free/reload dance of :1107-1117: Abe's resources are
-        // LIVE mid-level and the movie is blocking.  Losing this bank costs the
-        // level's sound effects until the next level load; keeping the fatal
-        // cost the whole game.
-        return;
-    }
-    sLvlArchive_4FFD60.Read_File_41BE40(pVabBodyFile, *ppVabBody);
     // Reuse the resident locked VH -- the whole point of this entry.  Its
     // internal SsVabClose/SND_Free sweep is inert on the fresh SndState and
-    // its SsSeqCalledTbyT call is gated off by sbDisableSeqs.
+    // its SsSeqCalledTbyT call is gated off by sbDisableSeqs.  It must run
+    // BEFORE the transfer: it is what fills spVabHeaders/sVagCounts.
     pInfo->field_8_vab_id = SsVabOpenHead_49CFB0(reinterpret_cast<VabHeader*>(pInfo->field_C_pVabHeader));
     if (pInfo->field_8_vab_id < 0 || pInfo->field_8_vab_id >= kMaxVabs)
     {
-        ResourceManager::FreeResource_455550(ppVabBody);
         return; // :1136 VDP1-tail overrun guard, verbatim policy
     }
-    SsVabTransBody_49D3E0(reinterpret_cast<VabBodyRecord*>(*ppVabBody), static_cast<s16>(pInfo->field_8_vab_id));
+    if (Tethys_TransBody_Streamed(pVabBodyFile, static_cast<s16>(pInfo->field_8_vab_id), pWin, winBytes))
+    {
+        Tethys_gSnd[8]++;
+    }
+    else
+    {
+        // A partial bank is not a fatal: SND_Load_Chunk keys every entry to
+        // what actually landed, so the missing samples are silent and the rest
+        // plays.  Counted, never silent -- the `v` field on the CK row.
+        Tethys_gSnd[9]++;
+    }
     SsVabTransCompleted_4FE060(SS_WAIT_COMPLETED);
-    ResourceManager::FreeResource_455550(ppVabBody);
 }
 
 // SATURN: see Tethys_Reload_One_Vab above.  MONK first, then the level chain
@@ -1264,13 +1437,28 @@ static void CC Tethys_Reload_One_Vab(SoundBlockInfo* pInfo)
 // SND_Load_VABS no-op gate keeps suppressing duplicate full loads.
 EXPORT void CC Tethys_SND_VAB_Reload_Saturn()
 {
-    Tethys_Reload_One_Vab(reinterpret_cast<SoundBlockInfo*>(&GetMidiVars()->sMonkVh_Vb()));
+    // ONE window for the whole chain.  32 KB = 16 sectors: ~15 CD reads for a
+    // 481 KB bank, all forward, so the pickup never seeks backwards.  Id 127 is
+    // deliberately outside kMaxVabs (= 4) -- this is scratch, not a bank.
+    const s32 kVbWindowBytes = 32768;
+    u8** ppWin = ResourceManager::Alloc_New_Resource_ImplEx(
+        ResourceManager::Resource_VabBody, 127, kVbWindowBytes,
+        false, ResourceManager::BlockAllocMethod::eFirstMatching,
+        /*bReclaimOnFail*/ true, /*bFatalOnFail*/ false);
+    if (!ppWin)
+    {
+        return; // counted on the rn row; the level stays mute, as in 368.ao.5
+    }
+
+    Tethys_Reload_One_Vab(reinterpret_cast<SoundBlockInfo*>(&GetMidiVars()->sMonkVh_Vb()), *ppWin, kVbWindowBytes);
     SoundBlockInfo* pIter = reinterpret_cast<SoundBlockInfo*>(GetMidiVars()->sLastLoadedSoundBlockInfo());
     while (pIter && pIter->field_0_vab_header_name)
     {
-        Tethys_Reload_One_Vab(pIter);
+        Tethys_Reload_One_Vab(pIter, *ppWin, kVbWindowBytes);
         pIter++;
     }
+
+    ResourceManager::FreeResource_455550(ppWin);
 }
 
 EXPORT void CC SND_Load_Seqs_477AB0(OpenSeqHandleAE* pSeqTable, const char_type* bsqFileName)
