@@ -47,12 +47,6 @@ extern "C" volatile s32 Tethys_gLastTlvType;
 // the whole thing. One number, latched per flip, ends that.
 extern "C" u32 Tethys_RawTicks();           // ~208/ms; ms would round this to 0 (bt1021)
 extern "C" bool Tethys_gSuppressCamPaint;   // renderer_saturn.cxx (359.ao.2)
-extern "C" bool Tethys_gFmvPrePlay;         // movie_stub.cxx (360.ao.4)
-// SATURN 368.ao.2: the pre-play sweep gauge -- how many passes the FMV swapper
-// needed, and whether sNumCamSwappers_507668 actually came back to zero.  A
-// non-zero `n` IS the 360.ao.4 freeze, named instead of inferred.
-extern "C" u32 Tethys_gFmvPreSweeps = 0;
-extern "C" u32 Tethys_gFmvPreSwappers = 0;
 extern "C" volatile u32 Tethys_gFlipPostMs; // renderer_saturn.cxx, next to l/lc
 // bt1046: THE GAP THAT bt1044'S OWN BANNER DENIED. `l` is latched in FlipEnd,
 // which fires from Tethys_CamStreamEnd inside Tethys_StreamCamFile -- called at
@@ -1689,16 +1683,14 @@ void Map::Load_Path_Items_445DA0(Camera* pCamera, LoadMode loadMode)
             // the streaming path's half of that decision.  RestoreBackground
             // (movie_stub.cxx) repaints once the movie ends.
             {
-                // 360.ao.4: and NOT when the movie already played (the pre-play
-                // in GoTo_Camera_445050).  With the old ordering this paint came
-                // BEFORE the film and had to be suppressed; with the new one it
-                // comes AFTER, so it is the paint that ENDS the movie -- keeping
-                // the suppression would leave the last frame on screen forever.
+                // 368.ao.3: back to the 359.ao.2 rule.  The pre-play that made
+                // this conditional is gone, so the paint is once again strictly
+                // BEFORE the film and must be suppressed for every FMV effect.
                 const CameraSwapEffects eff = gMap_507BA8.field_10_screenChangeEffect;
-                Tethys_gSuppressCamPaint = !Tethys_gFmvPrePlay
-                    && (eff == CameraSwapEffects::ePlay1FMV_5
-                        || eff == CameraSwapEffects::ePlay2FMVs_9
-                        || eff == CameraSwapEffects::ePlay3FMVs_10);
+                Tethys_gSuppressCamPaint =
+                    (eff == CameraSwapEffects::ePlay1FMV_5
+                     || eff == CameraSwapEffects::ePlay2FMVs_9
+                     || eff == CameraSwapEffects::ePlay3FMVs_10);
             }
             ResourceManager::Tethys_StreamCamFile(pCamera);
             Tethys_gSuppressCamPaint = false;
@@ -2202,111 +2194,25 @@ void Map::GoTo_Camera_445050()
     // answer that mattered came from the column beside it: lc 1030 of 1443.
     // THE SCREEN CHANGE IS 71% CD, so lh's column goes to splitting lc.
 
-    // SATURN 360.ao.4 -- THE FMV PLAYS HERE, NOT AT THE TAIL, and the reason is
-    // a measurement rather than a preference.  The tail call below runs AFTER
-    // the five Load_Path_Items calls, i.e. with the whole new path resident:
-    // field capture 360.ao.3 read the borrow asking for its buffer against
-    // us780748 of a 937,288 B no-cart heap, so 156,540 B free against a 293,344
-    // B ask, and the MB row proved the pressure recipe recovers EXACTLY ZERO
-    // (u1 == u0 to the byte -- Reclaim_Memory only merges already-free blocks,
-    // it cannot lower `us`, and every sticky ref it drops still has a real
-    // owner underneath).  780,748 + 293,344 = 1,074,092 for 937,288 available:
-    // no encoding could ever close that, so the no-cart tier fell to the
-    // slideshow on every in-game movie.
+    // SATURN 368.ao.3 -- THE FMV HOIST IS GONE, and it is the decode-address
+    // change that made removing it possible rather than a retreat.
     //
-    // This point is the emptiest the heap ever is on a transition: the old
-    // cameras were freed by the loop immediately above and the new path has
-    // not been read yet.  And an FMV is BY NATURE a transition -- owner's call,
-    // 2026-09-09 -- so paying a reload after it is the right trade against a
-    // slideshow.
+    // 360.ao.4 moved the ePlay1FMV_5 movie to THIS point -- the emptiest the
+    // heap ever is on a transition -- because the tail call runs with the whole
+    // new path resident and the borrow did not fit: 780,748 used of 937,288, so
+    // 156,540 free against a 293,344 B ask.  That was a real measurement and it
+    // is still true.  What changed is the ASK.  With LIBCPK decoding straight
+    // into the NBG1 bitmap (368.ao.2 b) the borrow is ring + work only:
+    // 139,728 B against those same 156,540, with 16,812 to spare.  The film
+    // fits WHERE THE ENGINE ALWAYS PUT IT, so the hoist buys nothing.
     //
-    // Shape copied verbatim from the eUnknown_11 branch at the top of this
-    // function: the engine already knows how to create the swapper and pump the
-    // object list until the movie is done.  ppBits is nullptr and that costs
-    // nothing HERE -- round-5 .CAM streaming leaves field_C_ppBits null anyway,
-    // which is why the tail's argument was already dead on Saturn.
-    if (field_10_screenChangeEffect == CameraSwapEffects::ePlay1FMV_5)
-    {
-        // SATURN 368.ao.2 -- THE FIX FOR THE 360.ao.4 FREEZE, and the comment
-        // above ("shape copied verbatim") was true about the LOOP and wrong
-        // about what the loop is FOR.
-        //
-        // Field report, 2026-09-10, on 360.ao.4: the game freezes coming out of
-        // BEGIN.  Mechanism, read off this function:
-        //   - for ePlay1FMV_5 the ORIGINAL code (the tail of this function)
-        //     creates the swapper and DOES NOT PUMP IT AT ALL.  The ordinary
-        //     game loop reaps it, over as many frames as it takes, and
-        //     `sNumCamSwappers_507668` returning to 0 is what re-enables normal
-        //     object updates.  Only the rare eUnknown_11 branch pumps inline.
-        //   - 360.ao.4 replaced that with ONE monotonic pass.  The swapper is
-        //     appended at the end of the list, its update appends the Movie
-        //     after it, the Movie blocks for the whole film and marks itself
-        //     dead -- by which point the sweep index is already past both.  So
-        //     neither is ever collected, `pFmvRet` never matches, the counter
-        //     stays at 1, and from then on the game updates ONLY objects
-        //     carrying eUpdateDuringCamSwap_Bit10.  Abe does not carry it.
-        //     The game is running perfectly and nothing moves.
-        //
-        // So SWEEP until the swapper is actually gone.  Two or three passes is
-        // the expected cost (pass 1 plays, pass 2 reaps the Movie, pass 3 the
-        // swapper); the bound exists so a shape I have not foreseen degrades
-        // into "the movie played and the game continues" instead of a wedge.
-        Tethys_gFmvPrePlay = true;
-        CameraSwapper* pFmvRet = FMV_Camera_Change_4458D0(nullptr, this, field_A_level);
-        bool bSwapperReaped = false;
-        s32 sweeps = 0;
-        for (; sweeps < 240 && !bSwapperReaped; sweeps++)
-        {
-            for (s32 i = 0; i < gBaseGameObject_list_9F2DF0->Size(); i++)
-            {
-                SYS_EventsPump_44FF90();
-
-                BaseGameObject* pBaseGameObj = gBaseGameObject_list_9F2DF0->ItemAt(i);
-                if (!pBaseGameObj)
-                {
-                    break;
-                }
-
-                if (pBaseGameObj->field_6_flags.Get(BaseGameObject::eDead_Bit3) && pBaseGameObj->field_C_refCount == 0)
-                {
-                    i = gBaseGameObject_list_9F2DF0->RemoveAt(i);
-                    pBaseGameObj->VDestructor(1);
-                    if (pBaseGameObj == pFmvRet)
-                    {
-                        bSwapperReaped = true;
-                        break; // FMV trans done
-                    }
-                }
-                else if (pBaseGameObj->field_6_flags.Get(BaseGameObject::eUpdatable_Bit2))
-                {
-                    if (!pBaseGameObj->field_6_flags.Get(BaseGameObject::eDead_Bit3) && (!sNumCamSwappers_507668 || pBaseGameObj->field_6_flags.Get(BaseGameObject::eUpdateDuringCamSwap_Bit10)))
-                    {
-                        if (pBaseGameObj->field_8_update_delay > 0)
-                        {
-                            pBaseGameObj->field_8_update_delay--;
-                        }
-                        else
-                        {
-                            pBaseGameObj->VUpdate();
-                        }
-                    }
-                }
-            }
-            // The counter is the real exit condition: the swapper may be reaped
-            // by a path other than the compare above (nothing guarantees WE are
-            // the one who frees it), and what the rest of the game reads is the
-            // counter, not our pointer.
-            if (!sNumCamSwappers_507668)
-            {
-                bSwapperReaped = true;
-            }
-        }
-        // Gauge, because this block has now been wrong once in the field and a
-        // capture must be able to say so: sweeps taken, and whether the counter
-        // actually came back down.  `Fp s%d n%d` on the overlay.
-        Tethys_gFmvPreSweeps = (u32) sweeps;
-        Tethys_gFmvPreSwappers = (u32) sNumCamSwappers_507668;
-    }
+    // And it cost plenty.  Twice, in the field, it froze the game coming out of
+    // BEGIN -- once as a single monotonic sweep that could never reap the
+    // swapper, and once more after a fix of mine that was supposed to reap it.
+    // Two wrong diagnoses on the same twelve lines is the signal to stop
+    // patching and delete: this branch was re-implementing, badly, a pump the
+    // ordinary game loop already does correctly on every other transition.
+    // The tail below now runs unconditionally again, exactly as upstream.
 #endif
     Load_Path_Items_445DA0(field_34_camera_array[0], LoadMode::ConstructObject_0);
 #ifdef TETHYS_SATURN
@@ -2392,17 +2298,6 @@ void Map::GoTo_Camera_445050()
 
     if (field_10_screenChangeEffect == CameraSwapEffects::ePlay1FMV_5)
     {
-#ifdef TETHYS_SATURN
-        // SATURN 360.ao.4: already played, above, while the heap was empty.
-        // Clearing the flag HERE and not at the top of the next transition is
-        // deliberate -- this is the one site that can prove the pre-play was
-        // consumed exactly once.
-        if (Tethys_gFmvPrePlay)
-        {
-            Tethys_gFmvPrePlay = false;
-        }
-        else
-#endif
         FMV_Camera_Change_4458D0(field_34_camera_array[0]->field_C_ppBits, this, field_A_level);
     }
 
