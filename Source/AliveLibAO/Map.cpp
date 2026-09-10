@@ -48,6 +48,11 @@ extern "C" volatile s32 Tethys_gLastTlvType;
 extern "C" u32 Tethys_RawTicks();           // ~208/ms; ms would round this to 0 (bt1021)
 extern "C" bool Tethys_gSuppressCamPaint;   // renderer_saturn.cxx (359.ao.2)
 extern "C" bool Tethys_gFmvPrePlay;         // movie_stub.cxx (360.ao.4)
+// SATURN 368.ao.2: the pre-play sweep gauge -- how many passes the FMV swapper
+// needed, and whether sNumCamSwappers_507668 actually came back to zero.  A
+// non-zero `n` IS the 360.ao.4 freeze, named instead of inferred.
+extern "C" u32 Tethys_gFmvPreSweeps = 0;
+extern "C" u32 Tethys_gFmvPreSwappers = 0;
 extern "C" volatile u32 Tethys_gFlipPostMs; // renderer_saturn.cxx, next to l/lc
 // bt1046: THE GAP THAT bt1044'S OWN BANNER DENIED. `l` is latched in FlipEnd,
 // which fires from Tethys_CamStreamEnd inside Tethys_StreamCamFile -- called at
@@ -2222,42 +2227,85 @@ void Map::GoTo_Camera_445050()
     // which is why the tail's argument was already dead on Saturn.
     if (field_10_screenChangeEffect == CameraSwapEffects::ePlay1FMV_5)
     {
+        // SATURN 368.ao.2 -- THE FIX FOR THE 360.ao.4 FREEZE, and the comment
+        // above ("shape copied verbatim") was true about the LOOP and wrong
+        // about what the loop is FOR.
+        //
+        // Field report, 2026-09-10, on 360.ao.4: the game freezes coming out of
+        // BEGIN.  Mechanism, read off this function:
+        //   - for ePlay1FMV_5 the ORIGINAL code (the tail of this function)
+        //     creates the swapper and DOES NOT PUMP IT AT ALL.  The ordinary
+        //     game loop reaps it, over as many frames as it takes, and
+        //     `sNumCamSwappers_507668` returning to 0 is what re-enables normal
+        //     object updates.  Only the rare eUnknown_11 branch pumps inline.
+        //   - 360.ao.4 replaced that with ONE monotonic pass.  The swapper is
+        //     appended at the end of the list, its update appends the Movie
+        //     after it, the Movie blocks for the whole film and marks itself
+        //     dead -- by which point the sweep index is already past both.  So
+        //     neither is ever collected, `pFmvRet` never matches, the counter
+        //     stays at 1, and from then on the game updates ONLY objects
+        //     carrying eUpdateDuringCamSwap_Bit10.  Abe does not carry it.
+        //     The game is running perfectly and nothing moves.
+        //
+        // So SWEEP until the swapper is actually gone.  Two or three passes is
+        // the expected cost (pass 1 plays, pass 2 reaps the Movie, pass 3 the
+        // swapper); the bound exists so a shape I have not foreseen degrades
+        // into "the movie played and the game continues" instead of a wedge.
         Tethys_gFmvPrePlay = true;
         CameraSwapper* pFmvRet = FMV_Camera_Change_4458D0(nullptr, this, field_A_level);
-        for (s32 i = 0; i < gBaseGameObject_list_9F2DF0->Size(); i++)
+        bool bSwapperReaped = false;
+        s32 sweeps = 0;
+        for (; sweeps < 240 && !bSwapperReaped; sweeps++)
         {
-            SYS_EventsPump_44FF90();
-
-            BaseGameObject* pBaseGameObj = gBaseGameObject_list_9F2DF0->ItemAt(i);
-            if (!pBaseGameObj)
+            for (s32 i = 0; i < gBaseGameObject_list_9F2DF0->Size(); i++)
             {
-                break;
-            }
+                SYS_EventsPump_44FF90();
 
-            if (pBaseGameObj->field_6_flags.Get(BaseGameObject::eDead_Bit3) && pBaseGameObj->field_C_refCount == 0)
-            {
-                i = gBaseGameObject_list_9F2DF0->RemoveAt(i);
-                pBaseGameObj->VDestructor(1);
-                if (pBaseGameObj == pFmvRet)
+                BaseGameObject* pBaseGameObj = gBaseGameObject_list_9F2DF0->ItemAt(i);
+                if (!pBaseGameObj)
                 {
-                    break; // FMV trans done
+                    break;
                 }
-            }
-            else if (pBaseGameObj->field_6_flags.Get(BaseGameObject::eUpdatable_Bit2))
-            {
-                if (!pBaseGameObj->field_6_flags.Get(BaseGameObject::eDead_Bit3) && (!sNumCamSwappers_507668 || pBaseGameObj->field_6_flags.Get(BaseGameObject::eUpdateDuringCamSwap_Bit10)))
+
+                if (pBaseGameObj->field_6_flags.Get(BaseGameObject::eDead_Bit3) && pBaseGameObj->field_C_refCount == 0)
                 {
-                    if (pBaseGameObj->field_8_update_delay > 0)
+                    i = gBaseGameObject_list_9F2DF0->RemoveAt(i);
+                    pBaseGameObj->VDestructor(1);
+                    if (pBaseGameObj == pFmvRet)
                     {
-                        pBaseGameObj->field_8_update_delay--;
-                    }
-                    else
-                    {
-                        pBaseGameObj->VUpdate();
+                        bSwapperReaped = true;
+                        break; // FMV trans done
                     }
                 }
+                else if (pBaseGameObj->field_6_flags.Get(BaseGameObject::eUpdatable_Bit2))
+                {
+                    if (!pBaseGameObj->field_6_flags.Get(BaseGameObject::eDead_Bit3) && (!sNumCamSwappers_507668 || pBaseGameObj->field_6_flags.Get(BaseGameObject::eUpdateDuringCamSwap_Bit10)))
+                    {
+                        if (pBaseGameObj->field_8_update_delay > 0)
+                        {
+                            pBaseGameObj->field_8_update_delay--;
+                        }
+                        else
+                        {
+                            pBaseGameObj->VUpdate();
+                        }
+                    }
+                }
+            }
+            // The counter is the real exit condition: the swapper may be reaped
+            // by a path other than the compare above (nothing guarantees WE are
+            // the one who frees it), and what the rest of the game reads is the
+            // counter, not our pointer.
+            if (!sNumCamSwappers_507668)
+            {
+                bSwapperReaped = true;
             }
         }
+        // Gauge, because this block has now been wrong once in the field and a
+        // capture must be able to say so: sweeps taken, and whether the counter
+        // actually came back down.  `Fp s%d n%d` on the overlay.
+        Tethys_gFmvPreSweeps = (u32) sweeps;
+        Tethys_gFmvPreSwappers = (u32) sNumCamSwappers_507668;
     }
 #endif
     Load_Path_Items_445DA0(field_34_camera_array[0], LoadMode::ConstructObject_0);
