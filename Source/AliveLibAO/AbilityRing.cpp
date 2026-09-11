@@ -52,7 +52,25 @@ AbilityRing* AbilityRing::ctor_455860(FP xpos, FP ypos, RingTypes ring_type)
     field_6_flags.Set(Options::eDrawable_Bit4);
 
     // TODO: OG issue - using frame counter as res id again
+#ifdef TETHYS_SATURN
+    // SATURN (383.ao.1): THE `else` AT THE BOTTOM OF THIS CTOR COULD NEVER RUN.
+    // The author already wrote the whole recovery -- "no buffer, mark the ring
+    // dead" -- but Allocate_New_Locked_Resource_454F80 fatals before it can be
+    // reached (ResourceManager.cpp:2604 -> :2518-2522 -> :2586-2593), so on the
+    // no-cart heap the game DIED where it was designed to drop a cosmetic ring.
+    // This is the same class ao262.2 named for Animation's decompression
+    // buffers, and it is reached from the chant (Abe.cpp:9792, the possess
+    // pulse) -- i.e. it sits on the same screen as the RES NULL the tester
+    // photographed.  Keep the compaction retry, drop the fatal, and the guard
+    // below becomes live for the first time.
+    field_18_ppRes = ResourceManager::Alloc_New_Resource_ImplEx(
+        ResourceManager::Resource_Wave, gnFrameCount_507670,
+        sizeof(AbilityRing_PolyBuffer) * 64,
+        true /*locked*/, ResourceManager::BlockAllocMethod::eLastMatching,
+        true /*reclaim*/, false /*never fatal -- the else below handles it*/);
+#else
     field_18_ppRes = ResourceManager::Allocate_New_Locked_Resource_454F80(ResourceManager::Resource_Wave, gnFrameCount_507670, sizeof(AbilityRing_PolyBuffer) * 64);
+#endif
 
     if (field_18_ppRes)
     {

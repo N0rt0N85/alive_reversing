@@ -49,7 +49,19 @@ Spark* Spark::ctor_477B70(FP xpos, FP ypos, FP scale, u8 count, s16 min, s16 max
 
     field_4C_count = count;
 
+#ifdef TETHYS_SATURN
+    // SATURN (383.ao.1): same unreachable-guard repair as AbilityRing.cpp -- the
+    // `else` at the bottom of this ctor already sets eDead_Bit3, and the fatal
+    // allocator meant it could never run.  Sparks are spawned on every bullet
+    // impact (Bullet.cpp:113) and by both chant-triggered zappers, so this is a
+    // per-shot allocation on the same walled heap.
+    field_44_ppSprxRes = ResourceManager::Alloc_New_Resource_ImplEx(
+        ResourceManager::Resource_Sprx, 0, sizeof(SparkRes) * count,
+        true /*locked*/, ResourceManager::BlockAllocMethod::eLastMatching,
+        true /*reclaim*/, false /*never fatal -- the else below handles it*/);
+#else
     field_44_ppSprxRes = ResourceManager::Allocate_New_Locked_Resource_454F80(ResourceManager::Resource_Sprx, 0, sizeof(SparkRes) * count);
+#endif
     if (field_44_ppSprxRes)
     {
         field_48_pRes = reinterpret_cast<SparkRes*>(*field_44_ppSprxRes);

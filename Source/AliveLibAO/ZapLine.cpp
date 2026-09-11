@@ -40,14 +40,44 @@ ZapLine* ZapLine::ctor_4789A0(FP x1, FP y1, FP x2, FP y2, s16 aliveTime, ZapLine
     AnimId animId = AnimId::None;
     if (field_11A_type == ZapLineType::eThin_1)
     {
+#ifdef TETHYS_SATURN
+        // SATURN (383.ao.1): 12 x 20 = 240 sprites, and BOTH budgets refuse it.
+        // See the eThick_0 arm below for the full reasoning -- this is the same
+        // change on the Shrykull bolt (Shrykull.cpp:214, the only eThin_1 site).
+        // 12 x 7 = 84 keeps the shape (the segment count, which is what carries
+        // the jitter, is untouched) and only thins the dots along it.
+        field_120_number_of_pieces_per_segment = 7;
+#else
         field_120_number_of_pieces_per_segment = 20;
+#endif
         field_11E_number_of_segments = 12;
         animId = AnimId::Zap_Line_Blue;
         field_11C_tPageAbr = TPageAbr::eBlend_3;
     }
     else if (field_11A_type == ZapLineType::eThick_0)
     {
+#ifdef TETHYS_SATURN
+        // SATURN (383.ao.1): THE BEAM COULD NEVER BE DRAWN, AND ASKING FOR IT
+        // COULD KILL THE RUN.  28 x 10 = 280 sprites buys two things it cannot
+        // have: 280 * sizeof(ZapLineSprites) = 13,440 B of LOCKED resource heap,
+        // asked for at FIRE time on the memory-walled R1P15 heap, and 280
+        // Prim_Sprt pushed into the ordering table EVERY frame against a
+        // per-frame Sprt allowance of 96 (kBloodCapPacked, mode 0, shared with
+        // Blood and HintFly) and a measured VDP1 ceiling of 128 commands.  So
+        // even when the allocation succeeded the tail of the bolt was silently
+        // dropped -- which is the tester's second sentence, "le robot n'arrive
+        // pas a tirer".
+        //   28 x 3 = 84 fits under both: 4,032 B, and 84 Sprt with twelve to
+        // spare under the allowance.  The SEGMENT count is untouched, so the
+        // bolt keeps exactly its authored shape -- only the number of dots laid
+        // along each segment drops, and the cel is 9x9 (SPLINE.BAN, AO column of
+        // AnimId::Zap_Line_Red) over a beam of ~150-250 px, i.e. still ~4x
+        // overlap between neighbours.  CalculateZapPoints scales with it by
+        // construction: delta = 1 / pieces_per_segment (:347).
+        field_120_number_of_pieces_per_segment = 3;
+#else
         field_120_number_of_pieces_per_segment = 10;
+#endif
         field_11E_number_of_segments = 28;
         animId = AnimId::Zap_Line_Red;
         field_11C_tPageAbr = TPageAbr::eBlend_1;
@@ -61,7 +91,50 @@ ZapLine* ZapLine::ctor_4789A0(FP x1, FP y1, FP x2, FP y2, s16 aliveTime, ZapLine
     field_10_anim.field_C_layer = layer;
     field_122_number_of_sprites = field_11E_number_of_segments * field_120_number_of_pieces_per_segment;
 
+#ifdef TETHYS_SATURN
+    // SATURN (383.ao.1): A COSMETIC BEAM MUST NOT BE ABLE TO KILL THE RUN.
+    //
+    // This is the "RES NULL" the tester photographed in a Rupture Farms room
+    // with a BoomMachine and a chant-triggered SecurityClaw.  The chain is
+    // exact: Abe chants -> kEventAbeOhm_8 -> SecurityClaw::VUpdate_418DE0 ->
+    // ao_new<ZapLine> + this ctor -> Allocate_New_Locked_Resource_454F80
+    // (ResourceManager.cpp:2604) -> Alloc_New_Resource_Impl passes
+    // bReclaimOnFail through as bFatalOnFail (:2518-2522) -> the miss lands on
+    // ResourceManager.cpp:2586-2593, Tethys_ResNullReport then
+    // Tethys_Fatal("RES NULL").  A LOCKED block cannot be moved by
+    // Reclaim_Memory (:3084 skips locked blocks), so every locked resource pins
+    // its fragment and a big contiguous ask on the walled R1P15 heap is exactly
+    // the one that misses.
+    //   The beam is pure decoration: the damage is dealt by the CALLER, one
+    // statement later and independently (SecurityClaw.cpp:425 /
+    // SecurityOrb.cpp:218, sActiveHero->VTakeDamage(this)), and both callers
+    // discard the pointer as soon as the ctor returns.  So refusing softly
+    // costs the bolt and nothing else.
+    //   Same shape as Animation.cpp:466 and :1016 -- keep the compaction retry
+    // (it is worth trying), drop the fatal.  Marking the object dead before
+    // returning is what makes the null safe: Game.cpp:587 and :631 skip dead
+    // objects in the update walks, :801 skips them in the drawable walk, and
+    // :644 destroys them once the refcount clears -- so nothing ever reads the
+    // null buffers, and the dtor is null-tolerant on all four
+    // (FreeResource_455550 guards, ao_delete_free_450770 guards).
+    field_E8_ppRes = ResourceManager::Alloc_New_Resource_ImplEx(
+        ResourceManager::Resource_Spline, 0,
+        sizeof(ZapLineSprites) * field_122_number_of_sprites,
+        true /*locked*/, ResourceManager::BlockAllocMethod::eLastMatching,
+        true /*reclaim*/, false /*never fatal -- see above*/);
+    if (!field_E8_ppRes)
+    {
+        field_124_pSprts = nullptr;
+        field_128_sprite_positions = nullptr;
+        field_12C_zap_points = nullptr;
+        field_130_sprite_segment_positions = nullptr;
+        field_E4_state = ZapLineState::eInit_0;
+        field_6_flags.Set(BaseGameObject::eDead_Bit3);
+        return this;
+    }
+#else
     field_E8_ppRes = ResourceManager::Allocate_New_Locked_Resource_454F80(ResourceManager::Resource_Spline, 0, sizeof(ZapLineSprites) * field_122_number_of_sprites);
+#endif
     field_124_pSprts = reinterpret_cast<ZapLineSprites*>(*field_E8_ppRes);
 
     field_128_sprite_positions = reinterpret_cast<PSX_Point*>(alloc_450740(sizeof(PSX_Point) * field_122_number_of_sprites));

@@ -121,7 +121,21 @@ void Bullet::VUpdate_408E30()
                             pSpark->ctor_477B70(hitX, hitY, field_2C_scale, 6u, 50, 205);
                         }
                     }
+#ifdef TETHYS_SATURN
+                    // SATURN (383.ao.1): ONE PUFF PER IMPACT, NOT THREE.
+                    // SQBSMK.BAN is the LARGEST particle cel in the game
+                    // (61x44, promoted to 8bpp by the converter), it is
+                    // additive-tagged so it also carries an authored halo
+                    // sprite, and every bullet impact spawned three of them --
+                    // on the exact screen the tester reports slowing down
+                    // ("en tirant et en faisant l'incantation").  Same shape
+                    // as bt829's ParticleBurst cap: one argument, cosmetic,
+                    // reversible.  It also relieves the walled R1P15 heap that
+                    // the SecurityClaw beam dies on.
+                    New_Smoke_Particles_419A80(hitX, hitY, field_2C_scale, 1, 0);
+#else
                     New_Smoke_Particles_419A80(hitX, hitY, field_2C_scale, 3, 0);
+#endif
                     if (Math_RandomRange_450F20(0, 100) < 90 || Math_RandomRange_450F20(0, 128) >= 64)
                     {
                         SFX_Play_43AD70(SoundEffect::Bullet2_2, volume, 0);
@@ -209,7 +223,11 @@ void Bullet::VUpdate_408E30()
                 {
                     pSpark->ctor_477B70(hitX, hitY, FP_FromInteger(1), 9u, -31, 159);
                 }
+#ifdef TETHYS_SATURN
+                New_Smoke_Particles_419A80(hitX, hitY, FP_FromInteger(1), 1, 0); // SATURN (383.ao.1), see above
+#else
                 New_Smoke_Particles_419A80(hitX, hitY, FP_FromInteger(1), 3, 0);
+#endif
             }
 
             if (Math_RandomRange_450F20(0, 128) < 64)
