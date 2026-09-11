@@ -156,6 +156,64 @@ struct Menu_Element final
 
 const Menu_Element sBtnArray_MainMenuStaticBtn_4D03F0[] = {146, 205, InputCommands::eUnPause_OrConfirm};
 const Menu_Element sBtnArray_Options_4D0400[2] = {{145, 204, InputCommands::eUnPause_OrConfirm}, {286, 202, InputCommands::eBack}};
+#ifdef TETHYS_SATURN
+// SATURN (383.ao.1): THE COORDINATES ARE LOCALIZED DATA, AND THIS TABLE WAS NOT.
+//
+// The tester's report -- "B de s'accroupir est trop a droite, comme X et Y de
+// sauter en courant et le A de action; Z de marcher discretement est trop a
+// gauche" -- names a SIGN SPLIT, and no term in the centring arithmetic can
+// produce one: a constant bias moves every letter the same way.  The varying
+// term is xpos itself.  RELIVE's values are decompiled from the US executable,
+// while this disc ships the FRENCH panel art, which was re-laid-out around
+// longer words: MARCHER DISCRETEMENT pushes its button 14 authoring units RIGHT
+// of SNEAK's, S'ACCROUPIR pulls its own 5 units LEFT.  Art and table have to
+// come from the same locale; they did not.
+//
+// x/y READ OUT OF THE SHIPPED EXECUTABLES, not guessed:
+//   FR  "<Steam>/Oddworld Abes Oddysee/AbeWin.exe", 1,134,080 B, file 0x000CF370
+//   ES  assets/pc_es/AbeWin.exe,                    1,127,424 B, file 0x000CF320
+// The COMMAND column stays RELIVE's.  OG packs several commands into one
+// bitmask there (entry 2 reads 0x40, entries 3/4 both read 0x9 = eRun|eSpeak2,
+// entry 6 reads 0x6 = eSneak|eSpeak1) where RELIVE deliberately decoupled them;
+// the rows and their order are identical in all three locales, so only the
+// coordinates move.
+//
+// CHECKED AGAINST THE ARTWORK, not just against the exe.  Decoding the shipped
+// background (cd/data/S1.LVL -> S1P01C04.CAM, the eMotions_4 camera set at
+// MainMenu.cpp:3807) and taking the centroid of each painted oval gives the
+// button centres in Saturn pixels: 91.5 / 248.0 / 72.0 / 102.0 / 266.5 / 229.0
+// / 232.0 / 100.0.  PsxToPCX(FR xpos, 11) / 2 reproduces every one of them to
+// within 2.5 px; PsxToPCX(US xpos, 11) / 2 misses by up to 11.5 px, and misses
+// in BOTH directions -- +5.0 on crouch, +5.0 on action, -11.5 on sneak.  That
+// is the tester's list, including the two rows he did NOT report (throw and
+// langage, whose FR coordinates equal the US ones and which were already right).
+//
+// NOT the centring -- a 17 px spread cannot come from a width-proportional
+// term bounded by 3 px.  (This paragraph used to end "and 311.ao.1 must NOT be
+// reverted".  That was wrong and 383.ao.1 reverts it: MeasureWidth_41C2B0
+// converts its result back to 368 space when sFontDrawScreenSpace_508BF4 is 0,
+// which it is at the measurement, so 311 was the change that mixed the two
+// spaces.  See the long note at RenderElement_47A4E0.  Reverting moves every
+// single letter on THIS page 1 px LEFT, which improves it: the residuals below
+// each lose about 1 px.)
+//
+// Entries 0/1/9/10 are byte-identical across FR, ES and US, so the sound-options
+// page (:2716) and the page-link rows (:3997), which borrow them, cannot move.
+//
+// THE ARMS ARE KEYED TO THE ART ON THE DISC, NOT TO THE TEXT LANGUAGE.  The ES
+// arm is correct only because the ES pass swaps cd/lang_es/S1.LVL into cd/data
+// before its link; that level list is "what EXISTS rather than what is required"
+// and build.ps1 warns when a level is missing, in which case the Spanish binary
+// would carry Spanish coordinates over FRENCH art -- this defect, from the other
+// side.  Likewise TETHYS_LANG_EN keeps the US numbers, which is right only if
+// assets/pc is an English install (build.ps1's own assumption).
+//
+// Not fixed here, same defect class, next thing he will see: the GameSpeak table
+// below is also US data and the FRENCH exe differs by up to 19 Saturn px on
+// "hello" and 12 on "laugh" -- and that page also REORDERS its first two rows'
+// command column, so its coordinates cannot be swapped without swapping the
+// commands with them.  Separate change, separately verified against S1P01C37.CAM.
+#if defined(TETHYS_LANG_EN)
 const Menu_Element sBtnArray_AbeMotionsMenuButtons_4D0418[11] = {
     {144, 205, InputCommands::eUnPause_OrConfirm},
     {288, 203, InputCommands::eBack},
@@ -169,7 +227,209 @@ const Menu_Element sBtnArray_AbeMotionsMenuButtons_4D0418[11] = {
     {115, 216, InputCommands::eUnPause_OrConfirm}, // Go to Gamespeak page
     {307, 203, InputCommands::eBack},              // Exit
 };
+#elif defined(TETHYS_LANG_ES)
+const Menu_Element sBtnArray_AbeMotionsMenuButtons_4D0418[11] = {
+    {144, 205, InputCommands::eUnPause_OrConfirm},
+    {288, 203, InputCommands::eBack},
+    {98, 87, InputCommands::eCrouchOrRoll},        // Crouch      (US 112)
+    {294, 87, InputCommands::eRun},                // Run         (US 283)
+    {89, 118, InputCommands::eRun},                // Run jump: run
+    {118, 118, InputCommands::eHop},               // Run jump: jump (US 124)
+    {293, 119, InputCommands::eSneak},             // Sneak
+    {264, 151, InputCommands::eThrowItem},         // Throw
+    {273, 183, InputCommands::eDoAction},          // Action
+    {115, 216, InputCommands::eUnPause_OrConfirm}, // Go to Gamespeak page
+    {307, 203, InputCommands::eBack},              // Exit
+};
+#else // the FRENCH disc -- the default build
+const Menu_Element sBtnArray_AbeMotionsMenuButtons_4D0418[11] = {
+    {144, 205, InputCommands::eUnPause_OrConfirm},
+    {288, 203, InputCommands::eBack},
+    {107, 87, InputCommands::eCrouchOrRoll},       // Crouch  US 112: B  +5.0 px -> +1.0
+    {286, 87, InputCommands::eRun},                // Run     US 283: X  -2.5    -> -0.5
+    {85, 118, InputCommands::eRun},                // RJ run  US  89: X  +4.5    -> +1.5
+    {120, 118, InputCommands::eHop},               // RJ hop  US 124: Y  +5.0    -> +2.0
+    {307, 119, InputCommands::eSneak},             // Sneak   US 293: Z -11.5    ->  0.0
+    {264, 150, InputCommands::eThrowItem},         // Throw   y 151 -> 150
+    {267, 183, InputCommands::eDoAction},          // Action  US 273: A  +5.5    -> -0.5
+    {115, 216, InputCommands::eUnPause_OrConfirm}, // Go to Gamespeak page
+    {307, 203, InputCommands::eBack},              // Exit
+};
+#endif
+#else
+const Menu_Element sBtnArray_AbeMotionsMenuButtons_4D0418[11] = {
+    {144, 205, InputCommands::eUnPause_OrConfirm},
+    {288, 203, InputCommands::eBack},
+    {112, 87, InputCommands::eCrouchOrRoll},       // Crouch
+    {283, 87, InputCommands::eRun},                // Run
+    {89, 118, InputCommands::eRun},                // Run jump: run
+    {124, 118, InputCommands::eHop},               // Run jump: jump
+    {293, 119, InputCommands::eSneak},             // Sneak
+    {264, 151, InputCommands::eThrowItem},         // Throw
+    {273, 183, InputCommands::eDoAction},          // Action
+    {115, 216, InputCommands::eUnPause_OrConfirm}, // Go to Gamespeak page
+    {307, 203, InputCommands::eBack},              // Exit
+};
+#endif
 
+#ifdef TETHYS_SATURN
+// SATURN (383.ao.1): THE SECOND LOCALIZED TABLE -- AND THE PAGE IT FEEDS IS NOT
+// THE ONE THE OLD COMMENT NAMED.
+//
+// Entries 20..32 are the MAIN-MENU gamespeak page (GameSpeak_Render_47D700,
+// camera eGamespeakGamepad_3 = S1P01C03.CAM, one button per row).  Entries
+// 0..19 are the LANGAGE page reached by confirming on MOUVEMENTS DE ABE
+// (ToggleMotions_Render_47CAB0, camera eMotionsGamespeakGamepad_7 =
+// S1P01C07.CAM, PAIRS of buttons with a "+" between them).  RELIVE's "these
+// below seem unused" was exactly inverted: 0..19 IS drawn, on C07, and it is
+// the half that carries the whole FR/US divergence.
+//
+// THE FRENCH ART REORDERS THE FIRST TWO ROWS, so unlike the motions table the
+// COMMAND column has to move with the coordinates.  FR reads SALUT (speak1 +
+// hop) then ENVOUTER (speak1 + speak2); US and ES read the chant first.  Read
+// straight out of the executables (33 entries of 3 x s32 LE):
+//   FR  "<Steam>/Oddworld Abes Oddysee/AbeWin.exe", 1,134,080 B, file 0x000CF3F8
+//   ES  assets/pc_es/AbeWin.exe,                    1,127,424 B, file 0x000CF3A8
+// FR entry 3 holds 0x010 (hop) and entry 5 holds 0x009 (speak2); ES holds them
+// the other way round.  ES is otherwise byte-identical to RELIVE's US decode.
+//
+// MEASURED, glyph ink centre against the centre of the painted disc, in Saturn
+// px (discs flood-filled out of cd/data/S1.LVL -> S1P01C07.CAM -> Bits chunk):
+//   today  entry 4 +15.2   entry 5 +19.7   entry 18 +13.8   entry 19 +13.2
+//   after  entry 4  +0.2   entry 5  +1.2   entry 18  +1.8   entry 19  +2.7
+// and entries 3/5 stop printing each other's key -- today SALUT shows R and
+// ENVOUTER shows Y, which is those two keys swapped.
+//
+// ENTRIES 27 AND 31 ARE A DECODE BUG, NOT A LOCALE ONE, and they are wrong in
+// every language.  All three executables hold 0x40 there.  OG packs several
+// commands into one bitmask and RELIVE decoupled them, so 0x40 on its own is
+// ambiguous -- entry 0 of this same table is also 0x40 and really IS confirm
+// (the MOUVEMENTS nav row, acted on as eUnPause_OrConfirm | eDoAction by
+// Toggle_Motions_Screens_Update_47C8F0).  What settles 27 and 31 is POSITION:
+// they sit in the gamespeak command grid beside 25/26/28 (0x10 hop, 0x20 throw,
+// 0x80 action) and mirror entries 9 and 17 -- the same two rows on the other
+// page -- which RELIVE already decodes as eCrouchOrRoll.  So ATTENDS and
+// SIFFLER 2 were printing the confirm key (A) where the key is crouch (B).
+// Do NOT "fix" entry 0 to match: it is a nav row, and that would break the
+// MOUVEMENTS prompt.
+#if defined(TETHYS_LANG_EN)
+const Menu_Element sBtnArray_AbeGamespeakMenuButtons_4D04A0[33] = {
+    {115, 216, InputCommands::eUnPause_OrConfirm}, // Back to Abe Motions
+    {307, 203, InputCommands::eBack},              // Exit
+    {90, 53, InputCommands::eLeftGamespeak},       // Chant first button
+    {125, 53, InputCommands::eRightGameSpeak},     // Chant second button
+    {81, 80, InputCommands::eLeftGamespeak},       // Hello shoulder button
+    {125, 80, InputCommands::eHop},                // Hello action button
+    {79, 112, InputCommands::eLeftGamespeak},      // Angry shoulder button
+    {122, 112, InputCommands::eThrowItem},         // Angry action button
+    {78, 147, InputCommands::eLeftGamespeak},      // Wait shoulder button
+    {119, 147, InputCommands::eCrouchOrRoll},      // Wait action button
+    {82, 180, InputCommands::eLeftGamespeak},      // Follow me shoulder button
+    {120, 180, InputCommands::eDoAction},          // Follow me action button
+    {258, 62, InputCommands::eRightGameSpeak},     // Whistle 1 shoulder button
+    {295, 62, InputCommands::eHop},                // Whistle 1 action button
+    {253, 98, InputCommands::eRightGameSpeak},     // Fart shoulder button
+    {294, 98, InputCommands::eThrowItem},          // Fart action button
+    {267, 139, InputCommands::eRightGameSpeak},    // Whistle 2 shoulder button
+    {307, 139, InputCommands::eCrouchOrRoll},      // Whistle 2 action button
+    {259, 178, InputCommands::eRightGameSpeak},    // Laugh shoulder button
+    {296, 178, InputCommands::eDoAction},          // Laugh action button
+    // ---- camera 3, the MAIN-MENU gamespeak page, from here down ----
+    {308, 205, InputCommands::eBack},              // Exit
+    {96, 32, InputCommands::eLeftGamespeak},       // left panel "hold and press"
+    {305, 32, InputCommands::eRightGameSpeak},     // right panel "hold and press"
+    {157, 29, InputCommands::eLeftGamespeak},      // Chant left
+    {205, 29, InputCommands::eRightGameSpeak},     // Chant right
+    {38, 81, InputCommands::eHop},                 // Hello
+    {42, 118, InputCommands::eThrowItem},          // Angry
+    {49, 151, InputCommands::eCrouchOrRoll},       // Wait      (was eUnPause_OrConfirm)
+    {65, 190, InputCommands::eDoAction},           // Follow me
+    {322, 82, InputCommands::eHop},                // Whistle 1
+    {307, 117, InputCommands::eThrowItem},         // Fart
+    {301, 146, InputCommands::eCrouchOrRoll},      // Whistle 2 (was eUnPause_OrConfirm)
+    {278, 184, InputCommands::eDoAction},          // Laugh
+};
+#elif defined(TETHYS_LANG_ES)
+// Byte-identical to the US arm apart from entries 27/31 (the decode fix
+// above): all 33 ES entries match RELIVE's values, verified against
+// assets/pc_es/AbeWin.exe at file 0x000CF3A8.
+const Menu_Element sBtnArray_AbeGamespeakMenuButtons_4D04A0[33] = {
+    {115, 216, InputCommands::eUnPause_OrConfirm}, // Back to Abe Motions
+    {307, 203, InputCommands::eBack},              // Exit
+    {90, 53, InputCommands::eLeftGamespeak},       // Chant first button
+    {125, 53, InputCommands::eRightGameSpeak},     // Chant second button
+    {81, 80, InputCommands::eLeftGamespeak},       // Hello shoulder button
+    {125, 80, InputCommands::eHop},                // Hello action button
+    {79, 112, InputCommands::eLeftGamespeak},      // Angry shoulder button
+    {122, 112, InputCommands::eThrowItem},         // Angry action button
+    {78, 147, InputCommands::eLeftGamespeak},      // Wait shoulder button
+    {119, 147, InputCommands::eCrouchOrRoll},      // Wait action button
+    {82, 180, InputCommands::eLeftGamespeak},      // Follow me shoulder button
+    {120, 180, InputCommands::eDoAction},          // Follow me action button
+    {258, 62, InputCommands::eRightGameSpeak},     // Whistle 1 shoulder button
+    {295, 62, InputCommands::eHop},                // Whistle 1 action button
+    {253, 98, InputCommands::eRightGameSpeak},     // Fart shoulder button
+    {294, 98, InputCommands::eThrowItem},          // Fart action button
+    {267, 139, InputCommands::eRightGameSpeak},    // Whistle 2 shoulder button
+    {307, 139, InputCommands::eCrouchOrRoll},      // Whistle 2 action button
+    {259, 178, InputCommands::eRightGameSpeak},    // Laugh shoulder button
+    {296, 178, InputCommands::eDoAction},          // Laugh action button
+    // ---- camera 3, the MAIN-MENU gamespeak page, from here down ----
+    {308, 205, InputCommands::eBack},              // Exit
+    {96, 32, InputCommands::eLeftGamespeak},       // left panel "hold and press"
+    {305, 32, InputCommands::eRightGameSpeak},     // right panel "hold and press"
+    {157, 29, InputCommands::eLeftGamespeak},      // Chant left
+    {205, 29, InputCommands::eRightGameSpeak},     // Chant right
+    {38, 81, InputCommands::eHop},                 // Hello
+    {42, 118, InputCommands::eThrowItem},          // Angry
+    {49, 151, InputCommands::eCrouchOrRoll},       // Wait      (was eUnPause_OrConfirm)
+    {65, 190, InputCommands::eDoAction},           // Follow me
+    {322, 82, InputCommands::eHop},                // Whistle 1
+    {307, 117, InputCommands::eThrowItem},         // Fart
+    {301, 146, InputCommands::eCrouchOrRoll},      // Whistle 2 (was eUnPause_OrConfirm)
+    {278, 184, InputCommands::eDoAction},          // Laugh
+};
+#else // the FRENCH disc -- the default build
+const Menu_Element sBtnArray_AbeGamespeakMenuButtons_4D04A0[33] = {
+    {115, 216, InputCommands::eUnPause_OrConfirm}, // MOUVEMENTS DE ABE
+    {307, 203, InputCommands::eBack},              // QUITTER
+    // FR row 1 is SALUT, not the chant (US carried 90/125 with speak2 here)
+    {88, 53, InputCommands::eLeftGamespeak},       // SALUT shoulder    US  90
+    {123, 53, InputCommands::eHop},                // SALUT action      US 125, speak2 -> hop
+    // FR row 2 is ENVOUTER, the chant (US carried 81/125 with hop here)
+    {64, 79, InputCommands::eLeftGamespeak},       // ENVOUTER left     US  81    dX +15.2 -> +0.2
+    {103, 79, InputCommands::eRightGameSpeak},     // ENVOUTER right    US 125, hop -> speak2
+    {77, 112, InputCommands::eLeftGamespeak},      // COLERE shoulder   US  79
+    {120, 112, InputCommands::eThrowItem},         // COLERE action     US 122
+    {76, 147, InputCommands::eLeftGamespeak},      // ATTENDS shoulder  US  78
+    {117, 147, InputCommands::eCrouchOrRoll},      // ATTENDS action    US 119
+    {80, 180, InputCommands::eLeftGamespeak},      // SUIS-MOI shoulder US  82
+    {118, 180, InputCommands::eDoAction},          // SUIS-MOI action   US 120
+    {258, 62, InputCommands::eRightGameSpeak},     // SIFFLER 1         (FR == US)
+    {295, 62, InputCommands::eHop},
+    {253, 98, InputCommands::eRightGameSpeak},     // PETER             (FR == US)
+    {294, 98, InputCommands::eThrowItem},
+    {267, 139, InputCommands::eRightGameSpeak},    // SIFFLER 2         (FR == US)
+    {307, 139, InputCommands::eCrouchOrRoll},
+    {245, 177, InputCommands::eRightGameSpeak},    // RIRE shoulder     US 259/178  dX +13.8 -> +1.8
+    {284, 177, InputCommands::eDoAction},          // RIRE action       US 296/178  dX +13.2 -> +2.7
+    // ---- camera 3, the MAIN-MENU gamespeak page, from here down ----
+    {308, 205, InputCommands::eBack},              // QUITTER
+    {93, 31, InputCommands::eLeftGamespeak},       // panneau gauche    US  96/32
+    {302, 31, InputCommands::eRightGameSpeak},     // panneau droit     US 305/32
+    {157, 29, InputCommands::eLeftGamespeak},      // ENVOUTER gauche   (FR == US)
+    {205, 29, InputCommands::eRightGameSpeak},     // ENVOUTER droit    (FR == US)
+    {38, 81, InputCommands::eHop},                 // SALUT             (FR == US)
+    {42, 118, InputCommands::eThrowItem},          // COLERE            (FR == US)
+    {49, 151, InputCommands::eCrouchOrRoll},       // ATTENDS   was eUnPause_OrConfirm: printed A, key is B
+    {65, 190, InputCommands::eDoAction},           // SUIS-MOI          (FR == US)
+    {322, 81, InputCommands::eHop},                // SIFFLER 1         US y 82
+    {307, 116, InputCommands::eThrowItem},         // PETER             US y 117
+    {301, 145, InputCommands::eCrouchOrRoll},      // SIFFLER 2 was eUnPause_OrConfirm; US y 146
+    {278, 183, InputCommands::eDoAction},          // RIRE              US y 184
+};
+#endif
+#else
 const Menu_Element sBtnArray_AbeGamespeakMenuButtons_4D04A0[33] = {
     {115, 216, InputCommands::eUnPause_OrConfirm}, // Back to Abe Motions
     {307, 203, InputCommands::eBack},              // Exit
@@ -207,6 +467,7 @@ const Menu_Element sBtnArray_AbeGamespeakMenuButtons_4D04A0[33] = {
     {301, 146, InputCommands::eUnPause_OrConfirm},
     {278, 184, InputCommands::eDoAction}, // 1st
 };
+#endif
 
 const Menu_Element sBtnArray_LoadGameMenuButtons_4D0630[2] = {
     {62, 204, InputCommands::eUnPause_OrConfirm},
@@ -2879,7 +3140,57 @@ void Menu::GameSpeak_Update_47CBD0()
                     field_E4_res_array[4]);
 
                 pParticle->field_10_anim.field_B_render_mode = TPageAbr::eBlend_1;
-                pParticle->field_10_anim.field_C_layer = Layer::eLayer_Above_FG1_39;
+                // SATURN (383.ao.1): THE CHANT FLARE GOES UNDER ABE, NOT OVER HIM.
+                //
+                // Reported as "en incantation, Abe devient noir et bleu ... le vrai
+                // effet est additif au lieu de remplacer", and the reading is right
+                // about the intent: eBlend_1 is the PSX ABR "B + F", full additive.
+                // The mechanism is the other way round from what that suggests,
+                // though -- we do NOT ignore the blend.  SubmitTexturedRect tags
+                // eBlend_1 (src/renderer_saturn.cxx, isAdditivePrim) and, this cel
+                // being 8bpp, gives it the PR/CC bits that make VDP2 add it.  What
+                // VDP2 colour calculation adds it TO is the BACKGROUND: it blends
+                // the sprite LAYER against a VDP2 layer and can never blend one
+                // VDP1 sprite with another, because VDP1 owns one framebuffer word
+                // per pixel and a later command simply overwrites an earlier one.
+                // So "on top of Abe" means REPLACE Abe, and what then blends with
+                // the CAM is the flare alone.
+                //   Which is why it reads black and blue.  Measured on the
+                // delivered cd/data/S1.LVL (STARTANM.BND chunk 367, the Anim chunk
+                // at file offset 125852): 7 frames, 8bpp, one 256-entry CLUT, mean
+                // opaque colour R4.9 G12.7 B13.3 of 31 -- a dark, almost red-less
+                // teal, 47 % of it below 10/31.  Painted opaque across a face at
+                // 92x47, that is exactly the tester's photograph.  The flare is
+                // spawned at 184 +/- 40 / 162 - rand(30,90), and Abe is drawn at
+                // literally (184, 162), so the overlap is by construction.
+                //   UNDER him the SAME tag is exactly right: every texel that
+                // draws lands on the CAM and ADDS light -- the additive VDP2 he
+                // asked for at 307.ao.1 when he rejected the mesh stipple -- while
+                // Abe's own opaque texels overwrite the flare and his face is
+                // untouched.  What is lost is the brightening OF Abe's pixels, and
+                // that is the one half of the effect this hardware cannot do at
+                // all (VDP1 half-transparency needs an RGB source AND an RGB
+                // framebuffer destination; both cels are 8bpp colour-bank).
+                //   EXPECT A DIMMER FLARE, not a brighter Abe: Abe's menu cel is
+                // 134x90 and the flare 92x47 spawned on the same anchor, so a
+                // large part of every orb is now occluded.  If it reads too weak
+                // the next lever is the converter's additive gain on chunk 367,
+                // NOT moving this layer back.
+                //   25 is below Abe's own eLayer_27 (the sprite_scale == 1 default
+                // in BaseAnimatedWithPhysicsGameObject::Animation_Init_417FD0) and
+                // buckets 22..26 are empty on every menu page -- checked by
+                // grepping BOTH field_C_layer assignments AND the Layer arguments
+                // passed to DrawString_41C360/RenderElement_47A4E0, which is where
+                // this file's other layer users hide (the button labels sit at 39,
+                // so the flare now draws under those too).
+                //   SCOPE, stated so it is not mistaken for a class fix: the same
+                // eBlend_1-over-Abe shape is live in gameplay at Particle.cpp
+                // (New_Chant_Particle_4198E0, layer 36; New_DestroyOrCreateObject_
+                // Particle_419D00, layer 39).  Nobody has reported those because
+                // the in-game orb is OMMFLARE.BAN at 38x21 spawned 30-60 px ABOVE
+                // Abe's origin -- it mostly misses him.  Same cause, different
+                // aim; left alone until it is actually seen.
+                pParticle->field_10_anim.field_C_layer = Layer::eLayer_BeforeShadow_25;
             }
         }
 
@@ -4401,50 +4712,62 @@ void CC Menu::RenderElement_47A4E0(s32 xpos, s32 ypos, s32 input_command, PrimHe
     const s32 text_width = pFont->MeasureWidth_41C280(text, scale_fp);
 #ifdef TETHYS_SATURN
     // SATURN (ao261.30): the glyph now comes out at the requested scale, so the
-    // ORIGINAL's own vertical formula is correct again -- it was only ever wrong
-    // here because the renderer ignored the scale. Kept as an explicit branch
-    // rather than deleted so the next reader sees that this was checked.
-    const s16 text_y = static_cast<s16>(ypos + FP_GetExponent((FP_FromInteger(-9) * scale_fp)) + 1);
+    // ORIGINAL's own vertical formula applies again -- it was only ever wrong
+    // here because the renderer ignored the scale.
+    // SATURN (383.ao.1) MINUS TWO, because "certaines trop basses" is a real,
+    // uniform bias and it is NOT in the tables.  The FR, ES and US y values are
+    // identical on every page but eight gamespeak rows that differ by 1, so the
+    // data cannot explain it; the formula can.  ypos - 6 at scale 0.84 places
+    // the ATLAS CELL, and the Euro cell is 24 rows with ink on rows 4..21
+    // (measured in the MENU.FNT record inside cd/data/S1.LVL), so at
+    // trunc(24 * 0.84) = 20 screen rows the INK centre lands at ypos + 5 while
+    // the painted disc centre sits at ypos + 2.0..2.5.  Measured over the same
+    // 52 glyph/disc pairs: dY mean +2.64, range +0.9..+5.0.  -2 brings the mean
+    // to +0.45 and keeps every glyph on the low side it is already on; -3 would
+    // minimise the worst case but push half of them high, which is a different
+    // look rather than a better one.  The PSX draws the same arithmetic on the
+    // same 240-row art, so this is the original's own bias -- we only notice it
+    // because a Saturn frame has no overscan slack to hide it in.
+    const s16 text_y = static_cast<s16>(ypos + FP_GetExponent((FP_FromInteger(-9) * scale_fp)) + 1 - 2);
 #else
     const s16 text_y = static_cast<s16>(ypos + FP_GetExponent((FP_FromInteger(-9) * scale_fp)) + 1);
 #endif
-#ifdef TETHYS_SATURN
-    // SATURN (311.ao.1) TWO SPACES WERE BEING SUBTRACTED FROM EACH OTHER.
+    // SATURN (383.ao.1) 311.ao.1 IS REVERTED. IT WAS THE REGRESSION, NOT THE FIX.
     //
-    // The original is PsxToPCX(xpos - text_width / 2, 11), and the two operands
-    // do not live in the same space. xpos comes from the button tables and is
-    // in the menu's 368-wide authoring space -- that is what PsxToPCX(x) =
-    // (40x + 11) / 23 converts from. text_width is MeasureWidth_41C280, which
-    // sums the ATLAS widths and scales them, i.e. exactly the units
-    // DrawString_41C360 uses to build the quad (widthScaled = charWidth *
-    // scale) -- 640-wide space. Subtracting the second from the first and then
-    // converting the difference multiplies the half-width by 40/23, so the text
-    // is placed 0.37 * text_width too far LEFT.
+    // 311.ao.1 argued that "xpos and text_width do not live in the same space":
+    // xpos is the button table's 368-wide authoring space, text_width is
+    // MeasureWidth, "i.e. 640-wide space", so it converted the position first
+    // and subtracted the half-width afterwards.  The second half of that
+    // sentence is FALSE, and the proof is four lines long:
+    //   MeasureWidth_41C280 (Font.cpp) is a thin wrapper over MeasureWidth_41C2B0,
+    //   and _41C2B0 ENDS with
+    //       if (!sFontDrawScreenSpace_508BF4) { result -= atlas[0].width;
+    //                                           result = PCToPsxX(result, 20); }
+    //   -- it converts its own result back into 368 space.  This function
+    //   measures at the text_width line ABOVE, and only sets
+    //   sFontDrawScreenSpace_508BF4 = 1 further down, just before the draws.
+    //   The only other writers of that flag are in LCDScreen.cpp, which restores
+    //   it to 0.  So at the measurement the flag is 0 and text_width IS in 368
+    //   space -- the same space as xpos, exactly as the original assumed.
     //
-    // MEASURED against the real atlas and the real button tables, in Saturn
-    // pixels (the error scales with the string, which is why the tester saw
-    // SOME labels misaligned and not others):
-    //     'l' / 'r' / 'x'   -1.5 px      'a'      -2.0 px
-    //     'l+r'             -6.0 px      'start'  -8.5 px
-    // His report names exactly that spread: the single letters in the GameSpeak
-    // menu slightly off, the Abe-motions rows (two-key combinations) clearly so.
+    // 311.ao.1 therefore MIXED the spaces it set out to separate, and pushed
+    // every key label to the RIGHT by (40/23 - 1) * text_width / 2, i.e. about
+    // 0.185 * text_width Saturn px.  It is width-proportional, which is why it
+    // hid: a single letter moved ~1.2 px and only a long label ("start", "l+r")
+    // moved enough to notice.  Measured over the 52 glyph/disc pairs of the
+    // whole menu: mean |dX| +1.75 with 311, +0.55 without.
     //
-    // It only became visible with 310.ao.1. Before it the compositor drew every
-    // glyph narrower than AO asked -- the atlas was decimated twice -- and a
-    // letter too small for its button reads as centred whatever the offset. The
-    // alignment bug was always there; fixing the width is what exposed it.
+    // The 383.ao.1 comment on the motions table used to assert the opposite
+    // ("311.ao.1 is NOT the cause and must not be reverted").  That was written
+    // before anyone opened MeasureWidth_41C2B0, and it has been rewritten in
+    // the same commit -- the two must not be allowed to disagree in the tree.
     //
-    // Convert the POSITION, then subtract the half-width in the space the glyph
-    // is actually drawn in. Same two quantities, one of them no longer scaled.
-    //
-    // NOT APPLIED to the other centring site in this file: ButtonRemap_Render's
-    // (368 - fontWidth) / 2 mixes the same two spaces, but nobody has reported
-    // it and its long strings take the maxFontWidth clamp before the centring
-    // ever runs. Reported defect, measured fix, one site.
-    const s16 converted_x = static_cast<s16>(PsxToPCX(xpos, 11) - text_width / 2);
-#else
+    // DO NOT "FIX" THE OTHER CENTRING SITES.  (368 - fontWidth) / 2 in
+    // ButtonRemap_Render and friends is CORRECT for the identical reason:
+    // DrawString_41C360 converts the x it is handed with PsxToPCX whenever the
+    // flag is 0, so those sites are 368-space throughout.  Changing them would
+    // break four screens that are right today.
     const s16 converted_x = static_cast<s16>(PsxToPCX(xpos - text_width / 2, 11));
-#endif
 
     const u8 bOldValue = sFontDrawScreenSpace_508BF4;
     sFontDrawScreenSpace_508BF4 = 1;
