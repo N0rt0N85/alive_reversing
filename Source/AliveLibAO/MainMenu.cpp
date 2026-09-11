@@ -1145,9 +1145,23 @@ Menu* Menu::ctor_47A6F0(Path_TLV* /*pTlv*/, s32 tlvInfo)
     return this;
 }
 
+#ifdef TETHYS_SATURN
+// SATURN (387.ao.1): defined beside Tethys_SpeakRes, which owns the phrase
+// block the glow chunk lives in. THREE sites drop that block WITHOUT going
+// through Tethys_SpeakRes -- this destructor, To_FMV_Or_Level_Select_Update_
+// 47EC30, and the NewGameStart branch of Update_NoRefs_47E3C0 -- and each one
+// would leave a handle pointing into a freed chunk. Enumerated by grepping
+// every free of field_E4_res_array[0], not by reasoning about which paths the
+// menu "can" take.
+static void Tethys_ReleaseGlow();
+#endif
+
 BaseGameObject* Menu::dtor_47AAB0()
 {
     SetVTable(this, 0x4BCE78);
+#ifdef TETHYS_SATURN
+    Tethys_ReleaseGlow();
+#endif
 
     gMap_507BA8.TLV_Reset_446870(field_1D4_tlvInfo, -1, 0, 0);
     field_134_anim.vCleanUp();
@@ -2204,6 +2218,9 @@ void Menu::To_FMV_Or_Level_Select_Update_47EC30()
 {
     if (field_1E8_pMenuTrans->field_16_bDone)
     {
+#ifdef TETHYS_SATURN
+        Tethys_ReleaseGlow(); // the glow chunk lives in this block
+#endif
         ResourceManager::FreeResource_455550(field_E4_res_array[0]);
         field_E4_res_array[0] = nullptr;
         field_1CC_fn_update = &Menu::FMV_Select_Update_47E8D0;
@@ -2514,6 +2531,9 @@ void Menu::Loading_Update_47B870()
 
                 const AnimRecord& rec = AO::AnimRec(AnimId::MenuAbeSpeak_Idle);
                 field_10_anim.Set_Animation_Data_402A40(rec.mFrameTableOffset, field_E4_res_array[1]);
+#ifdef TETHYS_SATURN
+                Tethys_ReleaseGlow(); // the glow chunk lives in this block
+#endif
                 ResourceManager::FreeResource_455550(field_E4_res_array[0]);
                 field_E4_res_array[0] = nullptr;
                 ResourceManager::Reclaim_Memory_455660(0);
@@ -4553,6 +4573,38 @@ static const char_type* const kTethysSpeakFile[10] = {
     "ABESPK5.BAN", "ABESPK6.BAN", "ABESPK7.BAN", "ABESPK8.BAN", "ABESPK9.BAN"};
 static s32 sTethysSpeakLoaded = -1;
 
+// SATURN (387.ao.1) ROUTE 3 -- THE CHANT GLOW.
+//
+// The glow tables ride as a `CGlw` chunk inside ABESPK5.BAN, so the load below
+// already brings them in and Move_Resources_To_DArray_455430 already registers
+// them: all this adds is one GetLoadedResource for the chunk and one free
+// beside the animation's own. Same CD read, same lifetime, nothing new to
+// manage -- which is the whole reason the tables live in that record rather
+// than in one of their own.
+//
+// PHRASE 5 ONLY, and that is not an optimisation. All ten phrases in
+// ABESPEAK.BAN share ONE CLUT and only eight of its indices are free across
+// all ten, so the sixteen colours the glow needs exist only in the SPLIT file,
+// where the chant owns the palette alone. With a RAM cart this whole function
+// returns early and ABESPK5.BAN is never opened, so the glow simply does not
+// arm and the chant draws as it does today.
+extern "C" const u32 Tethys_kChantGlowFourcc;
+extern "C" const u32 Tethys_kChantGlowResId;
+extern "C" void Tethys_ChantGlowArm(u8** ppGlow, s32 abeX, s32 abeY);
+extern "C" void Tethys_ChantGlowDisarm();
+static const s32 kTethysChantPhrase = 5;
+static u8** sppTethysGlow = nullptr;
+
+static void Tethys_ReleaseGlow()
+{
+    Tethys_ChantGlowDisarm();
+    if (sppTethysGlow)
+    {
+        ResourceManager::FreeResource_455550(sppTethysGlow);
+        sppTethysGlow = nullptr;
+    }
+}
+
 u8** Menu::Tethys_SpeakRes(const AnimRecord& rec)
 {
     if (Tethys_gCartHeapBytes != 0)
@@ -4576,6 +4628,10 @@ u8** Menu::Tethys_SpeakRes(const AnimRecord& rec)
     {
         return field_E4_res_array[0];
     }
+    // The glow belongs to the block we are about to drop, so it goes first --
+    // a handle into a freed chunk is exactly the stale-deref class bt865 and
+    // bt828 already cost this project twice.
+    Tethys_ReleaseGlow();
     if (field_E4_res_array[0])
     {
         ResourceManager::FreeResource_455550(field_E4_res_array[0]);
@@ -4591,6 +4647,15 @@ u8** Menu::Tethys_SpeakRes(const AnimRecord& rec)
     if (field_E4_res_array[0])
     {
         sTethysSpeakLoaded = want;
+        if (want == kTethysChantPhrase)
+        {
+            sppTethysGlow = ResourceManager::GetLoadedResource_4554F0(
+                Tethys_kChantGlowFourcc, Tethys_kChantGlowResId, 1, 0);
+            // (184, 162) is where Menu::VRender_47AC00 draws Abe, literally --
+            // the composite needs his anchor to place the orbs against his
+            // decompression buffer, and there is no other source for it.
+            Tethys_ChantGlowArm(sppTethysGlow, 184, 162);
+        }
     }
     return field_E4_res_array[0];
 }

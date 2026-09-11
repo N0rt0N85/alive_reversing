@@ -376,6 +376,14 @@ static inline bool Tethys_BlockPtrSane(const u8* b)
 extern "C" volatile s32 Tethys_gAnimBadFrame = 0;
 extern "C" volatile s32 Tethys_gAnimBadWhy = 0;
 extern "C" volatile u32 Tethys_gAnimBadPtr = 0;
+
+// SATURN (387.ao.1): the chant glow (src/chant_glow.cxx). Declared here rather
+// than in a header because this is the single call site in the engine, and the
+// gate is a plain global so the compiler can keep it in a register across the
+// switch without a call.
+extern "C" volatile s32 Tethys_gChantGlowOn;
+extern "C" void Tethys_ChantGlowComposite(void* pAnim, u8* pDst, s32 psxW, s32 psxH,
+                                          s32 capBytes);
 #endif
 
 void Animation::UploadTexture(const FrameHeader* pFrameHeader, const PSX_RECT& vram_rect, s16 width_bpp_adjusted)
@@ -611,6 +619,33 @@ void Animation::UploadTexture(const FrameHeader* pFrameHeader, const PSX_RECT& v
                     const u32 kPar = Tethys_gInAnimate ? 0u : 1u;
                     Tethys_gDbufRaw[kPar] += TETHYS_PT() - t0; // ao262.18: unguarded
                     Tethys_gDbufBytes[kPar] += *reinterpret_cast<const u32*>(&pFrameHeader->field_8_width2);
+                }
+                // SATURN (387.ao.1) ROUTE 3 -- THE CHANT GLOW, composited
+                // into the cel between the decompression and the upload.
+                //
+                // This is the ONLY place in the frame where Abe's chant cel
+                // exists as writable indices: after this line it is VDP1
+                // character data and the orb, being a second sprite, can only
+                // REPLACE it (one framebuffer word per pixel, no additive
+                // sprite-over-sprite on this hardware at all).
+                //
+                // The guard is one load of a global and a branch. It is not
+                // hoisted out of the arm because Tethys_gChantGlowOn is only
+                // ever non-zero on the GameSpeak menu, so the 23 call sites of
+                // the whole rest of the game take exactly that and stop. The
+                // arm is the right one: all 24 cels of MenuAbeSpeak_Chant are
+                // compression type 5, measured on the shipped pack -- and if
+                // one ever were not, gl would read 0 while armed rather than
+                // the glow quietly half-working.
+                if (Tethys_gChantGlowOn)
+                {
+                    // field_28_dbuf_size is a safe capacity for BOTH arms:
+                    // pDst only becomes the LWRAM scratch when that size fits
+                    // inside it, so the scratch is never the smaller of the two.
+                    Tethys_ChantGlowComposite(this, pDst,
+                                              pFrameHeader->field_4_width,
+                                              pFrameHeader->field_5_height,
+                                              field_28_dbuf_size);
                 }
                 renderer.Upload(AnimFlagsToBitDepth(field_4_flags), vram_rect, pDst);
 #else
