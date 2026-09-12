@@ -184,6 +184,60 @@ enum PauseMenuPages
 // ALIVE_ASSERT_SIZEOF over it and there is exactly one pause menu.
 static s16 sTethysSaveMsg = 0;
 static s16 sTethysSaveHold = 0;
+
+// SATURN (389.ao.1): THE SLOT PICKER.
+//
+// src/save_saturn.cxx always had four slots and always chose between them
+// itself -- "first FREE, else the oldest" -- with its own header saying that
+// was only "since there is no picker UI". This is that UI, and it is small
+// because everything under it already existed: the device sweep
+// (Tethys_SaveDevice*), the occupancy mask and the stored titles
+// (Tethys_SaveSlot*), and the main menu's list/navigate/confirm shape to copy.
+//
+// The slot travels through Tethys_SaveSlotRequest, NOT through the save name.
+// The name looked like the obvious channel -- IO_EnumerateDirectory already
+// round-trips the slot as a leading digit for LOAD -- but that digit is
+// PREFIXED onto the stored title for display, so putting one in the title
+// would show it twice and eventually be parsed as part of the name.
+//
+// Leaving the page without confirming must not leave a request armed for some
+// later save, so the request is set at the moment of confirmation only, and
+// save_saturn consumes it once and clears it.
+extern "C" s32 Tethys_SaveSlotRequest(s32 slot);
+extern "C" s32 Tethys_SaveSlotMask(void);
+extern "C" s32 Tethys_SaveSlotCount(void);
+extern "C" s32 Tethys_SaveSlotTitle(s32 slot, char* out, s32 outMax);
+extern "C" const char* Tethys_SaveDeviceName(s32 device);
+extern "C" s32 Tethys_SaveDeviceGet(void);
+static s16 sTethysSlot = 0;
+
+// SNAPSHOT, not a live read. Tethys_SaveSlotMask/Title each go to the device
+// through the BUP BIOS, so calling them from VRender would be EIGHT backup
+// reads per frame for a list that cannot change while the page is open. Taken
+// once when the page opens, and again after a write so the player watches the
+// save land in the slot they chose.
+static s32 sTethysSlotMask = 0;
+static s32 sTethysSlotN = 0;
+static char_type sTethysSlotTitle[4][24] = {};
+
+static void Tethys_SnapshotSlots()
+{
+    sTethysSlotN = Tethys_SaveSlotCount();
+    if (sTethysSlotN > 4)
+    {
+        sTethysSlotN = 4; // the render array is the bound, not the device
+    }
+    sTethysSlotMask = Tethys_SaveSlotMask();
+    for (s32 i = 0; i < sTethysSlotN; i++)
+    {
+        sTethysSlotTitle[i][0] = 0;
+        if (sTethysSlotMask & (1 << i))
+        {
+            Tethys_SaveSlotTitle(i, sTethysSlotTitle[i],
+                                 static_cast<s32>(sizeof(sTethysSlotTitle[i])));
+        }
+    }
+}
 #endif
 
 void PauseMenu::VUpdate_44DFB0()
@@ -352,6 +406,23 @@ void PauseMenu::VUpdate_44DFB0()
                                 field_12C = 0;
                                 field_12E = 0;
                                 field_134 = 1;
+#ifdef TETHYS_SATURN
+                                // Open on the slot the backend would have taken
+                                // on its own, so confirming without touching
+                                // anything behaves exactly as it did before.
+                                Tethys_SnapshotSlots();
+                                {
+                                    sTethysSlot = 0;
+                                    for (s32 i = 0; i < sTethysSlotN; i++)
+                                    {
+                                        if (!(sTethysSlotMask & (1 << i)))
+                                        {
+                                            sTethysSlot = static_cast<s16>(i);
+                                            break;
+                                        }
+                                    }
+                                }
+#endif
                                 SFX_Play_43AD70(SoundEffect::IngameTransition_107, 90, 0);
                                 s32 tmp = static_cast<s32>(gMap_507BA8.field_0_current_level);
                                 if (gMap_507BA8.field_0_current_level == LevelIds::eRuptureFarmsReturn_13)
@@ -438,6 +509,7 @@ void PauseMenu::VUpdate_44DFB0()
                                     SaveGame::SaveToFile_45A110(&saveNameBuffer_5080C6.characters[2]);
                                 sTethysSaveMsg = saved ? 1 : 2;
                                 sTethysSaveHold = 90; // ~3 s at 30 fps
+                                Tethys_SnapshotSlots(); // the list the player now sees
                                 if (!saved)
                                 {
                                     SFX_Play_43AD70(SoundEffect::ElectricZap_46, 0, 0);
@@ -472,6 +544,26 @@ void PauseMenu::VUpdate_44DFB0()
                         break;
                     }
 
+#ifdef TETHYS_SATURN
+                    // The slot moves only while the page is IDLE: once the
+                    // player has confirmed, field_12C walks 4 -> 5 through the
+                    // write and the result hold, and a stray d-pad press there
+                    // must not move a highlight the write has already used.
+                    if (field_12C == 0)
+                    {
+                        const s32 n = sTethysSlotN;
+                        if (n > 1 && Input().IsAnyHeld(InputCommands::eCheatMode | InputCommands::eDown))
+                        {
+                            sTethysSlot = static_cast<s16>((sTethysSlot + 1) % n);
+                            SFX_Play_43AE60(SoundEffect::MenuNavigation_61, 45, 400, 0);
+                        }
+                        if (n > 1 && Input().IsAnyHeld(InputCommands::eUp))
+                        {
+                            sTethysSlot = static_cast<s16>((sTethysSlot + n - 1) % n);
+                            SFX_Play_43AE60(SoundEffect::MenuNavigation_61, 45, 400, 0);
+                        }
+                    }
+#endif
                     auto last_pressed = static_cast<char_type>(Input_GetLastPressedKey_44F2C0());
                     char_type lastPressedKeyNT[2] = {last_pressed, 0};
 
@@ -515,6 +607,11 @@ void PauseMenu::VUpdate_44DFB0()
                             }
                             SFX_Play_43AD70(SoundEffect::IngameTransition_107, 90, 0);
                             saveNameBuffer_5080C6.characters[string_len_no_nullterminator + 1] = 0;
+#ifdef TETHYS_SATURN
+                            // Armed HERE and nowhere else, so cancelling the
+                            // page cannot leave a stale request behind.
+                            Tethys_SaveSlotRequest(sTethysSlot);
+#endif
                             field_12C = 4;
                             field_12A = 11;
                             field_134 = 1;
@@ -939,6 +1036,70 @@ void PauseMenu::VRender_44E6F0(PrimHeader** ppOt)
                     FP_FromInteger(1),
                     640,
                     0);
+            }
+            // 389.ao.1 THE SLOT LIST, drawn BETWEEN the banner and DrawEntries.
+            //
+            // That position is forced, not chosen: DrawEntries returns void, so
+            // it can only ever be last in the polyOffset chain, and the banner
+            // note above is the record of what restarting that cursor costs (a
+            // cyclic OT tag chain and the fatal the tester photographed). Each
+            // line therefore takes the running cursor and hands on its result.
+            //
+            // One line per slot, "N title" or "N -- LIBRE --", with the device
+            // named above them so the player can see WHERE this is going -- the
+            // device sweep already exists and picking a slot without knowing
+            // the device would only be half the choice.
+            {
+                const s32 mask = sTethysSlotMask;
+                const s32 n = sTethysSlotN;
+                const char_type* dev = Tethys_SaveDeviceName(Tethys_SaveDeviceGet());
+                if (dev)
+                {
+                    savePolyOffset = field_E4_font.DrawString_41C360(
+                        ppOt, dev, static_cast<s16>(184 - field_E4_font.MeasureWidth_41C2B0(dev) / 2),
+                        22, TPageAbr::eBlend_0, 1, 0, Layer::eLayer_Menu_41,
+                        128u, 128u, 128u, 0, FP_FromInteger(1), 640, savePolyOffset);
+                }
+                for (s32 i = 0; i < n; i++)
+                {
+                    char_type line[32];
+                    line[0] = static_cast<char_type>('1' + i);
+                    line[1] = ' ';
+                    s32 w = 2;
+                    if (mask & (1 << i))
+                    {
+                        const char_type* title = sTethysSlotTitle[i];
+                        for (s32 k = 0; title[k] && w < 30; k++)
+                        {
+                            line[w++] = title[k];
+                        }
+                    }
+                    if (w == 2)
+                    {
+                        const char_type* empty = "-- LIBRE --";
+                        for (s32 k = 0; empty[k] && w < 30; k++)
+                        {
+                            line[w++] = empty[k];
+                        }
+                    }
+                    line[w] = 0;
+                    // The highlight is the font's own grey ramp modulated by
+                    // SetRGB0, the same mechanism the result banner uses, so
+                    // these are the real on-screen colours and not names.
+                    const bool sel = (i == sTethysSlot);
+                    savePolyOffset = field_E4_font.DrawString_41C360(
+                        ppOt, line,
+                        static_cast<s16>(184 - field_E4_font.MeasureWidth_41C2B0(line) / 2),
+                        // 20 px steps and a 20 px gap before the save name at
+                        // 120: the spacing this menu already uses everywhere
+                        // (controlsPageOne_4CDF00 steps 20, the save page's own
+                        // hints sit 120 / 180 / 205). Glyph height is per-atlas
+                        // data, so matching the page beats guessing a number.
+                        static_cast<s16>(40 + i * 20),
+                        TPageAbr::eBlend_0, 1, 0, Layer::eLayer_Menu_41,
+                        sel ? 255u : 112u, sel ? 255u : 112u, sel ? 160u : 112u,
+                        0, FP_FromInteger(1), 640, savePolyOffset);
+                }
             }
             DrawEntries(ppOt, &saveEntries_4CDED0[0], -1, savePolyOffset);
 #else
