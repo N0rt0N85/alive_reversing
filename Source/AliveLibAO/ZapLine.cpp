@@ -13,9 +13,13 @@ void ZapLine_ForceLink()
 { }
 
 #ifdef TETHYS_SATURN
-// SATURN 390.ao.1: defined in src/renderer_saturn.cxx, zeroed there once per
-// frame.  See VRender_479840 for what the value means.
+// SATURN 390.ao.1: defined in src/renderer_saturn.cxx.  Tethys_gZapLink is now
+// CUMULATIVE (not per-frame) so `h` reads "has the beam ever rendered" rather
+// than "did it render this exact frame" -- the beam lives 8 frames and a
+// per-frame reading is 0 for every frame between zaps, which made h00
+// impossible to read.  Tethys_gZapAllocFail counts the soft-fail below.
 extern "C" u32 Tethys_gZapLink;
+extern "C" u32 Tethys_gZapAllocFail;
 #endif
 
 namespace AO {
@@ -130,6 +134,9 @@ ZapLine* ZapLine::ctor_4789A0(FP x1, FP y1, FP x2, FP y2, s16 aliveTime, ZapLine
         true /*reclaim*/, false /*never fatal -- see above*/);
     if (!field_E8_ppRes)
     {
+#ifdef TETHYS_SATURN
+        Tethys_gZapAllocFail++; // 390.ao.1: the beam is dead on arrival
+#endif
         field_124_pSprts = nullptr;
         field_128_sprite_positions = nullptr;
         field_12C_zap_points = nullptr;
