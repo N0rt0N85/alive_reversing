@@ -4592,12 +4592,28 @@ extern "C" const u32 Tethys_kChantGlowFourcc;
 extern "C" const u32 Tethys_kChantGlowResId;
 extern "C" void Tethys_ChantGlowArm(u8** ppGlow, s32 abeX, s32 abeY);
 extern "C" void Tethys_ChantGlowDisarm();
+// 393.ao.1: freeze CRAM bank recycling for the duration of the MENU chant only.
+// Measured reason (the full argument lives at the pin in renderer_saturn.cxx):
+// ABESPK5.BAN and STARTANM.BND both declare 256 colours and index texels up to
+// 255/254, so in the menu Abe and the orb each need a WHOLE hardware bank and
+// can recycle each other's mid-frame -- a sprite's CMDCOLR then points at CRAM
+// a later resolve has overwritten, which is the reported palette swap. The
+// in-game pair (ABEOMM / OMMFLARE) is 64-colour with max index 63, packs into
+// sub-slots, never contends, and is deliberately left alone.
+extern "C" void Tethys_CramPinBegin(void);
+extern "C" void Tethys_CramPinEnd(void);
 static const s32 kTethysChantPhrase = 5;
 static u8** sppTethysGlow = nullptr;
 
 static void Tethys_ReleaseGlow()
 {
     Tethys_ChantGlowDisarm();
+    // Paired with the Begin at the phrase-5 arm below. Every path that leaves
+    // the chant comes through here (the four free sites of field_E4_res_array[0]
+    // were enumerated for the glow release and this rides the same set), so the
+    // pin cannot outlive the menu chant -- and the sweep inside it hands every
+    // deferred bank back in one pass.
+    Tethys_CramPinEnd();
     if (sppTethysGlow)
     {
         ResourceManager::FreeResource_455550(sppTethysGlow);
@@ -4655,6 +4671,9 @@ u8** Menu::Tethys_SpeakRes(const AnimRecord& rec)
             // the composite needs his anchor to place the orbs against his
             // decompression buffer, and there is no other source for it.
             Tethys_ChantGlowArm(sppTethysGlow, 184, 162);
+            // AFTER the arm and not before: the pin is about the orb's CRAM
+            // bank, and no orb exists until the chant is actually running.
+            Tethys_CramPinBegin();
         }
     }
     return field_E4_res_array[0];
