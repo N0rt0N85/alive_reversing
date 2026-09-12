@@ -1151,6 +1151,28 @@ static s32 Tethys_FixupFrameTable(const u8* pBlock, s32 off)
     }
     return off;
 }
+
+// SATURN (388.ao.1): the SAME translation, for code outside this file that
+// needs to recognise an animation by its COMPILED frame-table offset.
+//
+// This exists because 387.ao.1 got it wrong. field_18_frame_table_offset is
+// written by Set_Animation_Data_402A40 AFTER the fixup above, so it holds the
+// TRANSLATED offset (ABESPK5's chant table: 88,552, not the compiled
+// 2,115,472; the chant orb: 2,992, not 7,152) -- and src/chant_glow.cxx
+// compared it against the compiled constant, which can never match. Every
+// gauge on overlay row 6 read zero as a result.
+//
+// Exported rather than duplicated on purpose: a second copy of this arithmetic
+// is precisely how the two sides drift apart again, and the caller must use
+// the block's OWN fixup record because oldBase/newBase differ per record.
+extern "C" s32 Tethys_TranslateFrameTable(u8** ppBlock, s32 compiledOff)
+{
+    if (!ppBlock || !*ppBlock)
+    {
+        return compiledOff;
+    }
+    return Tethys_FixupFrameTable(*ppBlock, compiledOff);
+}
 #endif
 
 s16 Animation::Set_Animation_Data_402A40(s32 frameTableOffset, u8** pAnimRes)
