@@ -627,6 +627,22 @@ EXPORT s32 AliveFont::DrawString_41C360(PrimHeader** ppOt, const char_type* text
     {
         return polyOffset;
     }
+    // SATURN 390.ao.1: BOUND THE CURSOR.  The pool is field_30_poly_count
+    // glyphs and `poly` below indexes it as [buffer_index + 2*polyOffset] with
+    // a stride of 2, so a cursor at or past the count writes PAST the block --
+    // into whatever the resource heap placed next, with nothing to say so.
+    // Nothing has ever checked it.  389.ao.1 mis-slotted a cursor in PauseMenu
+    // (lethal to the ordering table rather than to the pool), and that page now
+    // runs SIX strings through the same 175 entries where it used to run three.
+    //
+    // Deliberately counterless: if this ever fires the page visibly stops
+    // drawing text part-way, which is a louder and more locatable signal than a
+    // field in the overlay -- and a counter here would cost bytes the pool
+    // pre-flight does not have.
+    if (polyOffset < 0 || polyOffset >= field_30_poly_count)
+    {
+        return polyOffset;
+    }
 #endif
     if (!sFontDrawScreenSpace_508BF4)
     {
@@ -662,6 +678,14 @@ EXPORT s32 AliveFont::DrawString_41C360(PrimHeader** ppOt, const char_type* text
         {
             break;
         }
+#ifdef TETHYS_SATURN
+        // ...and bound it per glyph too: the entry check above cannot know how
+        // long this string is, and one long line is enough to run off the end.
+        if (polyOffset + characterRenderCount >= field_30_poly_count)
+        {
+            break;
+        }
+#endif
 
         const u8 c = text[i];
 

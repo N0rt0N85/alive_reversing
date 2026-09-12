@@ -737,6 +737,60 @@ void PauseMenu::VRender(PrimHeader** ppOt)
     VRender_44E6F0(ppOt);
 }
 
+#ifdef TETHYS_SATURN
+// SATURN 390.ao.1 -- THE 15-ARGUMENT TAIL, WRITTEN ONCE.
+//
+// 389.ao.1 shipped the exact fatal the ao261.24 note in eSave_1 describes, in
+// the hunk that quotes it.  DrawString_41C360's tail is
+//     (..., u8 r, u8 g, u8 b, s32 polyOffset, FP scale, s32 maxRenderWidth,
+//      s32 colorRandomRange)
+// and the five new calls passed `..., b, 0, FP_FromInteger(1), 640, cursor` --
+// so polyOffset was the literal 0 and the cursor went into the colour jitter.
+// Every line after the first therefore re-issued polys the previous line had
+// already linked into the ordering table, and adding an already-linked
+// PrimHeader closes a LOOP in the tag chain: the walk spins to its 100,000-step
+// cap (the freeze) and then dies on "OT walk runaway" (the fatal) -- precisely
+// what the tester photographed on opening the save page.
+//
+// A comment did not prevent that, because the defect is POSITIONAL and a
+// comment is prose.  This wrapper is the structural fix: the cursor is the LAST
+// parameter, no other s32 sits beside it, and the positional tail now exists
+// once in this file instead of five times.  Every line this menu adds is
+// centred on 184, so the centring folds in as well.
+static s32 Tethys_DrawLine(AliveFont& font, PrimHeader** ppOt, const char_type* text,
+                           s16 y, u8 r, u8 g, u8 b, s32 polyOffset)
+{
+    // Centre on 184 and keep the line on screen.  MEASURED: MeasureWidth and
+    // the entry x are in the SAME space, the 368-wide one whose centre IS 184
+    // (DrawString converts with PsxToPCX(x, 11) on the way to the polygon), so
+    // the screen's right edge here is 368 and a line wider than that cannot be
+    // shown at all.  DrawEntries' own guard tests `>= 608`, which in this space
+    // is nearly twice the screen and therefore never fires -- copying it would
+    // have looked like protection while providing none.  The real protection is
+    // the width trim at the call site; this is the backstop.
+    const s16 wide = static_cast<s16>(font.MeasureWidth_41C2B0(text));
+    s16 x = static_cast<s16>(184 - wide / 2);
+    if (x < 8)
+    {
+        x = 8;
+    }
+    return font.DrawString_41C360(
+        ppOt,
+        text,
+        x,
+        y,
+        TPageAbr::eBlend_0,
+        1,
+        0,
+        Layer::eLayer_Menu_41,
+        r, g, b,
+        polyOffset,             // <- the running cursor, in ITS slot
+        FP_FromInteger(1),
+        640,
+        0);                     // colorRandomRange
+}
+#endif
+
 ALIVE_VAR(1, 0xA88B90, s8, byte_A88B90, 0);
 
 PauseMenu::PauseEntry pauseEntries_4CDE50[6] = {
@@ -757,7 +811,20 @@ PauseMenu::PauseEntry quitEntries_4CDEA8[3] = {
     {0, 0, nullptr, 0u, 0u, 0u, '\0'}};
 
 PauseMenu::PauseEntry saveEntries_4CDED0[4] = {
+#ifdef TETHYS_SATURN
+    // SATURN 390.ao.1: the typed save name moves 120 -> 150, to open a band for
+    // the slot list above it.  MEASURED, not chosen: the menu atlas
+    // (sFont1Atlas_4C56E8) carries letter glyphs 22-23 px tall with a 26 px
+    // worst case, so a line at y occupies y..y+23 typically.  389.ao.1 put four
+    // slots at 40/60/80/100 under a device name at 22 and that collides TWICE --
+    // the device line (22..45) into slot 1 at 40, and slot 4 (100..123) into
+    // this entry at 120.  Neither was ever seen, because the page fataled
+    // before it finished drawing; both would have shipped behind the fix.
+    //   150..173 still clears the "B save" hint at 180.
+    {184, 150, "DUMMY_TEXT", 128u, 16u, 255u, '\x01'},
+#else
     {184, 120, "DUMMY_TEXT", 128u, 16u, 255u, '\x01'},
+#endif
 #ifdef TETHYS_SATURN
     // SATURN: "enter"/"esc" are PC keyboard labels that do not exist on the pad.
     // Use the ENGINE'S OWN control bytes rather than hard-coded letters: every
@@ -1022,28 +1089,26 @@ void PauseMenu::VRender_44E6F0(PrimHeader** ppOt)
                 const u8 r = (sTethysSaveMsg == 1) ? 96u : 255u;
                 const u8 g = (sTethysSaveMsg == 1) ? 255u : 64u;
                 const u8 b = (sTethysSaveMsg == 1) ? 96u : 64u;
-                savePolyOffset = field_E4_font.DrawString_41C360(
-                    ppOt,
-                    msg,
-                    static_cast<s16>(184 - field_E4_font.MeasureWidth_41C2B0(msg) / 2),
-                    150,
-                    TPageAbr::eBlend_0,
-                    1,
-                    0,
-                    Layer::eLayer_Menu_41,
-                    r, g, b,
-                    0,
-                    FP_FromInteger(1),
-                    640,
-                    0);
+                // 390.ao.1: 150 -> 16.  The name moved into 150 (see
+                // saveEntries_4CDED0), and 16 is the device line's row -- the
+                // banner TAKES that row rather than sharing one, because the
+                // device is already chosen by then and which slot now holds the
+                // save is the thing worth still seeing.  The slot list stays up
+                // underneath, so "SAVED" and the filled slot read together.
+                savePolyOffset = Tethys_DrawLine(field_E4_font, ppOt, msg, 16,
+                                                 r, g, b, savePolyOffset);
             }
             // 389.ao.1 THE SLOT LIST, drawn BETWEEN the banner and DrawEntries.
             //
             // That position is forced, not chosen: DrawEntries returns void, so
-            // it can only ever be last in the polyOffset chain, and the banner
-            // note above is the record of what restarting that cursor costs (a
-            // cyclic OT tag chain and the fatal the tester photographed). Each
-            // line therefore takes the running cursor and hands on its result.
+            // it can only ever be last in the polyOffset chain.
+            //
+            // 390.ao.1 -- every line here goes through Tethys_DrawLine, which
+            // takes the running cursor as its LAST argument and returns the new
+            // one.  389.ao.1 wrote these calls out longhand and mis-slotted that
+            // cursor into colorRandomRange, which is the fatal documented above;
+            // see the wrapper's own note.  Nothing in this block may call
+            // DrawString_41C360 directly again.
             //
             // One line per slot, "N title" or "N -- LIBRE --", with the device
             // named above them so the player can see WHERE this is going -- the
@@ -1053,12 +1118,10 @@ void PauseMenu::VRender_44E6F0(PrimHeader** ppOt)
                 const s32 mask = sTethysSlotMask;
                 const s32 n = sTethysSlotN;
                 const char_type* dev = Tethys_SaveDeviceName(Tethys_SaveDeviceGet());
-                if (dev)
+                if (dev && !sTethysSaveMsg)
                 {
-                    savePolyOffset = field_E4_font.DrawString_41C360(
-                        ppOt, dev, static_cast<s16>(184 - field_E4_font.MeasureWidth_41C2B0(dev) / 2),
-                        22, TPageAbr::eBlend_0, 1, 0, Layer::eLayer_Menu_41,
-                        128u, 128u, 128u, 0, FP_FromInteger(1), 640, savePolyOffset);
+                    savePolyOffset = Tethys_DrawLine(field_E4_font, ppOt, dev, 16,
+                                                     128u, 128u, 128u, savePolyOffset);
                 }
                 for (s32 i = 0; i < n; i++)
                 {
@@ -1083,22 +1146,43 @@ void PauseMenu::VRender_44E6F0(PrimHeader** ppOt)
                         }
                     }
                     line[w] = 0;
+                    // TRIM TO WHAT THE SCREEN HOLDS, by width and not by count.
+                    // AO builds the default save name from the level, path and
+                    // camera -- "RUPTUREFARMS 1 EMBALLAGE" and the like -- and
+                    // measured in the font's own units that is 425 wide against
+                    // a 368-wide screen, so centring it puts x at -28 and the
+                    // first characters fall off the left edge.  A character cap
+                    // cannot fix that: 'W' is 17 wide and 'l' is 7, so the same
+                    // count is 2.4x the pixels depending on the name.  Drop
+                    // characters until it fits, keeping the "N " prefix.
+                    while (w > 2 && field_E4_font.MeasureWidth_41C2B0(line) > 352)
+                    {
+                        line[--w] = 0;
+                    }
                     // The highlight is the font's own grey ramp modulated by
                     // SetRGB0, the same mechanism the result banner uses, so
                     // these are the real on-screen colours and not names.
                     const bool sel = (i == sTethysSlot);
-                    savePolyOffset = field_E4_font.DrawString_41C360(
-                        ppOt, line,
-                        static_cast<s16>(184 - field_E4_font.MeasureWidth_41C2B0(line) / 2),
-                        // 20 px steps and a 20 px gap before the save name at
-                        // 120: the spacing this menu already uses everywhere
-                        // (controlsPageOne_4CDF00 steps 20, the save page's own
-                        // hints sit 120 / 180 / 205). Glyph height is per-atlas
-                        // data, so matching the page beats guessing a number.
-                        static_cast<s16>(40 + i * 20),
-                        TPageAbr::eBlend_0, 1, 0, Layer::eLayer_Menu_41,
+                    // 390.ao.1 -- 23 px steps from 44, MEASURED against the
+                    // atlas rather than copied from a neighbouring page.
+                    // sFont1Atlas_4C56E8's letters are 22-23 px tall, so the
+                    // 20 px steps 389.ao.1 borrowed from controlsPageOne_4CDF00
+                    // overlapped every line with the next by 3 px -- that page
+                    // gets away with it because its rows are short labels with
+                    // few descenders, and this one would not have.
+                    //   The box is EXACTLY 23 for every character a slot line
+                    // can hold: the title charset is restricted to
+                    // [A-Za-z0-9 !-] (the VK_ default case below), and in
+                    // sFont1Atlas_4C56E8 every digit and capital is 23 tall
+                    // while '-' is 11 and lowercase is shorter.  The atlas's
+                    // 26 px entries are lettered keycaps and control codes,
+                    // which cannot appear here.  So 25 = 23 + a 2 px gap.
+                    //   Band: device/banner 16..39, slots 44/69/94/119 with the
+                    // last ending at 142, save name 150..173, "B save" at 180.
+                    savePolyOffset = Tethys_DrawLine(
+                        field_E4_font, ppOt, line, static_cast<s16>(44 + i * 25),
                         sel ? 255u : 112u, sel ? 255u : 112u, sel ? 160u : 112u,
-                        0, FP_FromInteger(1), 640, savePolyOffset);
+                        savePolyOffset);
                 }
             }
             DrawEntries(ppOt, &saveEntries_4CDED0[0], -1, savePolyOffset);

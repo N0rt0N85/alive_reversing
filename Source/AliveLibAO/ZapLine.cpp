@@ -12,6 +12,12 @@
 void ZapLine_ForceLink()
 { }
 
+#ifdef TETHYS_SATURN
+// SATURN 390.ao.1: defined in src/renderer_saturn.cxx, zeroed there once per
+// frame.  See VRender_479840 for what the value means.
+extern "C" u32 Tethys_gZapLink;
+#endif
+
 namespace AO {
 
 BaseGameObject* ZapLine::VDestructor(s32 flags)
@@ -254,6 +260,16 @@ void ZapLine::VRender(PrimHeader** ppOt)
 
 void ZapLine::VRender_479840(PrimHeader** ppOt)
 {
+#ifdef TETHYS_SATURN
+    // SATURN 390.ao.1: `h` on the CG overlay row.  +1 here, before the two
+    // gates, and +1 per Sprt actually linked below -- so h00 / h01 / h85
+    // separate "no beam rendering at all", "rendering but refused by the camera
+    // or state gate", and "84 Sprts are in the ordering table".  The renderer's
+    // z column can no longer answer that on its own: it counts every eBlend_1
+    // prim, and AO's text and the chant orbs are in that set too.  Zeroed per
+    // frame by the renderer, on the same window as z.
+    Tethys_gZapLink++;
+#endif
     if (gMap_507BA8.Is_Point_In_Current_Camera_4449C0(
             field_B2_lvl_number,
             field_B0_path_number,
@@ -270,6 +286,9 @@ void ZapLine::VRender_479840(PrimHeader** ppOt)
             {
                 Prim_Sprt* pSprt = &field_124_pSprts->field_0_sprts[j + (i * field_120_number_of_pieces_per_segment)];
                 OrderingTable_Add_498A80(OtLayer(ppOt, field_10_anim.field_C_layer), &pSprt[bufferIdx].mBase.header);
+#ifdef TETHYS_SATURN
+                Tethys_gZapLink++;
+#endif
             }
         }
 
