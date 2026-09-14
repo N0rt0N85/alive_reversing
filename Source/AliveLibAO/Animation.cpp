@@ -41,7 +41,9 @@ extern "C" unsigned int Tethys_gAnDecode;
 // has ever carried.
 extern "C" unsigned int Tethys_gDcRaw;
 // SATURN bt1138: the decompression-destination A/B -- see the type 4/5 case.
-extern "C" const unsigned int Tethys_kDbufScratchBytes;
+// 414.ao.1: the size is bound at runtime WITH the pointer (32 KiB with a cart,
+// 16 KiB without one -- src/main.cxx) and reads 0 when there is no scratch.
+extern "C" unsigned int Tethys_gDbufScratchBytes;
 extern "C" unsigned char* Tethys_gDbufScratch;
 extern "C" unsigned int Tethys_gDbufRaw[2];
 extern "C" unsigned int Tethys_gDbufBytes[2];
@@ -442,6 +444,27 @@ void Animation::UploadTexture(const FrameHeader* pFrameHeader, const PSX_RECT& v
     const u32 fhOff = fhBlock0
                           ? static_cast<u32>(reinterpret_cast<const u8*>(pFrameHeader) - fhBlock0)
                           : 0u;
+    // 414.ao.1: THE SCRATCH DECISION, TAKEN FIRST AND TAKEN ONCE. A type 4/5
+    // frame whose decoder write fits the shared scratch (main.cxx binds one
+    // with AND without a cart) never touches a buffer of its own -- so it must
+    // not ALLOCATE one either: no bt870 growth, no EnsureDecompressionBuffer,
+    // nothing that can compact the heap under this decode. The write length is
+    // the u32 the decoder honours (below); the READ is Upload's
+    // SlotBytes(tw, ch), which the pack contract makes equal to it -- checked
+    // offline over all 35,019 compressed frames on the disc, read > write on
+    // none. Deciding on the frame's own length rather than on
+    // field_28_dbuf_size lets an animation whose declared box is large still
+    // use the scratch for every frame it actually has.
+    bool bTethysScratch = false;
+    {
+        const CompressionType ct0 = pFrameHeader->field_7_compression_type;
+        if (Tethys_gDbufScratch != nullptr
+            && (ct0 == CompressionType::eType_4_RLE || ct0 == CompressionType::eType_5_RLE))
+        {
+            const u32 lzLen = *reinterpret_cast<const u32*>(&pFrameHeader->field_8_width2);
+            bTethysScratch = (lzLen <= Tethys_gDbufScratchBytes);
+        }
+    }
     // SATURN ROOT FIX (bt870): Type 4/5 (LZSS) embeds its TRUE decompressed
     // length as the first u32 of the payload, and Decompress_Type_4_5 writes
     // exactly that many bytes -- IGNORING field_28_dbuf_size. For several frames
@@ -453,6 +476,8 @@ void Animation::UploadTexture(const FrameHeader* pFrameHeader, const PSX_RECT& v
     // first. PC's 5 MB heap absorbs the spill; Saturn's packed cart heap does
     // not. GROW the buffer to hold the full frame before decompressing (renders
     // correctly, no clip). Sanity-capped so a garbage dest_len can't OOM.
+    // 414.ao.1: only for a frame the scratch does not take -- see above.
+    if (!bTethysScratch)
     {
         const CompressionType ct = pFrameHeader->field_7_compression_type;
         if (ct == CompressionType::eType_4_RLE || ct == CompressionType::eType_5_RLE)
@@ -485,9 +510,10 @@ void Animation::UploadTexture(const FrameHeader* pFrameHeader, const PSX_RECT& v
     // ao242.17: the SECOND allocating site, hoisted out of the switch arms so
     // the rebind below covers it too. Type 0 uploads straight from the block
     // and must not be made to allocate a buffer it never reads.
-    if (pFrameHeader->field_7_compression_type != CompressionType::eType_0_NoCompression)
+    if (!bTethysScratch // 414.ao.1: a scratch frame owns no buffer
+        && pFrameHeader->field_7_compression_type != CompressionType::eType_0_NoCompression)
     {
-        EnsureDecompressionBuffer(); // result re-tested by each arm, unchanged
+        EnsureDecompressionBuffer(); // re-tested by arms 1-3; the 4/5 arm only TESTS field_24_dbuf
     }
     // ao242.17: THE ONE WINDOW, CLOSED. Nothing above this line derefs
     // pFrameHeader after an allocation; nothing below it allocates.
@@ -542,7 +568,16 @@ void Animation::UploadTexture(const FrameHeader* pFrameHeader, const PSX_RECT& v
 
         case CompressionType::eType_4_RLE:
         case CompressionType::eType_5_RLE:
+#ifdef TETHYS_SATURN
+            // 414.ao.1: NOTHING IN THIS ARM ALLOCATES ANY MORE. The destination
+            // was settled above the ao242.17 rebind: a scratch frame needs no
+            // buffer, a fallback frame got its own there -- or was refused, and
+            // is skipped here instead of being re-asked AFTER the rebind, where
+            // a compaction would leave pFrameHeader naming someone else's bytes.
+            if (bTethysScratch || field_24_dbuf)
+#else
             if (EnsureDecompressionBuffer())
+#endif
             {
 #ifdef TETHYS_SATURN
                 // SATURN (ao240.2) THE BUFFER LIVES IN LWRAM NOW, AND THE THREE-ARM
@@ -592,15 +627,15 @@ void Animation::UploadTexture(const FrameHeader* pFrameHeader, const PSX_RECT& v
                 // the LZSS is ~7 ms of a frame ((dc-cp)/kw = 0.494 against cp/kw =
                 // 0.115, so it is 4.3x the copy), and 12 % of that is ~0.85 ms. It
                 // is free -- LWRAM had 632 KB idle -- and it is not the fps story.
-                u8* pDst = *field_24_dbuf;
-                if (Tethys_gDbufScratch != nullptr
-                    && field_28_dbuf_size <= Tethys_kDbufScratchBytes)
+                // 414.ao.1: the choice was made above (bTethysScratch), and
+                // dstCap is the capacity of the buffer pDst actually names.
+                u8* pDst = Tethys_gDbufScratch;
+                s32 dstCap = static_cast<s32>(Tethys_gDbufScratchBytes);
+                if (!bTethysScratch)
                 {
-                    pDst = Tethys_gDbufScratch;
-                }
-                else
-                {
-                    Tethys_gDbufFall++; // 'fb': this frame stayed in the old buffer
+                    pDst = *field_24_dbuf;
+                    dstCap = field_28_dbuf_size;
+                    Tethys_gDbufFall++; // 'fb': this frame decoded into its own buffer
                 }
                 {
                     // ONE rate now, not three. Kept because the next hardware slot
@@ -639,13 +674,15 @@ void Animation::UploadTexture(const FrameHeader* pFrameHeader, const PSX_RECT& v
                 // the glow quietly half-working.
                 if (Tethys_gChantGlowOn)
                 {
-                    // field_28_dbuf_size is a safe capacity for BOTH arms:
-                    // pDst only becomes the LWRAM scratch when that size fits
-                    // inside it, so the scratch is never the smaller of the two.
+                    // 414.ao.1: dstCap, NOT field_28_dbuf_size. The scratch is
+                    // chosen on the FRAME's length now, so a large declared box
+                    // can sit on a smaller scratch -- the old "field_28 always
+                    // fits inside it" invariant is gone, and the clamp inside
+                    // Tethys_ChantGlowComposite must see the real capacity.
                     Tethys_ChantGlowComposite(this, pDst,
                                               pFrameHeader->field_4_width,
                                               pFrameHeader->field_5_height,
-                                              field_28_dbuf_size);
+                                              dstCap);
                 }
                 renderer.Upload(AnimFlagsToBitDepth(field_4_flags), vram_rect, pDst);
 #else
@@ -1482,7 +1519,26 @@ s16 Animation::Init_402D20(s32 frameTableOffset, DynamicArray* /*animList*/, Bas
 
     field_28_dbuf_size = maxH * (vram_width + 3);
 
-    if (pFrameHeader->field_7_compression_type != CompressionType::eType_0_NoCompression)
+    bool bAllocDbuf = pFrameHeader->field_7_compression_type != CompressionType::eType_0_NoCompression;
+#ifdef TETHYS_SATURN
+    // 414.ao.1: A TYPE 4/5 ANIMATION NO LONGER RESERVES A DECODE BUFFER HERE.
+    // This ask is what took the Mudokon out of R1P15C05 once 413.ao.1 had
+    // removed the fatal there: on the possessed-Slig route the no-cart heap
+    // runs ~97 % full, the 11,040 B ask came back null, this function returned
+    // 0 and BaseAnimatedWithPhysicsGameObject::Animation_Init_417FD0 marked the
+    // Mudokon dead -- silently, since no Mudokon factory checks. With the
+    // shared scratch bound (main.cxx, both configurations) every frame on the
+    // disc decodes there and this buffer would never be written. A frame that
+    // does not fit gets its own buffer lazily in UploadTexture, where a refusal
+    // costs one undrawn frame instead of the object.
+    if (Tethys_gDbufScratch != nullptr
+        && (pFrameHeader->field_7_compression_type == CompressionType::eType_4_RLE
+            || pFrameHeader->field_7_compression_type == CompressionType::eType_5_RLE))
+    {
+        bAllocDbuf = false;
+    }
+#endif
+    if (bAllocDbuf)
     {
         const u32 id = ResourceManager::Get_Header_455620(field_20_ppBlock)->field_C_id;
         // SATURN (ao262.2): NON-FATAL. The recovery below -- release the vram
