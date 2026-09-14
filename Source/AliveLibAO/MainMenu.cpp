@@ -46,6 +46,10 @@ ALIVE_VAR(1, 0x507690, s16, sSoundMono_507690, 0);
 // (src/sound_saturn.cxx, MixWordFromPans) so the page does what it says.
 // Declared here rather than in a header: one symbol, one caller.
 extern "C" void Tethys_SndSetMono(s32 mono);
+// SATURN (397.ao.1): set when Tethys_SpeakRes lands a NEW phrase file, consumed
+// by Menu::VRender_47AC00 once field_10_anim points into that file. See the
+// note at the consumer.
+static bool sTethysSpeakPalDirty = false;
 #endif
 
 // TODO: Move out
@@ -1220,6 +1224,43 @@ void Menu::VUpdate()
 
 void Menu::VRender_47AC00(PrimHeader** ppOt)
 {
+#ifdef TETHYS_SATURN
+    // SATURN (397.ao.1): THE PHRASE FILE'S OWN CLUT GOES TO THE PALETTE RECT.
+    //
+    // Field report, the GameSpeak page: "les orbes du chant sont bugguees,
+    // mauvaises couleurs sur Abe". The glow (chant_glow.cxx) lights Abe by
+    // rewriting his decompressed cel with 16 indices that chantmix.py authored
+    // INTO ABESPK5.BAN's CLUT -- and that CLUT was never uploaded. Abe's
+    // palette rect is written exactly twice on this screen, MenuDoor at
+    // Animation_Init (:1043) and AbeIntro at LoadPal (:1276); every phrase
+    // change after that is Set_Animation_Data_402A40, which never touches a
+    // palette (Animation.cpp:1178-1254). On PSX that is fine because every
+    // menu-Abe cel shares one authored palette; here the 16 patched slots
+    // held whatever AbeIntro's palette has there, so the light repainted Abe
+    // with arbitrary skin and cloth entries wherever an orb landed. 393's pin
+    // and 394's quantise could not move this: the bank machinery was never
+    // the fault, the bytes in the mirror were.
+    //   So: whenever Tethys_SpeakRes lands a phrase file (no-cart path only --
+    // with a cart the whole ABESPEAK.BAN stays resident and its CLUT is the
+    // one AbeIntro already loaded), the first render whose animation points
+    // into that file loads the file's CLUT the same way :1121-1126 does for
+    // Idle. For phrases 1-4 and 6-10 that is the shared original, byte for
+    // byte what AbeIntro loaded; for phrase 5 it is the patched one, and it is
+    // undone by the next phrase's own load. Here rather than at the eleven
+    // Set_Animation_Data sites: the render is the one place that knows the
+    // data has been set, and it runs before the first cel is drawn.
+    if (sTethysSpeakPalDirty && field_E4_res_array[0]
+        && field_10_anim.field_20_ppBlock == field_E4_res_array[0])
+    {
+        sTethysSpeakPalDirty = false;
+        FrameInfoHeader* pFrameInfoHeader = field_10_anim.Get_FrameHeader_403A00(0);
+        if (pFrameInfoHeader)
+        {
+            auto pFrameHeader = reinterpret_cast<FrameHeader*>(&(*field_10_anim.field_20_ppBlock)[pFrameInfoHeader->field_0_frame_header_offset]);
+            field_10_anim.LoadPal_403090(field_10_anim.field_20_ppBlock, pFrameHeader->field_0_clut_offset);
+        }
+    }
+#endif
     if ((field_204_flags >> 1) & 1)
     {
         field_10_anim.vRender(184, 162, ppOt, 0, 0);
@@ -4650,6 +4691,7 @@ u8** Menu::Tethys_SpeakRes(const AnimRecord& rec)
     if (field_E4_res_array[0])
     {
         sTethysSpeakLoaded = want;
+        sTethysSpeakPalDirty = true; // 397.ao.1: this file's CLUT is not resident yet
         if (want == kTethysChantPhrase)
         {
             sppTethysGlow = ResourceManager::GetLoadedResource_4554F0(
