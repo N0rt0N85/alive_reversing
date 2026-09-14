@@ -3261,6 +3261,11 @@ void Menu::GameSpeak_Update_47CBD0()
             {
                 if (!Input_IsChanting_4334C0())
                 {
+                    // SATURN (416.ao.1): the phrase file BEFORE the sound -- see
+                    // Tethys_SpeakRes. The load blocks, so stopping first left Abe
+                    // chanting in silence for the whole read; now the chant sounds
+                    // until the ChantEnd frame and stops on it.
+                    u8** ppPhrase = Tethys_SpeakRes(AO::AnimRec(AnimId::MenuAbeSpeak_ChantEnd));
                     SND_Seq_Stop_477A60(SeqId::eMudokonChant1_11);
 
                     field_1EC_pObj1->field_E8_bDestroyOnDone = 1;
@@ -3288,7 +3293,7 @@ void Menu::GameSpeak_Update_47CBD0()
                     // loses its animation but keeps its sound, and the page's state machine still
                     // advances (a looping animation still raises eBit18_IsLastFrame). Guarded, not
                     // #ifdef'd: on PC the pointer is never null, so this is dead weight there.
-                    if (Tethys_SpeakRes(rec)) // SATURN (313.ao.1; was ao261.31)
+                    if (ppPhrase) // SATURN (313.ao.1; was ao261.31) -- loaded above since 416.ao.1
                     {
                         field_10_anim.Set_Animation_Data_402A40(rec.mFrameTableOffset, field_E4_res_array[0]);
                     }
@@ -3317,11 +3322,13 @@ void Menu::GameSpeak_Update_47CBD0()
 
     if (Input_IsChanting_4334C0())
     {
+        // SATURN (416.ao.1): the phrase file BEFORE the sound -- see Tethys_SpeakRes.
+        const AnimRecord& rec = AO::AnimRec(AnimId::MenuAbeSpeak_Chant);
+        u8** ppPhrase = Tethys_SpeakRes(rec);
         SND_SEQ_PlaySeq_4775A0(SeqId::eMudokonChant1_11, 0, 1);
 
         field_204_flags |= 1u;
-        const AnimRecord& rec = AO::AnimRec(AnimId::MenuAbeSpeak_Chant);
-        if (Tethys_SpeakRes(rec)) // SATURN (313.ao.1; was ao261.31)
+        if (ppPhrase) // SATURN (313.ao.1; was ao261.31)
         {
             field_10_anim.Set_Animation_Data_402A40(rec.mFrameTableOffset, field_E4_res_array[0]);
         }
@@ -3390,10 +3397,11 @@ void Menu::GameSpeak_Update_47CBD0()
 
         if (Input().IsAnyHeld(InputObject::PadIndex::First, sInputKey_GameSpeak2_4C65BC))
         {
+            const AnimRecord& rec = AO::AnimRec(AnimId::MenuAbeSpeak_FollowMe);
+            u8** ppPhrase = Tethys_SpeakRes(rec); // SATURN (416.ao.1): the file BEFORE the voice
             Mudokon_SFX_42A4D0(MudSounds::eFollowMe_4, 0, 0, 0);
             field_204_flags |= 1u;
-            const AnimRecord& rec = AO::AnimRec(AnimId::MenuAbeSpeak_FollowMe);
-            if (Tethys_SpeakRes(rec)) // SATURN (313.ao.1; was ao261.31)
+            if (ppPhrase) // SATURN (313.ao.1; was ao261.31)
             {
                 field_10_anim.Set_Animation_Data_402A40(rec.mFrameTableOffset, field_E4_res_array[0]);
             }
@@ -3406,10 +3414,11 @@ void Menu::GameSpeak_Update_47CBD0()
         }
         else if (Input().IsAnyHeld(InputObject::PadIndex::First, sInputKey_GameSpeak4_4C65C4))
         {
+            const AnimRecord& rec = AO::AnimRec(AnimId::MenuAbeSpeak_Wait);
+            u8** ppPhrase = Tethys_SpeakRes(rec); // SATURN (416.ao.1): the file BEFORE the voice
             Mudokon_SFX_42A4D0(MudSounds::eWait_6, 0, 0, 0);
             field_204_flags |= 1u;
-            const AnimRecord& rec = AO::AnimRec(AnimId::MenuAbeSpeak_Wait);
-            if (Tethys_SpeakRes(rec)) // SATURN (313.ao.1; was ao261.31)
+            if (ppPhrase) // SATURN (313.ao.1; was ao261.31)
             {
                 field_10_anim.Set_Animation_Data_402A40(rec.mFrameTableOffset, field_E4_res_array[0]);
             }
@@ -3435,10 +3444,11 @@ void Menu::GameSpeak_Update_47CBD0()
         }
         else if (Input().IsAnyPressed(InputObject::PadIndex::First, sInputKey_GameSpeak3_4C65C0))
         {
+            const AnimRecord& rec = AO::AnimRec(AnimId::MenuAbeSpeak_Anger);
+            u8** ppPhrase = Tethys_SpeakRes(rec); // SATURN (416.ao.1): the file BEFORE the voice
             Mudokon_SFX_42A4D0(MudSounds::eAngry_5, 0, 0, 0);
             field_204_flags |= 1u;
-            const AnimRecord& rec = AO::AnimRec(AnimId::MenuAbeSpeak_Anger);
-            if (Tethys_SpeakRes(rec)) // SATURN (313.ao.1; was ao261.31)
+            if (ppPhrase) // SATURN (313.ao.1; was ao261.31)
             {
                 field_10_anim.Set_Animation_Data_402A40(rec.mFrameTableOffset, field_E4_res_array[0]);
             }
@@ -3475,10 +3485,11 @@ void Menu::GameSpeak_Update_47CBD0()
 
         if (Input().IsAnyHeld(InputObject::PadIndex::First, sInputKey_GameSpeak6_4C65E8))
         {
+            const AnimRecord& rec = AO::AnimRec(AnimId::MenuAbeSpeak_WhistleHigh);
+            u8** ppPhrase = Tethys_SpeakRes(rec); // SATURN (416.ao.1): the file BEFORE the voice
             Mudokon_SFX_42A4D0(MudSounds::eWhistleHigh_1, 0, 0, 0);
             field_204_flags |= 1u;
-            const AnimRecord& rec = AO::AnimRec(AnimId::MenuAbeSpeak_WhistleHigh);
-            if (Tethys_SpeakRes(rec)) // SATURN (313.ao.1; was ao261.31)
+            if (ppPhrase) // SATURN (313.ao.1; was ao261.31)
             {
                 field_10_anim.Set_Animation_Data_402A40(rec.mFrameTableOffset, field_E4_res_array[0]);
             }
@@ -3491,10 +3502,11 @@ void Menu::GameSpeak_Update_47CBD0()
         }
         else if (Input().IsAnyHeld(InputObject::PadIndex::First, sInputKey_GameSpeak5_4C65EC))
         {
+            const AnimRecord& rec = AO::AnimRec(AnimId::MenuAbeSpeak_WhistleLow);
+            u8** ppPhrase = Tethys_SpeakRes(rec); // SATURN (416.ao.1): the file BEFORE the voice
             Mudokon_SFX_42A4D0(MudSounds::eWhistleLow_2, 0, 0, 0);
             field_204_flags |= 1u;
-            const AnimRecord& rec = AO::AnimRec(AnimId::MenuAbeSpeak_WhistleLow);
-            if (Tethys_SpeakRes(rec)) // SATURN (313.ao.1; was ao261.31)
+            if (ppPhrase) // SATURN (313.ao.1; was ao261.31)
             {
                 field_10_anim.Set_Animation_Data_402A40(rec.mFrameTableOffset, field_E4_res_array[0]);
             }
@@ -3507,10 +3519,11 @@ void Menu::GameSpeak_Update_47CBD0()
         }
         else if (Input().IsAnyHeld(InputObject::PadIndex::First, sInputKey_GameSpeak8_4C65E0))
         {
+            const AnimRecord& rec = AO::AnimRec(AnimId::MenuAbeSpeak_Laugh);
+            u8** ppPhrase = Tethys_SpeakRes(rec); // SATURN (416.ao.1): the file BEFORE the voice
             Mudokon_SFX_42A4D0(MudSounds::eLaugh2_11, 0, 0, 0);
             field_204_flags |= 1u;
-            const AnimRecord& rec = AO::AnimRec(AnimId::MenuAbeSpeak_Laugh);
-            if (Tethys_SpeakRes(rec)) // SATURN (313.ao.1; was ao261.31)
+            if (ppPhrase) // SATURN (313.ao.1; was ao261.31)
             {
                 field_10_anim.Set_Animation_Data_402A40(rec.mFrameTableOffset, field_E4_res_array[0]);
             }
@@ -3523,10 +3536,11 @@ void Menu::GameSpeak_Update_47CBD0()
         }
         else if (Input().IsAnyHeld(InputObject::PadIndex::First, sInputKey_GameSpeak7_4C65E4))
         {
+            const AnimRecord& rec = AO::AnimRec(AnimId::MenuAbeSpeak_Fart);
+            u8** ppPhrase = Tethys_SpeakRes(rec); // SATURN (416.ao.1): the file BEFORE the voice
             Mudokon_SFX_42A4D0(MudSounds::eFart_7, 0, 0, 0);
             field_204_flags |= 1u;
-            const AnimRecord& rec = AO::AnimRec(AnimId::MenuAbeSpeak_Fart);
-            if (Tethys_SpeakRes(rec)) // SATURN (313.ao.1; was ao261.31)
+            if (ppPhrase) // SATURN (313.ao.1; was ao261.31)
             {
                 field_10_anim.Set_Animation_Data_402A40(rec.mFrameTableOffset, field_E4_res_array[0]);
             }
@@ -3552,11 +3566,12 @@ void Menu::GameSpeak_Update_47CBD0()
         return;
     }
 
+    const AnimRecord& rec = AO::AnimRec(AnimId::MenuAbeSpeak_Goodbye);
+    u8** ppPhrase = Tethys_SpeakRes(rec); // SATURN (416.ao.1): the file BEFORE the voice
     Mudokon_SFX_42A4D0(MudSounds::eGoodbye_12, 0, 0, 0);
 
     field_204_flags |= 1u;
-    const AnimRecord& rec = AO::AnimRec(AnimId::MenuAbeSpeak_Goodbye);
-    if (Tethys_SpeakRes(rec)) // SATURN (313.ao.1; was ao261.31)
+    if (ppPhrase) // SATURN (313.ao.1; was ao261.31)
     {
         field_10_anim.Set_Animation_Data_402A40(rec.mFrameTableOffset, field_E4_res_array[0]);
     }
@@ -4649,6 +4664,19 @@ static void Tethys_ReleaseGlow()
     }
 }
 
+// SATURN (416.ao.1) CALL THIS BEFORE THE VOICE, NEVER AFTER IT.
+//
+// LoadResourceFile_455270 is the SYNCHRONOUS loader: one GFS_Fread of the whole
+// phrase file, 6 to 59 sectors (ABESPK4 12,240 B .. ABESPK6 118,980 B), i.e.
+// ~165 to ~520 ms at the drive's measured 125 ms per read + 305 KB/s, with the
+// whole game loop stopped. The GameSpeak sites used to start the voice FIRST --
+// Mudokon_SFX / SND_SEQ_PlaySeq key the SCSP at once and it plays on by itself
+// -- then block here, then set the animation, so the tester heard Abe a quarter
+// to half a second before he saw him speak ("l'audio est joue avant l'anim").
+// They now load first, and the voice and Set_Animation_Data land on the same
+// tick. The pause itself is unchanged -- it was always the animation's; only the
+// voice stopped running ahead of it. The same phrase twice returns at the top,
+// with no read at all.
 u8** Menu::Tethys_SpeakRes(const AnimRecord& rec)
 {
     if (Tethys_gCartHeapBytes != 0)
