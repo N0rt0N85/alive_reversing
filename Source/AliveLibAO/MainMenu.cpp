@@ -4592,17 +4592,15 @@ extern "C" const u32 Tethys_kChantGlowFourcc;
 extern "C" const u32 Tethys_kChantGlowResId;
 extern "C" void Tethys_ChantGlowArm(u8** ppGlow, s32 abeX, s32 abeY);
 extern "C" void Tethys_ChantGlowDisarm();
-// 394.ao.1: 393's CRAM pin is REVERTED and nothing replaces it here. The
-// contention it managed is removed in the converter instead -- the orb is
-// quantised to 63 colours so it packs into a CRAM sub-slot and the menu is
-// down to one whole-bank tenant. Full account at the gravestone in
-// renderer_saturn.cxx; the in-game pair was never involved either way.
+extern "C" void Tethys_CramPinBegin(void);
+extern "C" void Tethys_CramPinEnd(void);
 static const s32 kTethysChantPhrase = 5;
 static u8** sppTethysGlow = nullptr;
 
 static void Tethys_ReleaseGlow()
 {
     Tethys_ChantGlowDisarm();
+    Tethys_CramPinEnd();
     if (sppTethysGlow)
     {
         ResourceManager::FreeResource_455550(sppTethysGlow);
@@ -4660,6 +4658,7 @@ u8** Menu::Tethys_SpeakRes(const AnimRecord& rec)
             // the composite needs his anchor to place the orbs against his
             // decompression buffer, and there is no other source for it.
             Tethys_ChantGlowArm(sppTethysGlow, 184, 162);
+            Tethys_CramPinBegin();
         }
     }
     return field_E4_res_array[0];
