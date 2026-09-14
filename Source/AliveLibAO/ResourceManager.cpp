@@ -327,6 +327,16 @@ static void Tethys_StickyMaterialize(u32 type, u32 id)
 
 void Tethys_ForgetAbsentResources(); // SATURN bt990: defined below
 
+// SATURN (397.ao.1): how many pins are held right now -- the runtime soft-fail
+// valve in Alloc_New_Resource_ImplEx only spends them when there is something
+// to spend. And the count of soft asks the release rescued (a gauge: a nonzero
+// value is the tester's route reproduced, in numbers).
+s32 Tethys_StickyHeldCount()
+{
+    return sTethysStickyHeldCount;
+}
+extern "C" volatile u32 Tethys_gStickyRescue = 0;
+
 // Level change: drop every permanent ref (the freed chunks then reclaim
 // normally) and forget everything. Wired in Map.cpp's level-change block.
 void Tethys_ReleaseStickyResources()
@@ -2556,6 +2566,47 @@ u8** ResourceManager::Alloc_New_Resource_ImplEx(u32 type, u32 id, u32 size, bool
 #ifdef TETHYS_SATURN
     else if (bReclaimOnFail && !bFatalOnFail)
     {
+        // SATURN (397.ao.1): BEFORE HANDING BACK THE NULL, SPEND THE STICKY REFS.
+        //
+        // Field report: reach the BoomMachine / zapline room AFTER possessing
+        // the sleeping Slig and shooting the one in the elevator room, and
+        // "nothing works" -- grenades do not explode, the zapline never shows.
+        // Both are exactly this branch: the ZapLine's locked 4,032 B spline
+        // block (ZapLine.cpp:130) and the Explosion's decompression buffer
+        // (Animation.cpp:1491) are the two soft asks in the game, and both
+        // die silently when the heap is full. What fills the heap is PATH
+        // DEPENDENT by construction: every SLG*/SLIG* chunk a Slig ever
+        // requested holds one extra permanent ref (sTethysStickyHeld) until
+        // the LEVEL changes, and possessing a Slig requests the shot / knock-
+        // back / sleep subsets the walk-past route never touches. The route
+        // the tester took pins ~100 KB more than the direct one, on a no-cart
+        // heap that already runs at 97 %.
+        //   The screen-load path already has this valve (the state-0 pressure
+        // ladder at :927 releases the pins and compacts every 100th retry);
+        // the RUNTIME soft path had none, so a beam that was decoration on the
+        // screen you loaded became a dead object on the one you played. The
+        // pins are a CD-traffic optimisation and nothing else: dropping them
+        // costs the next Slig screen one re-read, keeping them costs the
+        // player the room. One release, two compactions, one retry -- and only
+        // when there is something to release, so a heap that is simply full
+        // takes the old null with no extra work.
+        if (Tethys_StickyHeldCount() > 0)
+        {
+            Tethys_ReleaseStickyResources();
+            Reclaim_Memory_455660(0);
+            Reclaim_Memory_455660(0);
+            ppNewRes = Allocate_New_Block_454FE0(size + sizeof(Header), allocType);
+            if (ppNewRes)
+            {
+                Tethys_gStickyRescue++;
+                Header* pHeader = Get_Header_455620(ppNewRes);
+                pHeader->field_8_type = type;
+                pHeader->field_C_id = id;
+                pHeader->field_4_ref_count = 1;
+                pHeader->field_6_flags = locked ? ResourceHeaderFlags::eLocked : 0;
+                return ppNewRes;
+            }
+        }
         // SATURN (ao262.2): the caller has a real recovery path -- it skips the
         // frame or fails its init -- so hand it the null it was written to
         // expect. Counted, never silent: `rn` on the S4 row.
