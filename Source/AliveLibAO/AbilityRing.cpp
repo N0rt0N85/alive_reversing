@@ -253,6 +253,23 @@ void AbilityRing::VRender_456340(PrimHeader** ppOt)
         u8 ang = 4;
         auto count = 64;
 
+#ifdef TETHYS_SATURN
+        // SATURN (418.ao.1): ONE POLYGON PER FOUR SEGMENTS. 64 quads per ring,
+        // and the bird portal keeps 2-4 rings alive (one per terminator every 8
+        // frames, ~13 frames each), is 128-256 VDP1 commands on a 128-command
+        // frame -- the renderer kept 10 and the tester saw an ARC. The loop
+        // below still computes all 64 segments, so the collision rects that
+        // CollideWithObjects_456250 reads (the explosive rings) are untouched;
+        // only the drawing is merged: each emitted quad spans from the edge where
+        // its group began to the edge where it ends, i.e. a 16-gon. At the ring's
+        // 50 px death radius a 22.5-degree chord sags ~1 px.
+        const s32 kSegPerPoly = 4;
+        s16 gx3 = x3;
+        s16 gy3 = y3;
+        s16 gx4 = x4;
+        s16 gy4 = y4;
+        bool bGroupVisible = false;
+#endif
         for (s32 i = 0; i < count; i++)
         {
             const s16 x1 = (s16) PsxToPCX(field_262_screenXPos + FP_GetExponent(field_244_left * Math_Sine_451110(ang) * field_250_scaleX), 11);
@@ -277,6 +294,9 @@ void AbilityRing::VRender_456340(PrimHeader** ppOt)
             }
             else
             {
+#ifdef TETHYS_SATURN
+                bGroupVisible = true; // SATURN (418.ao.1): drawn once per group, below
+#else
                 Poly_F4* pPoly = &field_14_pRes[i].mPolys[gPsxDisplay_504C78.field_A_buffer_index];
                 SetXY0(pPoly, x1, y1);
                 SetXY1(pPoly, x2, y2);
@@ -284,6 +304,7 @@ void AbilityRing::VRender_456340(PrimHeader** ppOt)
                 SetXY3(pPoly, x4, y4);
 
                 OrderingTable_Add_498A80(OtLayer(ppOt, field_10_layer), &pPoly->mBase.header);
+#endif
 
                 pScreenManager_4FF7C8->InvalidateRect_406E40(
                     rect.x,
@@ -297,6 +318,26 @@ void AbilityRing::VRender_456340(PrimHeader** ppOt)
                 field_3C_collide_rects[i].w = PCToPsxX(field_3C_collide_rects[i].w, 20);
             }
 
+#ifdef TETHYS_SATURN
+            // SATURN (418.ao.1): the group's last segment closes its polygon.
+            if ((i % kSegPerPoly) == kSegPerPoly - 1)
+            {
+                if (bGroupVisible)
+                {
+                    Poly_F4* pPoly = &field_14_pRes[i].mPolys[gPsxDisplay_504C78.field_A_buffer_index];
+                    SetXY0(pPoly, x1, y1);
+                    SetXY1(pPoly, x2, y2);
+                    SetXY2(pPoly, gx3, gy3);
+                    SetXY3(pPoly, gx4, gy4);
+                    OrderingTable_Add_498A80(OtLayer(ppOt, field_10_layer), &pPoly->mBase.header);
+                }
+                gx3 = x1;
+                gy3 = y1;
+                gx4 = x2;
+                gy4 = y2;
+                bGroupVisible = false;
+            }
+#endif
             x3 = x1;
             y3 = y1;
             x4 = x2;
