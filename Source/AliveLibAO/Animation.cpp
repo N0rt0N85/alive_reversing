@@ -386,11 +386,29 @@ extern "C" volatile u32 Tethys_gAnimBadPtr = 0;
 extern "C" volatile s32 Tethys_gChantGlowOn;
 extern "C" void Tethys_ChantGlowComposite(void* pAnim, u8* pDst, s32 psxW, s32 psxH,
                                           s32 capBytes);
+// SATURN (418.ao.2): the ring carve (src/chant_glow.cxx, "THE ORBS OVER THE
+// RING"). Same single-call-site reasoning as the glow above.
+extern "C" volatile s32 Tethys_gRingMaskOn;
+extern "C" void Tethys_RingUploadBegin(const void* pAnim);
+extern "C" void Tethys_RingCarve(void* pAnim, u8* pDst, s32 psxW, s32 psxH, s32 capBytes);
 #endif
 
 void Animation::UploadTexture(const FrameHeader* pFrameHeader, const PSX_RECT& vram_rect, s16 width_bpp_adjusted)
 {
     IRenderer& renderer = *IRenderer::GetRenderer();
+#ifdef TETHYS_SATURN
+    // SATURN (418.ao.2): EVERY arm of the switch below replaces this
+    // animation's cel, so the GameSpeak ring's "a carved cel is on screen"
+    // flag is cleared HERE, ahead of all of them -- only the type-4/5 arm can
+    // set it again (Tethys_RingCarve). An arm that uploads without carving
+    // therefore puts the ring back in front, never leaves it behind an
+    // uncarved Abe. One load and a branch: the mask only exists on the
+    // GameSpeak page.
+    if (Tethys_gRingMaskOn)
+    {
+        Tethys_RingUploadBegin(this);
+    }
+#endif
 #ifdef TETHYS_SATURN
     // SATURN ROOT FIX (ao242.17) -- pFrameHeader IS A RAW DEREF OF A MOVABLE
     // BLOCK, AND EVERYTHING BELOW CAN MOVE IT.
@@ -672,6 +690,15 @@ void Animation::UploadTexture(const FrameHeader* pFrameHeader, const PSX_RECT& v
                 // compression type 5, measured on the shipped pack -- and if
                 // one ever were not, gl would read 0 while armed rather than
                 // the glow quietly half-working.
+                // SATURN (418.ao.2): the ring carve, BEFORE the glow, so the
+                // glow's own `!a` test skips what the ring covers anyway.
+                if (Tethys_gRingMaskOn)
+                {
+                    Tethys_RingCarve(this, pDst,
+                                     pFrameHeader->field_4_width,
+                                     pFrameHeader->field_5_height,
+                                     dstCap);
+                }
                 if (Tethys_gChantGlowOn)
                 {
                     // 414.ao.1: dstCap, NOT field_28_dbuf_size. The scratch is

@@ -1311,6 +1311,13 @@ void Tethys_LoadingProbe(s32* pCount, s32* pState, s32* pSizeSectors)
 }
 #endif
 
+#ifdef TETHYS_SATURN
+// SATURN 418.ao.2: draws the loading icon through the flip's blank and
+// presents it (src/renderer_saturn.cxx) -- declared HERE, ahead of its one
+// call site below.
+extern "C" void Tethys_PresentLoadingIcon();
+#endif
+
 void CC Game_ShowLoadingIcon_445EB0()
 {
     const AnimRecord& rec = AO::AnimRec(AnimId::Loading_Icon2);
@@ -1341,12 +1348,25 @@ void CC Game_ShowLoadingIcon_445EB0()
         PSX_DrawOTag_4969F0(local_ot);
         PSX_DrawSync_496750(0);
 
+#ifdef TETHYS_SATURN
+        // SATURN 418.ao.2: THE ICON WAS DRAWN, THEN ERASED, THEN NEVER SHOWN.
+        // The PSX draws it once into EACH half of VRAM (y and y + 240) because
+        // its two framebuffers live there, and relies on neither being redrawn
+        // during the load.  On Saturn every DrawOTag starts a fresh sprite list,
+        // so the second, off-screen copy wiped the first -- and even the first
+        // would never have been PRESENTED: the flip holds the sprite layer blank
+        // (sSpritesBlanked) and faded to black for the whole load, and
+        // LoadingLoop's VSync(0) presents nothing.  So: one draw, and the
+        // renderer presents it through the blank.  See Tethys_PresentLoadingIcon.
+        Tethys_PresentLoadingIcon();
+#else
         PSX_ClearOTag_496760(local_ot, 42);
 
         pParticle->field_10_anim.vRender(320, gPsxDisplay_504C78.field_2_height + 220, local_ot, 0, 0);
 
         PSX_DrawOTag_4969F0(local_ot);
         PSX_DrawSync_496750(0);
+#endif
 
         PSX_DISPENV dispEnv = {};
         PSX_SetDefDispEnv_4959D0(&dispEnv, 0, 0, 640, 240);
@@ -2315,6 +2335,21 @@ void CC ResourceManager::Tethys_StreamCamFile(Camera* pCamera, bool bitsOnly)
     // whole synchronous load. If that ever comes back, this line is the first
     // suspect and restoring it is a one-line revert. It is deliberately in the
     // Ymir build BEFORE the hardware build so the flip can be watched once.
+
+    // SATURN 418.ao.2: RESTORED -- bt1051's deletion above came back exactly
+    // as its own note predicted.  Reported on the menu -> "Chargement" flip
+    // (S1P01C01 -> S1P01C21): the main menu's FG1 ring stayed on screen for a
+    // few frames OVER the new background.  That frame is the tell: Menu::
+    // ToLoading had already switched the menu to Empty_Render, so the last
+    // frame composed on C01 held the FG1 ring and nothing else -- and that ring
+    // alone is what survived into C21.  The T0 present is not enough on its own:
+    // VDP1 is double-buffered, a present DRAWS into the back buffer, and nothing
+    // presents again during the synchronous CAM stream (LoadingLoop's VSync(0)
+    // does not present), so the screen can still be showing the frame BEFORE
+    // T0 when the new Bits land.  This second present is what puts the blank
+    // buffer on screen first.  Cost: one vblank per flip -- the bt872..bt1050
+    // behaviour, which is known-good.
+    Tethys_ClearForegroundAndPresent();
 
     // Latch VDP2 first (Begin's one-time LoadBitmap + re-blank; bt978: its
     // DMA source is a fake HWRAM span, the scratch is a separate dedicated
