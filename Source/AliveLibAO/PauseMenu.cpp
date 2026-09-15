@@ -17,6 +17,7 @@
 #include "Sys.hpp"
 #include "Map.hpp"
 #include "GameAutoPlayer.hpp"
+#include "Abe.hpp" // SATURN (417.ao.1): the death gate reads sActiveHero_507678
 
 #if ORIGINAL_PS1_BEHAVIOR
     #include "../AliveLibAE/Sys.hpp"
@@ -274,6 +275,34 @@ void PauseMenu::VUpdate_44DFB0()
             }
         }
         if (!sFontContext_4FFD68.field_8_atlas_array)
+        {
+            return;
+        }
+    }
+#endif
+#ifdef TETHYS_SATURN
+    // SATURN (417.ao.1): NO PAUSE BETWEEN DEATH AND RESPAWN. AO's pause has no
+    // gate at all -- AE's has one (AliveLibAE/PauseMenu.cpp:1612: health > 0,
+    // not electrocuted, not in a well/Shrykull) and AO never got it. Pausing
+    // during Motion_60_Dead runs the menu's modal loop (SND_StopAll, Reclaim_
+    // Memory_455660) in the middle of the death sequence, whose case 4 fetches
+    // the respawn resources and whose Motion_61_Respawn reloads the checkpoint
+    // (SaveGame::LoadFromMemory_459970) -- the tester's "bug au respawn".
+    // Health alone is NOT enough: Motion_61 case 0 sets it back to 1 on its first
+    // frame (Abe.cpp:7260) while the respawn still has ~70 frames to run, and
+    // Motion_59_DeathDropFall only zeroes it when it hands over to Motion_60
+    // (Abe.cpp:7023). So the gate is health OR electrocuted OR a death/respawn
+    // motion; the respawn ends by leaving Motion_61, which re-opens the pause.
+    if (sActiveHero_507678)
+    {
+        const s16 heroMotion = sActiveHero_507678->field_FC_current_motion;
+        if (sActiveHero_507678->field_100_health <= FP_FromInteger(0)
+            || sActiveHero_507678->field_10A_flags.Get(Flags_10A::e10A_Bit5_Electrocuted)
+            || heroMotion == eAbeMotions::Motion_59_DeathDropFall_42CBE0
+            || heroMotion == eAbeMotions::Motion_60_Dead_42C4C0
+            || heroMotion == eAbeMotions::Motion_61_Respawn_42CD20
+            || heroMotion == eAbeMotions::Motion_86_FallLandDie_42EDD0
+            || heroMotion == eAbeMotions::Motion_164_PoisonGasDeath_42A120)
         {
             return;
         }
