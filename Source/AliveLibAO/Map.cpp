@@ -48,6 +48,11 @@ extern "C" volatile s32 Tethys_gLastTlvType;
 extern "C" u32 Tethys_RawTicks();           // ~208/ms; ms would round this to 0 (bt1021)
 extern "C" bool Tethys_gSuppressCamPaint;   // renderer_saturn.cxx (359.ao.2)
 extern "C" bool Tethys_gCamPaintHidden;     // renderer_saturn.cxx (420.ao.1)
+// SATURN 420.ao.2: the wipe is latched in GoTo_Camera_445050, not at T0 -- see
+// the seam's banner.  At Tethys_OnScreenChange this field still holds the
+// PREVIOUS screen's effect for every ordinary screen walk, because
+// Handle_PathTransition_444DD0 assigns it downstream of that hook (:591-618).
+extern "C" void Tethys_SetFlipEffect(s32 effect); // renderer_saturn.cxx
 extern "C" volatile u32 Tethys_gFlipPostMs; // renderer_saturn.cxx, next to l/lc
 // bt1046: THE GAP THAT bt1044'S OWN BANNER DENIED. `l` is latched in FlipEnd,
 // which fires from Tethys_CamStreamEnd inside Tethys_StreamCamFile -- called at
@@ -1890,6 +1895,11 @@ void Map::GoTo_Camera_445050()
 {
 #ifdef TETHYS_SATURN
     Tethys_gBootPhase = 1;
+    // SATURN 420.ao.2: the effect is FINAL here and not yet consumed -- both
+    // dispatch paths (ScreenChange_Common and Handle_PathTransition) reach this
+    // function, and FlipEnd, which arms the ramp that draws the wipe, runs
+    // inside it.  See the extern's note at the top of this file.
+    Tethys_SetFlipEffect(static_cast<s32>(field_10_screenChangeEffect));
 #endif
     s16 bShowLoadingIcon = FALSE;
 
