@@ -189,6 +189,56 @@ void CameraSwapper::Init_48C830(u8** ppCamRes, CameraSwapEffects changeEffect)
 
     field_28_changeEffect = changeEffect;
 
+#ifdef TETHYS_SATURN
+    // SATURN 421.ao.3 -- LES VOLETS NE FONT PLUS ATTENDRE.
+    //
+    // AO recomposes a wipe one slice per tick, and this port draws none of it:
+    // under TETHYS_SATURN ScreenManager::InvalidateRect_406E40 is compiled to a
+    // bare `rts` (ScreenManager.cpp:337-338), every invalidate entry point
+    // forwards to it, and the dirty-bit consumer sits under `if (false)`
+    // (ScreenManager.cpp:430).  What survived the port was the CLOCK: the swapper
+    // lived 9 to 21 ticks with the game frozen behind it -- sNumCamSwappers_507668
+    // gates both VUpdate loops, AnimateAll and the frame counter (Game.cpp:587,
+    // 631, 771, 896) -- in order to draw nothing at all.
+    //
+    // So route them to what eInstantChange_0 already does a few lines below.  That
+    // is not new code: it is the path every menu transition takes today (~30
+    // SetActiveCam_444660(..., eInstantChange_0, ...) call sites) and boot too.
+    //
+    // WHAT THIS DOES NOT DO, established before writing it rather than after:
+    //   * it does not shorten the CD stall by a millisecond.  The swapper is
+    //     constructed at the very TAIL of GoTo_Camera_445050 (Map.cpp:2366-2377),
+    //     after the whole synchronous load, so its ticks were always AFTER it;
+    //   * it does not reach zero either.  The object is born downstream of every
+    //     reap loop for that tick (Game.cpp:869-882 runs before :893, and
+    //     ScreenChange's own dtor loops run before ScreenChange_Common), and the
+    //     reap needs eDead_Bit3 && refCount == 0, so the earliest is the NEXT
+    //     tick.  Net: 9-21 frozen ticks become exactly ONE, the same one an
+    //     instant change already costs.
+    switch (field_28_changeEffect)
+    {
+        case CameraSwapEffects::eLeftToRight_1:
+        case CameraSwapEffects::eRightToLeft_2:
+        case CameraSwapEffects::eTopToBottom_3:
+        case CameraSwapEffects::eBottomToTop_4:
+        case CameraSwapEffects::eVerticalSplit_6:
+        case CameraSwapEffects::eHorizontalSplit_7:
+        case CameraSwapEffects::eBoxOut_8:
+            if (field_28_changeEffect == CameraSwapEffects::eBoxOut_8)
+            {
+                // AO's door "whoosh".  The SOUND is not the wipe, so it stays.
+                SFX_Play_43AD70(SoundEffect::IngameTransition_107, 127);
+            }
+            pScreenManager_4FF7C8->InvalidateRect_Layer3_406F20(0, 0, 640, 240);
+            field_6_flags.Set(BaseGameObject::eDead_Bit3);
+            field_24_pSubObject = nullptr;
+            return;
+
+        default:
+            break; // the FMV effects and eInstantChange_0 fall through untouched
+    }
+#endif
+
     PSX_Point xy = {};
     PSX_Point wh = {};
 
