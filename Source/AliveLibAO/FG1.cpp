@@ -136,14 +136,6 @@ volatile s32 Tethys_gFg1LastN = -1;
 extern "C" volatile s32 Tethys_gFg1Skipped;
 volatile s32 Tethys_gFg1Skipped = 0;
 extern "C" [[noreturn]] void Tethys_Fatal(const char_type* msg);
-// SATURN (418.ao.2): the GameSpeak ring drops BEHIND the chant orbs while
-// the cel of Abe on screen is carved to its shape (src/chant_glow.cxx, "THE
-// ORBS OVER THE RING"). The mask is collected here, from the shipped tiles.
-extern "C" void Tethys_RingBegin(const void* pFg1);
-extern "C" void Tethys_RingNoteBlock(s32 x, s32 y, s32 w, s32 h, const u16* pPix);
-extern "C" void Tethys_RingEnd(const void* pFg1);
-extern "C" void Tethys_RingForget(const void* pFg1);
-extern "C" s32 Tethys_RingLowered(const void* pFg1);
 
 [[noreturn]] static void Tethys_Fg1Fatal(const char_type* what, s32 a, s32 b, s32 c, s32 d, s32 e)
 {
@@ -184,12 +176,6 @@ static const Layer sFg1_layer_to_bits_layer_4BC024[] = {Layer::eLayer_FG1_37, La
 
 void FG1::Convert_Chunk_To_Render_Block_453BA0(const Fg1Chunk* pChunk, Fg1Block* pBlock)
 {
-#ifdef TETHYS_SATURN
-    // SATURN (418.ao.2): a no-op unless this FG1 is a GameSpeak ring being built.
-    Tethys_RingNoteBlock(pChunk->field_4_xpos_or_compressed_size, pChunk->field_6_ypos,
-                         pChunk->field_8_width, pChunk->field_A_height,
-                         reinterpret_cast<const u16*>(&pChunk[1]));
-#endif
     const s16 width_rounded = (pChunk->field_8_width + 1) & ~1u;
     if (vram_alloc_450860(pChunk->field_8_width, pChunk->field_A_height, &pBlock->field_58_rect))
     {
@@ -271,9 +257,6 @@ BaseGameObject* FG1::dtor_453DF0()
 {
     SetVTable(this, 0x4BC028);
 
-#ifdef TETHYS_SATURN
-    Tethys_RingForget(this); // 418.ao.2: frees the ring mask if this FG1 owns it
-#endif
     gObjList_drawables_504618->Remove_Item(this);
 
     // SATURN (ao262.9): belt-and-braces for the CHNK degrade above. Not needed
@@ -392,22 +375,6 @@ FG1* FG1::ctor_4539C0(u8** ppRes)
 #endif
     field_20_chnk_res = reinterpret_cast<Fg1Block*>(*field_1C_ptr);
 
-#ifdef TETHYS_SATURN
-    // SATURN (418.ao.2): THE GAMESPEAK RING (src/chant_glow.cxx, "THE ORBS
-    // OVER THE RING"). Its mask is collected by the reader's own walk below
-    // -- Tethys_RingNoteBlock in Convert_Chunk_To_Render_Block_453BA0 -- and
-    // armed after it. Create_FG1s_4447D0 runs after GoTo_Camera has made the
-    // new camera current (Map.cpp), so these fields name THIS camera. Both
-    // GameSpeak pages, pad and keyboard, carry their own ring.
-    if (gMap_507BA8.field_0_current_level == LevelIds::eMenu_0
-        && gMap_507BA8.field_2_current_path == 1
-        && (gMap_507BA8.field_4_current_camera == CameraIds::Menu::eGamespeakGamepad_3
-            || gMap_507BA8.field_4_current_camera == CameraIds::Menu::eGamespeakKeyboard_33))
-    {
-        Tethys_RingBegin(this);
-    }
-#endif
-
     if (isReliveFG1)
     {
         FG1ReaderAE loader(*this);
@@ -420,7 +387,6 @@ FG1* FG1::ctor_4539C0(u8** ppRes)
     }
 
 #ifdef TETHYS_SATURN
-    Tethys_RingEnd(this); // 418.ao.2: arms the ring mask if one was collected
     pSrcHdr->field_6_flags = srcFlagsSaved; // restore the source's original lock state
 #endif
 
@@ -477,9 +443,6 @@ void FG1::VRender_453D50(PrimHeader** ppOt)
     {
         return;
     }
-    // SATURN (418.ao.2): the GameSpeak ring goes BEHIND the chant orbs while
-    // the cel of Abe on screen is one src/chant_glow.cxx carved to its shape.
-    const bool bTethysRingLowered = Tethys_RingLowered(this) != 0;
 #endif
     for (s32 i = 0; i < field_18_render_block_count; i++)
     {
@@ -516,13 +479,7 @@ void FG1::VRender_453D50(PrimHeader** ppOt)
                                 pBlock->field_58_rect.w, Tethys_gFg1Ctors, Tethys_gFg1LastN);
             }
 #endif
-#ifdef TETHYS_SATURN
-            OrderingTable_Add_498A80(OtLayer(ppOt, bTethysRingLowered ? Layer::eLayer_FG1_Half_18
-                                                                      : pBlock->field_66_mapped_layer),
-                                     &pPoly->mBase.header);
-#else
             OrderingTable_Add_498A80(OtLayer(ppOt, pBlock->field_66_mapped_layer), &pPoly->mBase.header);
-#endif
 
             pScreenManager_4FF7C8->InvalidateRect_406E40(
                 X0(pPoly),

@@ -1435,26 +1435,75 @@ static void CC Tethys_Reload_One_Vab(SoundBlockInfo* pInfo, u8* pWin, s32 winByt
 // (the walk shape of SND_Free_All_VABS, AE/Sound/Midi.cpp:147-155).
 // sLastLoadedSoundBlockInfo is deliberately left untouched so the
 // SND_Load_VABS no-op gate keeps suppressing duplicate full loads.
+// SATURN 420.ao.1: the resource heap's capacity, for the affordability test in
+// the reload below.  Declared here rather than in a header because that is this
+// symbol's established shape -- src/main.cxx:78 and src/sys_saturn.cxx:329 each
+// forward-declare it the same way, and it is deliberately a runtime value (cart
+// mode raises it, Tethys_SetResHeapSize).
+u32 Tethys_ResHeapSize();
+
 EXPORT void CC Tethys_SND_VAB_Reload_Saturn()
 {
     // ONE window for the whole chain.  32 KB = 16 sectors: ~15 CD reads for a
     // 481 KB bank, all forward, so the pickup never seeks backwards.  Id 127 is
     // deliberately outside kMaxVabs (= 4) -- this is scratch, not a bank.
-    const s32 kVbWindowBytes = 32768;
-    u8** ppWin = ResourceManager::Alloc_New_Resource_ImplEx(
-        ResourceManager::Resource_VabBody, 127, kVbWindowBytes,
-        false, ResourceManager::BlockAllocMethod::eFirstMatching,
-        /*bReclaimOnFail*/ true, /*bFatalOnFail*/ false);
+    // SATURN 420.ao.1: ASK BIG FIRST, DEGRADE TO THE OLD SIZE.
+    // This project's CD cost is FIXED PER READ -- 109.6 ms of protocol plus
+    // ~304 KiB/s of transfer, measured on hardware -- so the only lever on a
+    // strictly-forward stream is the NUMBER of reads.  RFSNDFX.VB is 479,680 B:
+    // 15 reads at 32 KB (~3.18 s), 4 at 128 KB (~1.98 s).  That is 1.2 s off
+    // every movie exit for zero resident bytes, because the window is scratch
+    // that is freed three lines below.
+    // The moment is favourable, and that is read rather than hoped: movie_cinepak
+    // .cxx returns the borrowed 139,728 B block BEFORE calling RestoreScspBackend,
+    // so the heap has exactly that much room when this runs.  When it does not,
+    // each failed ask costs one compaction (bReclaimOnFail) and we fall back --
+    // 32 KB is the floor and the floor is today's shipped behaviour.
+    // AN UNAFFORDABLE RUNG IS SKIPPED BY ARITHMETIC, NEVER BY A FAILED ALLOC --
+    // and that is the whole safety of asking big.  Alloc_New_Resource_ImplEx
+    // with bReclaimOnFail does not merely return null: it compacts, and if any
+    // sticky resource is held it calls Tethys_ReleaseStickyResources and compacts
+    // TWICE more (ResourceManager.cpp:2620-2640).  Those pins are worth ~100 KB
+    // of CD re-reads on the following screen, so a failed 128 KB probe would
+    // trade them away for a window we were never going to get -- on exactly the
+    // tight screens where the movie borrow itself was refused (field captures put
+    // the free space as low as 824 B).  The test mirrors, to the byte, the one
+    // Tethys_MovieBorrowHeap makes before borrowing (ResourceManager.cpp:427).
+    //
+    // The 32 KB floor stays an UNCONDITIONAL attempt: it is the size this
+    // function has always asked for, and its soft-null path is already the
+    // shipped behaviour.
+    s32 winBytes = 131072;
+    u8** ppWin = nullptr;
+    while (true)
+    {
+        const u32 cap = Tethys_ResHeapSize();
+        const u32 used = sManagedMemoryUsedSize_9F0E48;
+        const bool affordable =
+            cap >= used && (cap - used) >= static_cast<u32>(winBytes) + 16u;
+        if (affordable || winBytes <= 32768)
+        {
+            ppWin = ResourceManager::Alloc_New_Resource_ImplEx(
+                ResourceManager::Resource_VabBody, 127, winBytes,
+                false, ResourceManager::BlockAllocMethod::eFirstMatching,
+                /*bReclaimOnFail*/ true, /*bFatalOnFail*/ false);
+        }
+        if (ppWin || winBytes <= 32768)
+        {
+            break;
+        }
+        winBytes >>= 1;
+    }
     if (!ppWin)
     {
         return; // counted on the rn row; the level stays mute, as in 368.ao.5
     }
 
-    Tethys_Reload_One_Vab(reinterpret_cast<SoundBlockInfo*>(&GetMidiVars()->sMonkVh_Vb()), *ppWin, kVbWindowBytes);
+    Tethys_Reload_One_Vab(reinterpret_cast<SoundBlockInfo*>(&GetMidiVars()->sMonkVh_Vb()), *ppWin, winBytes);
     SoundBlockInfo* pIter = reinterpret_cast<SoundBlockInfo*>(GetMidiVars()->sLastLoadedSoundBlockInfo());
     while (pIter && pIter->field_0_vab_header_name)
     {
-        Tethys_Reload_One_Vab(pIter, *ppWin, kVbWindowBytes);
+        Tethys_Reload_One_Vab(pIter, *ppWin, winBytes);
         pIter++;
     }
 

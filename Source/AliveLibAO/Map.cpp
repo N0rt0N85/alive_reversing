@@ -47,6 +47,7 @@ extern "C" volatile s32 Tethys_gLastTlvType;
 // the whole thing. One number, latched per flip, ends that.
 extern "C" u32 Tethys_RawTicks();           // ~208/ms; ms would round this to 0 (bt1021)
 extern "C" bool Tethys_gSuppressCamPaint;   // renderer_saturn.cxx (359.ao.2)
+extern "C" bool Tethys_gCamPaintHidden;     // renderer_saturn.cxx (420.ao.1)
 extern "C" volatile u32 Tethys_gFlipPostMs; // renderer_saturn.cxx, next to l/lc
 // bt1046: THE GAP THAT bt1044'S OWN BANNER DENIED. `l` is latched in FlipEnd,
 // which fires from Tethys_CamStreamEnd inside Tethys_StreamCamFile -- called at
@@ -818,7 +819,10 @@ void Map::ScreenChange_Common()
 // ScreenChange while PSX_VSync keeps re-submitting the stale list through
 // the synchronous CD stall) and stamps the flip-timer T0 (T1 = the flip's
 // single Tethys_UploadCamBlob).
-extern "C" void Tethys_OnScreenChange(s32 inMenu);
+// 420.ao.1: the wipe effect travels with the notification, for the same reason
+// the level does -- it is consumed several frames later, by which time
+// field_10_screenChangeEffect belongs to the next screen.
+extern "C" void Tethys_OnScreenChange(s32 inMenu, s32 effect);
 #endif
 
 void Map::ScreenChange_4444D0()
@@ -834,7 +838,8 @@ void Map::ScreenChange_4444D0()
     // 310.ao.1: the level is passed IN rather than sampled by the seam --
     // the flip ramp it gates is consumed several frames later, by which
     // time field_0_current_level may already be the next one.
-    Tethys_OnScreenChange(field_0_current_level == LevelIds::eMenu_0 ? 1 : 0);
+    Tethys_OnScreenChange(field_0_current_level == LevelIds::eMenu_0 ? 1 : 0,
+                          static_cast<s32>(field_10_screenChangeEffect));
 #endif
 
     if (sMap_bDoPurpleLightEffect_507C9C && field_0_current_level != LevelIds::eBoardRoom_12)
@@ -1686,14 +1691,21 @@ void Map::Load_Path_Items_445DA0(Camera* pCamera, LoadMode loadMode)
                 // 368.ao.3: back to the 359.ao.2 rule.  The pre-play that made
                 // this conditional is gone, so the paint is once again strictly
                 // BEFORE the film and must be suppressed for every FMV effect.
+                // SATURN 420.ao.1: PAINT IT, HIDDEN, instead of throwing it away.
+                // The film now has VDP2 banks of its own, so this camera can be
+                // decoded into the (unviewed) background container while the film
+                // plays, and revealed at its end by a register switch -- which is
+                // what removes both the black screen and the second CD read of
+                // the same .CAM.  The renderer falls back to the old discard on
+                // its own if it could not claim those banks.
                 const CameraSwapEffects eff = gMap_507BA8.field_10_screenChangeEffect;
-                Tethys_gSuppressCamPaint =
+                Tethys_gCamPaintHidden =
                     (eff == CameraSwapEffects::ePlay1FMV_5
                      || eff == CameraSwapEffects::ePlay2FMVs_9
                      || eff == CameraSwapEffects::ePlay3FMVs_10);
             }
             ResourceManager::Tethys_StreamCamFile(pCamera);
-            Tethys_gSuppressCamPaint = false;
+            Tethys_gCamPaintHidden = false;
 #else
             // Async camera load
             ResourceManager::LoadResourceFile(
@@ -1928,7 +1940,26 @@ void Map::GoTo_Camera_445050()
         }
     }
 
-    if (field_0_current_level != LevelIds::eMenu_0)
+    // SATURN 420.ao.1: test the DESTINATION level, not the current one.
+    // field_0_current_level is still the level we are LEAVING here -- it is
+    // only assigned from field_A_level ~110 lines below (:2045) -- so "New
+    // game" (MainMenu.cpp:2627, eRuptureFarms_1 requested while the menu is
+    // still current) failed this guard and the loading icon was never armed on
+    // the one load the tester actually watches. Reading the destination also
+    // makes "never before the main menu" STRUCTURAL: at boot Init_443EE0 aims
+    // at eMenu_0, which now excludes itself, where before it passed the test
+    // (eNone != eMenu_0) and drew nothing only because Game.cpp loads the icon
+    // resource AFTER this runs -- an accident of initialisation order, not a
+    // guard.
+    // ...but ONLY the boot's arrival at the menu must stay silent, not every
+    // arrival: quitting a level back to the main menu (PauseMenu.cpp:740,
+    // MainMenu.cpp:4138) tears the level down and re-opens S1.LVL, it showed the
+    // icon before this change, and it is a trajectory the tester takes often.
+    // Boot and quit-to-menu share a DESTINATION and differ only in origin, so
+    // the origin is what separates them: Init_443EE0 leaves field_0_current_level
+    // at eNone (:418), and nothing else ever arrives at the menu from eNone.
+    if (field_A_level != LevelIds::eCredits_10
+        && !(field_A_level == LevelIds::eMenu_0 && field_0_current_level == LevelIds::eNone))
     {
         if (field_A_level != field_0_current_level || (field_C_path != field_2_current_path && field_10_screenChangeEffect == CameraSwapEffects::ePlay1FMV_5))
         {
