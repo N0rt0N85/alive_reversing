@@ -35,6 +35,25 @@ static constexpr Layer kDetectorLayer = Layer::eLayer_DoorFlameRollingBallPortal
 static constexpr Layer kDetectorLayer = Layer::eLayer_Foreground_36;
 #endif
 
+// SATURN: 424.ao.2 -- THE LASER'S RED, PUT BACK ON ABE. Layer 31 costs the red
+// the beam and the bar ADD to Abe on the PSX, and in E1/E2 -- the only levels
+// with detectors -- he is a silhouette (sAbeTints_4C6438: 25/25/25, a 3/16
+// shade), so that red is most of what the player sees of the laser on him.
+// VRender asks the renderer to add it to his palette while he stands in the bar
+// (Tethys_HeroLaserTint, src/renderer_saturn.cxx). The PSX adds it as a bright
+// ~13-column line plus the beam; a palette can only add it to ALL of him, so
+// the amounts (5-bit CRAM units) match the PSX's mean red over his pixels when
+// the bar is centred on him -- its most visible moment, and the line is exactly
+// what a uniform tint loses. Composited from the shipped E1P06C04: at rest (Abe
+// still, beam B + F/4) the PSX mean is 45 and 5 gives 45; in detection (Abe
+// walking, beam B + F) it is 72 and 8 gives 71; about 4 without either.
+// Averaged over the whole crossing instead, the PSX adds only 24 and 42.
+#ifdef TETHYS_SATURN
+extern "C" void Tethys_HeroLaserTint(s32 clut, s32 red5);
+static constexpr s32 kLaserRedIdle = 5;   // the beam at B + F/4
+static constexpr s32 kLaserRedDetect = 8; // the beam at B + F
+#endif
+
 MotionDetector* MotionDetector::ctor_437A50(Path_MotionDetector* pTlv, s32 tlvInfo)
 {
     ctor_417C10();
@@ -377,6 +396,22 @@ void MotionDetector::VRender_438250(PrimHeader** ppOt)
         // Add tpage
         Init_SetTPage_495FB0(&field_13C_tPage[gPsxDisplay_504C78.field_A_buffer_index], 0, 0, PSX_getTPage_4965D0(TPageMode::e16Bit_2, field_160_bObjectInLaser != 0 ? TPageAbr::eBlend_1 : TPageAbr::eBlend_3, 0, 0)); // When detected transparency is off, gives the "solid red" triangle
         OrderingTable_Add_498A80(OtLayer(ppOt, field_10_anim.field_C_layer), &field_13C_tPage[gPsxDisplay_504C78.field_A_buffer_index].mBase);
+
+#ifdef TETHYS_SATURN
+        // SATURN: 424.ao.2 -- Abe in the bar is VUpdate_437E90's own detection
+        // test on the same rect, and the beam's mode picks the amount.
+        if (sActiveHero_507678 && sActiveHero_507678->field_BC_sprite_scale == field_BC_sprite_scale)
+        {
+            PSX_RECT heroRect = {};
+            sActiveHero_507678->VGetBoundingRect(&heroRect, 1);
+            if (bLaserRect.x <= (heroRect.w - 8) && bLaserRect.w >= (heroRect.x + 8) && bLaserRect.h >= heroRect.y && bLaserRect.y <= heroRect.h)
+            {
+                const PSX_Point& pal = sActiveHero_507678->field_10_anim.field_8C_pal_vram_xy;
+                Tethys_HeroLaserTint(static_cast<u16>(PSX_getClut_496840(pal.field_0_x, pal.field_2_y)),
+                                     field_160_bObjectInLaser ? kLaserRedDetect : kLaserRedIdle);
+            }
+        }
+#endif
 
         pScreenManager_4FF7C8->InvalidateRect_406E40(
             std::min(x0, std::min(x1, x1)),
