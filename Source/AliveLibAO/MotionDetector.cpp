@@ -20,6 +20,21 @@ namespace AO {
 #undef min
 #undef max
 
+// SATURN: 423.ao.2 -- THE DETECTOR, ITS BEAM AND ITS LASER BAR GO BEHIND THE
+// ACTORS.  AO files all three on eLayer_Foreground_36, over Abe (32) and every
+// other actor (33-35), and relies on the PSX's additive blend to tint whoever
+// stands in the beam.  VDP1 has one framebuffer and can only ADD against the
+// VDP2 background, so a beam or a 37x60 laser bar drawn over Abe replaces his
+// texels and cuts him in two.  Layer 31 is the last one before the actors:
+// they now paint over the effect, which keeps its place above everything else
+// (FG1 at 37 still covers it, as in AO).  The beam's blend itself is the
+// renderer's (Draw(Poly_F3&), src/renderer_saturn.cxx).
+#ifdef TETHYS_SATURN
+static constexpr Layer kDetectorLayer = Layer::eLayer_DoorFlameRollingBallPortalClip_Half_31;
+#else
+static constexpr Layer kDetectorLayer = Layer::eLayer_Foreground_36;
+#endif
+
 MotionDetector* MotionDetector::ctor_437A50(Path_MotionDetector* pTlv, s32 tlvInfo)
 {
     ctor_417C10();
@@ -30,7 +45,7 @@ MotionDetector* MotionDetector::ctor_437A50(Path_MotionDetector* pTlv, s32 tlvIn
     Animation_Init_417FD0(rec.mFrameTableOffset, rec.mMaxW, rec.mMaxH, ppRes, 1);
     field_10_anim.field_4_flags.Set(AnimFlags::eBit7_SwapXY);
     field_10_anim.field_B_render_mode = TPageAbr::eBlend_1;
-    field_10_anim.field_C_layer = Layer::eLayer_Foreground_36;
+    field_10_anim.field_C_layer = kDetectorLayer; // SATURN: was eLayer_Foreground_36
     field_C8_yOffset = 0;
     field_C0_r = 64;
     field_C4_b = 0;
@@ -75,7 +90,7 @@ MotionDetector* MotionDetector::ctor_437A50(Path_MotionDetector* pTlv, s32 tlvIn
             pMotionDetectors->Animation_Init_417FD0(laserRec.mFrameTableOffset, laserRec.mMaxW, laserRec.mMaxH, ppResLaser, 1);
             
             pMotionDetectors->field_10_anim.field_B_render_mode = TPageAbr::eBlend_1;
-            pMotionDetectors->field_10_anim.field_C_layer = Layer::eLayer_Foreground_36;
+            pMotionDetectors->field_10_anim.field_C_layer = kDetectorLayer; // SATURN: was eLayer_Foreground_36
 
             pMotionDetectors->field_A8_xpos = field_F8_top_left_x;
             pMotionDetectors->field_AC_ypos = field_104_bottom_right_y;
@@ -98,7 +113,7 @@ MotionDetector* MotionDetector::ctor_437A50(Path_MotionDetector* pTlv, s32 tlvIn
             pMotionDetectors->Animation_Init_417FD0(laserRec.mFrameTableOffset, laserRec.mMaxW, laserRec.mMaxH, ppResLaser, 1);
             
             pMotionDetectors->field_10_anim.field_B_render_mode = TPageAbr::eBlend_1;
-            pMotionDetectors->field_10_anim.field_C_layer = Layer::eLayer_Foreground_36;
+            pMotionDetectors->field_10_anim.field_C_layer = kDetectorLayer; // SATURN: was eLayer_Foreground_36
             pMotionDetectors->field_A8_xpos = field_100_bottom_right_x;
             pMotionDetectors->field_AC_ypos = field_104_bottom_right_y;
             pMotionDetectors->field_BC_sprite_scale = field_BC_sprite_scale;
