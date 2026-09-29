@@ -1998,6 +1998,10 @@ extern "C" u8* Tethys_CamStreamBulk(u32* pSectors);
 extern "C" u8* Tethys_CamCacheFind(const char_type* name, u32 sectors);
 extern "C" u8* Tethys_CamCacheClaim(const char_type* name, u32 sectors);
 extern "C" void Tethys_CamCacheCommit(u8* claimed);
+// SATURN 426.ao.4: the path span, keyed on the record's file-relative start
+// sector rather than its name -- a span is a run of sectors, and the position
+// is what the LvlFileRecord already carries.
+extern "C" u8* Tethys_CamCachePathFind(s32 start, u32 sectors);
 // SATURN (bt1064): the .CAM LZ4 container. Decoder in src/lz4_saturn.cxx,
 // staging carved off the bulk block in src/renderer_saturn.cxx.
 extern "C" u32 Tethys_Lz4Decode(const u8* src, u32 srcLen, u8* dst, u32 dstCap);
@@ -2352,6 +2356,98 @@ static void Tethys_CamStreamFatal(const char_type* pWhat, const char_type* pName
     ALIVE_FATAL(msg);
 }
 
+#ifdef TETHYS_SATURN
+// SATURN 426.ao.4 -- PRELOAD A WHOLE PATH'S BACKGROUNDS IN ONE CD COMMAND.
+//
+// Called from Map::GoTo_Camera the moment the path changes, BEFORE camera[0] is
+// built, so the screen you arrive on is served from the span like every other
+// one in the path.
+//
+// WHY ONE COMMAND COVERS A PATH: the .LVL is ordered by TYPE, so all the .CAM
+// records sit together and a single path's are adjacent. Measured over the
+// fourteen delivered packs: 73 of the 74 paths are STRICTLY contiguous, and the
+// worst gap in the whole game is 17 sectors -- 112 ms of sectors nobody asked
+// for, once, against the 109.6 ms EACH that every extra command costs. Reading
+// the span blind is therefore cheaper than being clever about the holes.
+//
+// EVERY FAILURE IS A MISS, NEVER A FAULT: no cartridge, a path larger than the
+// slab can lend, a record the archive does not have, a short or failed read --
+// each leaves the span unpublished and the per-screen path below runs exactly
+// as it did in 426.ao.3. There is deliberately NO RETRY here: the ordinary
+// reader keeps its own eight-attempt ladder and will take the screen from CD.
+extern "C" u8* Tethys_CamCachePathClaim(u32 sectors);
+extern "C" void Tethys_CamCachePathCommit(s32 base, u32 sectors);
+
+extern "C" void Tethys_CamPathPreload(const void* pCamNames, s32 count)
+{
+    if (!pCamNames || count <= 0)
+    {
+        return;
+    }
+
+    // The path's camera-name grid is the authoritative list of its screens --
+    // the same array GoTo_Camera walks to find the current camera's index -- so
+    // this asks the archive about exactly the records the path can reach.
+    s32 lo = 0x7FFFFFFF;
+    s32 hi = -1;
+    const char_type* pN = static_cast<const char_type*>(pCamNames);
+    for (s32 i = 0; i < count; i++, pN += sizeof(CameraName))
+    {
+        if (!pN[0])
+        {
+            continue; // empty grid cell; Create_Camera_445BE0 returns null too
+        }
+        char_type nm[16] = {};
+        for (s32 k = 0; k < static_cast<s32>(sizeof(CameraName)); k++)
+        {
+            nm[k] = pN[k];
+        }
+        nm[8] = '.';
+        nm[9] = 'C';
+        nm[10] = 'A';
+        nm[11] = 'M';
+        const LvlFileRecord* pRec = sLvlArchive_4FFD60.Find_File_Record_41BED0(nm);
+        if (!pRec)
+        {
+            continue;
+        }
+        const s32 end = pRec->field_C_start_sector + pRec->field_10_num_sectors;
+        if (pRec->field_C_start_sector < lo)
+        {
+            lo = pRec->field_C_start_sector;
+        }
+        if (end > hi)
+        {
+            hi = end;
+        }
+    }
+    if (hi < 0 || lo >= hi)
+    {
+        return;
+    }
+
+    const u32 span = static_cast<u32>(hi - lo);
+    u8* pDst = Tethys_CamCachePathClaim(span);
+    if (!pDst)
+    {
+        return; // no cart, or this path wants more than the slab can lend
+    }
+
+    CdlLOC loc = {};
+    PSX_Pos_To_CdLoc_49B340(sLvlArchive_4FFD60.field_4_cd_pos + lo, &loc);
+    if (PSX_CD_File_Seek_49B670(2, &loc)
+        && PSX_CD_File_Read_49B8B0(static_cast<s32>(span), pDst)
+        && PSX_CD_FileIOWait_49B900(0) != -1)
+    {
+        Tethys_CamCachePathCommit(lo, span);
+    }
+    else
+    {
+        Tethys_CamCachePathClaim(0); // unreserve: the slots come back
+    }
+}
+#endif
+
 void CC ResourceManager::Tethys_StreamCamFile(Camera* pCamera, bool bitsOnly)
 {
     Tethys_NoteCamLoad(pCamera->field_1E_fileName); // bt993: name the screen for the wedge fatal
@@ -2431,7 +2527,16 @@ void CC ResourceManager::Tethys_StreamCamFile(Camera* pCamera, bool bitsOnly)
     // Both calls are best-effort and return null without a cartridge, which is
     // the whole of the no-cart behaviour: byte-identical to bt1053.
     const u32 camSectors = static_cast<u32>(pRec->field_10_num_sectors);
-    rd.mem = Tethys_CamCacheFind(pCamera->field_1E_fileName, camSectors);
+    // SATURN 426.ao.4: THE PATH SPAN FIRST. It holds every screen of the path we
+    // are in, read in ONE command at the path boundary, so inside a path this is
+    // where every flip is served and the slots below never see a miss. What the
+    // slots are for now is the doors already walked through, which is the one
+    // case a span of the CURRENT path cannot cover by construction.
+    rd.mem = Tethys_CamCachePathFind(pRec->field_C_start_sector, camSectors);
+    if (!rd.mem)
+    {
+        rd.mem = Tethys_CamCacheFind(pCamera->field_1E_fileName, camSectors);
+    }
     // Only a FULL walk may fill a slot. The bitsOnly path (bt817 respawn
     // background refresh) stops after the Bits chunk, so it would leave a
     // partial record behind -- and a partial slot committed as valid streams a
