@@ -79,8 +79,37 @@ public:
 
                     if (mFormat == FG1Format::AO)
                     {
+#ifdef TETHYS_SATURN
+                        // SATURN: 425.ao.1 -- THE ENVELOPE STOPS CARRYING ITS OWN
+                        // PADDING.  Our converter pre-scales every partial block
+                        // to cw x sh = (max(1,(w+1)/2), h) and wrote it at the
+                        // START of the PSX w*h*2 envelope, zero-filling the rest
+                        // -- for one reason only: this walk stepped 12 + w*h*2,
+                        // so the tail had to exist.  Nothing ever READ it: the
+                        // renderer derives the same cw/sh itself (ContractDims)
+                        // and the header's w/h, which give the destination rect
+                        // and the VRAM slot width, are untouched.
+                        //
+                        // So it was half of every FG1 chunk in resident heap,
+                        // held to satisfy an arithmetic step.  On R1P16C10 -- the
+                        // heaviest screen in R1, and the one whose wedge fatal
+                        // started this -- that is 21,120 B of 42,404 handed back,
+                        // and the chunk's CONTIGUOUS demand halves with it, which
+                        // also disarms the other fatal path (CAM chunk OOM, four
+                        // tries and no pressure ladder).  Both of the tester's
+                        // wedges were short by less than this.
+                        //
+                        // Must stay in lockstep with common.fg1_scaled_dims /
+                        // tools/converter/fg1.py: the reader and the writer are
+                        // one contract, and a disc built by the other half of it
+                        // walks into the middle of a chunk.
+                        const s32 contentW = (pChunkIter->field_8_width + 1) / 2 > 0 ? (pChunkIter->field_8_width + 1) / 2 : 1;
+                        const s32 contentH = pChunkIter->field_A_height > 0 ? pChunkIter->field_A_height : 1;
+                        const s32 pixelSizeBytes = contentH * contentW * static_cast<s32>(sizeof(s16));
+#else
                         // The pixel size is variable, calculate the size and move to the end of it to get the next block
                         const s32 pixelSizeBytes = pChunkIter->field_A_height * pChunkIter->field_8_width * sizeof(s16);
+#endif
                         pChunkIter = reinterpret_cast<const Fg1Chunk*>(reinterpret_cast<const u8*>(pChunkIter) + pixelSizeBytes + sizeof(Fg1Chunk));
                     }
                     else

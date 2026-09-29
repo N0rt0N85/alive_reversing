@@ -635,6 +635,30 @@ EXPORT void Factory_PullRingRope_483DA0(Path_TLV* pTlv, Map* /*pMap*/, TlvItemIn
 {
     if (loadMode == LoadMode::LoadResourceFromList_1 || loadMode == LoadMode::LoadResource_2)
     {
+#ifdef TETHYS_SATURN
+        // SATURN: 425.ao.1 -- THE ROPE NEEDS ABE'S HOIST BANK, AND NOTHING ON
+        // THESE SCREENS LOADS IT.  Grabbing a ring rope is Motion_69_
+        // RingRopePullHang, and StateToAnimResource_4204F0 files 64..69 under
+        // res slot 32 = kAbehoistAOResID = ABEHOIST.BAN.  This factory only ever
+        // loaded ROPES + PULLRING.  AO got away with it because GoTo_Camera also
+        // builds the FOUR neighbouring cameras and runs their factories, and
+        // every one of the four rope screens without a Hoist/Edge of its own has
+        // a neighbour that has one (R1P15C06 <- C05/C13, R2P15C06, R6P06C07,
+        // F2P03C04).  We null those four slots (Map.cpp, the 822 KB that the
+        // no-cart heap cannot hold), so the loader is gone and nothing replaces
+        // it.  The failure is silent and ugly: GetLoadedResource returns null,
+        // Set_Animation_Data reads "null means keep your current block", and
+        // Abe's hoist frame table offset is applied to ABEBASIC -- an offset
+        // that lands INSIDE the block, so the ao262.11 bounds guard passes.  He
+        // then draws a garbage header: offset (0,0) instead of (-11,-78), frame
+        // delay 34846 which the s16 counter reads negative so the animation
+        // never advances again, and a compression type outside 0..5 so the cel
+        // upload is skipped and the previous frame's texture stays on screen.
+        // One load, and the wrong-image / frozen / misplaced trio goes away.
+        // Costs 40,364 B of heap on those four screens only; AE does the same
+        // thing in its own PullRingRope factory.
+        ResourceManager::LoadResource_446C90("ABEHOIST.BAN", ResourceManager::Resource_Animation, AOResourceID::kAbehoistAOResID, loadMode);
+#endif
         switch (gMap_507BA8.field_0_current_level)
         {
             case LevelIds::eRuptureFarms_1:
@@ -658,10 +682,22 @@ EXPORT void Factory_PullRingRope_483DA0(Path_TLV* pTlv, Map* /*pMap*/, TlvItemIn
     }
     else
     {
+#ifdef TETHYS_SATURN
+        // SATURN: 425.ao.1 -- wire the load above onto the gauge the overlay
+        // already prints (rm/m, row 12): should it ever fail, m reads 0042
+        // instead of nothing at all.  Safe to add: CheckResourceIsLoaded stopped
+        // being fatal in bt1121, it counts and returns.
+        auto kResourcesToCheck = {
+            AOResourceID::kPullringAOResID,
+            AOResourceID::kRopesAOResID,
+            AOResourceID::kAbehoistAOResID,
+        };
+#else
         auto kResourcesToCheck = {
             AOResourceID::kPullringAOResID,
             AOResourceID::kRopesAOResID,
         };
+#endif
         ResourceManager::CheckResourceIsLoaded(ResourceManager::Resource_Animation, kResourcesToCheck);
 
         auto pPullRingRope = ao_new<PullRingRope>();

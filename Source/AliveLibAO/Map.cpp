@@ -58,6 +58,30 @@ extern "C" bool Tethys_gCamPaintHidden;     // renderer_saturn.cxx (420.ao.1)
 // declaration and its call in GoTo_Camera_445050 move together, always.
 // extern "C" void Tethys_SetFlipEffect(s32 effect); // renderer_saturn.cxx
 extern "C" volatile u32 Tethys_gFlipPostMs; // renderer_saturn.cxx, next to l/lc
+// SATURN 425.ao.10 -- OPENING `lo`, and the first thing it needs is a PARTITION.
+//
+// The CD half of a screen change is closed: 425.ao.7 took the commands from 8.5
+// to 4.4 on hardware and the record cache is at its own ceiling. On those same
+// captures lo runs 313-813 ms against lc 308-960, so the resource tail is no
+// longer the small half of anything -- and NOBODY KNOWS WHAT IS IN IT. lo has
+// been one number since bt1044 and its own banner lists five different jobs.
+//
+// So: five brackets, in the order they run, summing to lo by construction.
+//   q0  Load_Path_Items(camera[0])  -- the screen we are moving TO, objects
+//                                      constructed, and the .CAM re-drive
+//   q1  LoadingLoop                 -- the resource drain; this is where the
+//                                      record CD reads live, so q1 should be
+//                                      the term that FELL between 425.ao.4 and
+//                                      now, and the others should not have moved
+//   q2  four more Load_Path_Items   -- cameras 3, 4, 1, 2, built eagerly
+//   q3  Loader_446590               -- the full TLV pass, every type
+//   q4  Create_FG1s                 -- the foreground rebuild
+//
+// Raw FRT ticks, divided once each at the close like every other flip gauge
+// (bt1021: ms would round a 4 ms phase to 0). Ten FRT reads per flip, which is
+// nothing, and they are COUNTS of time inside a bracket we already print -- so a
+// term that does not add up names its own bug.
+extern "C" volatile u32 Tethys_gFlipQ[5];   // renderer_saturn.cxx
 // bt1046: THE GAP THAT bt1044'S OWN BANNER DENIED. `l` is latched in FlipEnd,
 // which fires from Tethys_CamStreamEnd inside Tethys_StreamCamFile -- called at
 // line 1634 below as the FIRST act of Load_Path_Items. That function then runs
@@ -2260,6 +2284,9 @@ void Map::GoTo_Camera_445050()
     // ordinary game loop already does correctly on every other transition.
     // The tail below now runs unconditionally again, exactly as upstream.
 #endif
+#ifdef TETHYS_SATURN
+    u32 qT = Tethys_RawTicks(); // SATURN 425.ao.10: lo's partition, see the banner
+#endif
     Load_Path_Items_445DA0(field_34_camera_array[0], LoadMode::ConstructObject_0);
 #ifdef TETHYS_SATURN
     // SATURN (bt817): same-screen death->respawn reuses the resident camera[0]
@@ -2281,14 +2308,24 @@ void Map::GoTo_Camera_445050()
     // bt1044's T0 stamp stood here and it was WRONG -- see the gap banner at the
     // top of this file. lo now starts in FlipEnd, so the LoadResourceFromList_1
     // TLV pass that runs inside the call above is inside lo instead of nowhere.
+#ifdef TETHYS_SATURN
+    Tethys_gFlipQ[0] = (Tethys_RawTicks() - qT) / 208u;
+    qT = Tethys_RawTicks();
+#endif
     ResourceManager::LoadingLoop_41EAD0(bShowLoadingIcon);
 #ifdef TETHYS_SATURN
+    Tethys_gFlipQ[1] = (Tethys_RawTicks() - qT) / 208u;
+    qT = Tethys_RawTicks();
     Tethys_gBootPhase = 6;
 #endif
     Load_Path_Items_445DA0(field_34_camera_array[3], LoadMode::ConstructObject_0);
     Load_Path_Items_445DA0(field_34_camera_array[4], LoadMode::ConstructObject_0);
     Load_Path_Items_445DA0(field_34_camera_array[1], LoadMode::ConstructObject_0);
     Load_Path_Items_445DA0(field_34_camera_array[2], LoadMode::ConstructObject_0);
+#ifdef TETHYS_SATURN
+    Tethys_gFlipQ[2] = (Tethys_RawTicks() - qT) / 208u;
+    qT = Tethys_RawTicks();
+#endif
 
     if (!pScreenManager_4FF7C8)
     {
@@ -2301,6 +2338,10 @@ void Map::GoTo_Camera_445050()
 #endif
     Loader_446590(field_20_camX_idx, field_22_camY_idx, LoadMode::ConstructObject_0, TlvTypes::None_m1); // none = load all
 #ifdef TETHYS_SATURN
+    // 425.ao.10: q3 carries the ScreenManager construction above it as well, which
+    // is a once-per-session allocation and never fires on an ordinary flip.
+    Tethys_gFlipQ[3] = (Tethys_RawTicks() - qT) / 208u;
+    qT = Tethys_RawTicks();
     Tethys_gBootPhase = 8;
 #endif
 
@@ -2320,6 +2361,10 @@ void Map::GoTo_Camera_445050()
     Create_FG1s_4447D0();
 
 #ifdef TETHYS_SATURN
+    // 425.ao.10: q4 closes on the same statement lo does, so q0+q1+q2+q3+q4 is
+    // lo to within the four re-stamps -- a gap of more than a few ms between the
+    // sum and lo is a phase running somewhere this partition does not look.
+    Tethys_gFlipQ[4] = (Tethys_RawTicks() - qT) / 208u;
     // SATURN (bt1044): T1 of `lo`. Closed after Create_FG1s and BEFORE the FMV /
     // eUnknown_11 branches below, which are rare, unrelated to the ordinary
     // screen change, and would make the number mean two different things

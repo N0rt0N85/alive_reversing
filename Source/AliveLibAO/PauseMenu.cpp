@@ -25,6 +25,71 @@
 
 namespace AO {
 
+// SATURN: 425.ao.2 -- THE MENU SPEAKS ITS DISC'S LANGUAGE.
+//
+// The tester: "the menu is not localized".  The main menu's own labels never
+// were English -- they are ART, baked into S1.LVL's cameras, and build.ps1
+// already converts one S1 per language.  What stayed English is everything
+// DRAWN OVER that art, and all of it is C++ string literals: this file's six
+// tables, the sixteen level names (which are also the SAVE TITLE written to the
+// console's memory, so localizing them localizes the load screen too) and the
+// remap page in MainMenu.cpp.
+//
+// The translations are not ours to write: Oddworld shipped them, and they are
+// in the localized AbeWin.exe.  tools/menutext.py lifts them out offline and
+// writes these .inc files -- the same shape as tools/lcdmsg.py and the LCD
+// marquee (bt997), for the same reason: a pack read at boot cost 8,552 B of
+// LWRAM and starved SND_CreateDS without a cartridge, while a table baked per
+// language costs only the DELTA in .rodata and not one byte of LWRAM, not one
+// CD read.  +165 B on the French image, +130 B on the Spanish.  The English
+// literals below lose their last referent when an arm is taken, so the linker
+// drops them -- which is why exactly ONE arm may define each table.
+//
+// x AND y COME FROM THE EXECUTABLE TOO, and that is not incidental: the
+// localizers MOVED the columns to fit longer words (French controls sit at
+// x=50/170 where English sits at 80/200).  A translated string at the English
+// x runs off the screen.
+//
+// WHAT THE .inc CANNOT CARRY is the pad glyphs.  The localized executables
+// spell the PC key out as a word ("echap", "intro") or drop it, so the kAO_*
+// control bytes are gone from those lines; they are rebuilt here, around the
+// macros, so the label follows a remapped pad instead of lying about a
+// keyboard.  Accented bytes are written as octal escapes, like the .inc does,
+// because this file is UTF-8 and a raw 'é' would reach the atlas as two bytes
+// and draw two blanks.
+#if defined(TETHYS_SATURN) && !defined(TETHYS_LANG_EN) && defined(TETHYS_LANG_ES) && __has_include("tethys_menu_es.inc")
+    #include "tethys_menu_es.inc"
+    #define TETHYS_MENU_L10N 1
+    #define TETHYS_MENU_QUIT_YESNO   kAO_ConfirmContinue " s\241   " kAO_Esc " no"
+    #define TETHYS_MENU_SAVE_OK      kAO_ConfirmContinue "   guardar"
+    #define TETHYS_MENU_SAVE_CANCEL  kAO_Esc "   cancelar"
+    #define TETHYS_MENU_MORE_EXIT    kAO_ConfirmContinue " m\240s  " kAO_Esc " salir"
+    #define TETHYS_MENU_MOUNT        "montar " kAO_Or " entrar"
+    #define TETHYS_MENU_EXIT         kAO_Esc " salir"
+    #define TETHYS_MENU_SAVED        "GUARDADO"
+    #define TETHYS_MENU_SAVE_FAILED  "FALLO"
+    #define TETHYS_MENU_SLOT_FREE    "-- LIBRE --"
+#elif defined(TETHYS_SATURN) && !defined(TETHYS_LANG_EN) && !defined(TETHYS_LANG_ES) && __has_include("tethys_menu_fr.inc")
+    #include "tethys_menu_fr.inc"
+    #define TETHYS_MENU_L10N 1
+    #define TETHYS_MENU_QUIT_YESNO   kAO_ConfirmContinue " oui   " kAO_Esc " non"
+    #define TETHYS_MENU_SAVE_OK      kAO_ConfirmContinue "   sauvegarder"
+    #define TETHYS_MENU_SAVE_CANCEL  kAO_Esc "   annuler"
+    #define TETHYS_MENU_MORE_EXIT    kAO_ConfirmContinue " plus  " kAO_Esc " quitter"
+    // The French executable lost the second verb here where the Spanish keeps
+    // it ("montar <or> entrar"); "entrer" is the only word in this file that
+    // Oddworld did not write.
+    #define TETHYS_MENU_MOUNT        "monter " kAO_Or " entrer"
+    #define TETHYS_MENU_EXIT         kAO_Esc " quitter"
+    #define TETHYS_MENU_SAVED        "SAUVEGARDE OK"
+    #define TETHYS_MENU_SAVE_FAILED  "ECHEC"
+    #define TETHYS_MENU_SLOT_FREE    "-- LIBRE --"
+#else
+    #define TETHYS_MENU_SAVED        "SAVED"
+    #define TETHYS_MENU_SAVE_FAILED  "SAVE FAILED"
+    #define TETHYS_MENU_SLOT_FREE    "-- EMPTY --"
+#endif
+
 ALIVE_VAR(1, 0x5080E0, PauseMenu*, pPauseMenu_5080E0, nullptr);
 
 const u8 byte_4C5EE8[32] = {
@@ -149,6 +214,25 @@ struct saveName final
 };
 ALIVE_VAR(1, 0x5080C6, saveName, saveNameBuffer_5080C6, {});
 
+#ifdef TETHYS_MENU_L10N
+// SATURN: 425.ao.2 -- these sixteen names are ALSO the save title (:471 copies
+// one into saveNameBuffer), so this array alone localizes the load screen.
+// The eighteen-byte ceiling is not a style rule: the buffer is characters[26],
+// the copy starts at [2] and the path id, its separator and the NUL take the
+// rest, so nineteen bytes stops terminating the string and the strcat that
+// follows walks out of the struct.  Spanish sits EXACTLY on it -- "Templo
+// paramoniano", "Nidos scrabanianos" and two more are 18 bytes to the letter --
+// so tools/menutext.py refuses anything longer rather than trusting a reader to
+// notice.
+const char_type* gLevelNames_4CE1D4[20] = {
+    kTethysMenuLevelNames[0], kTethysMenuLevelNames[1], kTethysMenuLevelNames[2],
+    kTethysMenuLevelNames[3], kTethysMenuLevelNames[4], kTethysMenuLevelNames[5],
+    kTethysMenuLevelNames[6], kTethysMenuLevelNames[7], kTethysMenuLevelNames[8],
+    kTethysMenuLevelNames[9], kTethysMenuLevelNames[10], kTethysMenuLevelNames[11],
+    kTethysMenuLevelNames[12], kTethysMenuLevelNames[13], kTethysMenuLevelNames[14],
+    kTethysMenuLevelNames[15], kTethysMenuLevelNames[16], kTethysMenuLevelNames[17],
+    kTethysMenuLevelNames[18], kTethysMenuLevelNames[19]};
+#else
 const char_type* gLevelNames_4CE1D4[20] = {
     "¸",
     "RuptureFarms",
@@ -170,6 +254,7 @@ const char_type* gLevelNames_4CE1D4[20] = {
     "Rescue Zulag 2",
     "Rescue Zulag 3",
     "Rescue Zulag 4"};
+#endif
 
 enum PauseMenuPages
 {
@@ -822,6 +907,18 @@ static s32 Tethys_DrawLine(AliveFont& font, PrimHeader** ppOt, const char_type* 
 
 ALIVE_VAR(1, 0xA88B90, s8, byte_A88B90, 0);
 
+#ifdef TETHYS_MENU_L10N
+// SATURN: 425.ao.2.  Strings AND columns from the localized executable; the
+// colour and flag bytes are RELIVE's, byte-identical in all three images
+// (menutext.py fails hard if one ever differs, rather than emitting a guess).
+PauseMenu::PauseEntry pauseEntries_4CDE50[6] = {
+    {kTethysMenuPause[0].x, kTethysMenuPause[0].y, kTethysMenuPause[0].s, 128u, 16u, 255u, '\x01'},
+    {kTethysMenuPause[1].x, kTethysMenuPause[1].y, kTethysMenuPause[1].s, 128u, 16u, 255u, '\x01'},
+    {kTethysMenuPause[2].x, kTethysMenuPause[2].y, kTethysMenuPause[2].s, 128u, 16u, 255u, '\x01'},
+    {kTethysMenuPause[3].x, kTethysMenuPause[3].y, kTethysMenuPause[3].s, 128u, 16u, 255u, '\x01'},
+    {kTethysMenuPause[4].x, kTethysMenuPause[4].y, kTethysMenuPause[4].s, 228u, 116u, 99u, '\x01'},
+    {0, 0, nullptr, 0u, 0u, 0u, '\0'}};
+#else
 PauseMenu::PauseEntry pauseEntries_4CDE50[6] = {
     {184, 85, "CONTINUE", 128u, 16u, 255u, '\x01'},
     {184, 110, "SAVE", 128u, 16u, 255u, '\x01'},
@@ -829,15 +926,26 @@ PauseMenu::PauseEntry pauseEntries_4CDE50[6] = {
     {184, 160, "QUIT", 128u, 16u, 255u, '\x01'},
     {184, 42, "- paused -", 228u, 116u, 99u, '\x01'},
     {0, 0, nullptr, 0u, 0u, 0u, '\0'}};
+#endif
 
 PauseMenu::PauseEntry PauseEntry2_4CDE98[2] = {
     {184, 205, "r1p01c01", 128u, 16u, 255u, '\x01'},
     {0, 0, nullptr, 0u, 0u, 0u, '\0'}};
 
+#ifdef TETHYS_MENU_L10N
+// [1] is rebuilt: the localized executables spell "intro"/"echap" out as PC key
+// names, and the French one even carries kAO_Crouch where English has
+// kAO_ConfirmContinue -- so the .inc's bytes would label the wrong pad button.
+PauseMenu::PauseEntry quitEntries_4CDEA8[3] = {
+    {kTethysMenuQuit[0].x, kTethysMenuQuit[0].y, kTethysMenuQuit[0].s, 128u, 16u, 255u, '\x01'},
+    {kTethysMenuQuit[1].x, kTethysMenuQuit[1].y, TETHYS_MENU_QUIT_YESNO, 160u, 160u, 160u, '\x01'},
+    {0, 0, nullptr, 0u, 0u, 0u, '\0'}};
+#else
 PauseMenu::PauseEntry quitEntries_4CDEA8[3] = {
     {184, 110, "REALLY QUIT?", 128u, 16u, 255u, '\x01'},
     {184, 135, kAO_ConfirmContinue " yes   " kAO_Esc " no", 160u, 160u, 160u, '\x01'},
     {0, 0, nullptr, 0u, 0u, 0u, '\0'}};
+#endif
 
 PauseMenu::PauseEntry saveEntries_4CDED0[4] = {
 #ifdef TETHYS_SATURN
@@ -867,14 +975,48 @@ PauseMenu::PauseEntry saveEntries_4CDED0[4] = {
     // was wrong twice over: the Euro atlas holds lettered oval keycaps A..H, not
     // PSX button art -- and the formatter substitutes them before the font ever
     // sees them, so no glyph is drawn at all.)
+    #ifdef TETHYS_MENU_L10N
+    // 425.ao.2: the same two lines with the executable's words.  The .inc's x/y
+    // for these two already match what 390.ao.1 chose; entry [0] above keeps
+    // 150, which is OURS and not in any executable.
+    {kTethysMenuSave[1].x, kTethysMenuSave[1].y, TETHYS_MENU_SAVE_OK, 160u, 160u, 160u, '\x01'},
+    {kTethysMenuSave[2].x, kTethysMenuSave[2].y, TETHYS_MENU_SAVE_CANCEL, 160u, 160u, 160u, '\x01'},
+    #else
     {184, 180, kAO_ConfirmContinue "   save", 160u, 160u, 160u, '\x01'},
     {184, 205, kAO_Esc "   cancel", 160u, 160u, 160u, '\x01'},
+    #endif
 #else
     {184, 180, "enter   save", 160u, 160u, 160u, '\x01'},
     {184, 205, "esc   cancel", 160u, 160u, 160u, '\x01'},
 #endif
     {0, 0, nullptr, 0u, 0u, 0u, '\0'}};
 
+#ifdef TETHYS_MENU_L10N
+// SATURN: 425.ao.2.  The seven GLYPH rows keep RELIVE's kAO_* macros and take
+// only the .inc's COLUMN -- the executable's own bytes there are raw control
+// codes for a PC keyboard, while the macros are substituted through our Saturn
+// button table and follow a remapped pad.  The word rows take both.  French
+// moves the two columns from 80/200 to 50/170 to fit "marcher discretement";
+// at the English x it would run off the screen.
+PauseMenu::PauseEntry controlsPageOne_4CDF00[17] = {
+    {kTethysMenuControls[0].x, kTethysMenuControls[0].y, TETHYS_MENU_MORE_EXIT, 128u, 16u, 255u, '\x01'},
+    {kTethysMenuControls[1].x, kTethysMenuControls[1].y, kTethysMenuControls[1].s, 127u, 127u, 127u, '\x01'},
+    {kTethysMenuControls[2].x, kTethysMenuControls[2].y, kAO_Run " + " kAO_Left " " kAO_Right, 160u, 160u, 160u, '\0'},
+    {kTethysMenuControls[3].x, kTethysMenuControls[3].y, kAO_Sneak " + " kAO_Left " " kAO_Right, 160u, 160u, 160u, '\0'},
+    {kTethysMenuControls[4].x, kTethysMenuControls[4].y, kAO_Jump_Or_Hello " " kAO_Or " " kAO_Up, 160u, 160u, 160u, '\0'},
+    {kTethysMenuControls[5].x, kTethysMenuControls[5].y, kAO_Crouch " " kAO_Or " " kAO_Down, 160u, 160u, 160u, '\0'},
+    {kTethysMenuControls[6].x, kTethysMenuControls[6].y, kAO_Throw " + " kAO_DirectionalButtons, 160u, 160u, 160u, '\0'},
+    {kTethysMenuControls[7].x, kTethysMenuControls[7].y, kAO_Action, 160u, 160u, 160u, '\0'},
+    {kTethysMenuControls[8].x, kTethysMenuControls[8].y, kAO_Up, 160u, 160u, 160u, '\0'},
+    {kTethysMenuControls[9].x, kTethysMenuControls[9].y, kTethysMenuControls[9].s, 128u, 16u, 255u, '\0'},
+    {kTethysMenuControls[10].x, kTethysMenuControls[10].y, kTethysMenuControls[10].s, 128u, 16u, 255u, '\0'},
+    {kTethysMenuControls[11].x, kTethysMenuControls[11].y, kTethysMenuControls[11].s, 128u, 16u, 255u, '\0'},
+    {kTethysMenuControls[12].x, kTethysMenuControls[12].y, kTethysMenuControls[12].s, 128u, 16u, 255u, '\0'},
+    {kTethysMenuControls[13].x, kTethysMenuControls[13].y, kTethysMenuControls[13].s, 128u, 16u, 255u, '\0'},
+    {kTethysMenuControls[14].x, kTethysMenuControls[14].y, kTethysMenuControls[14].s, 128u, 16u, 255u, '\0'},
+    {kTethysMenuControls[15].x, kTethysMenuControls[15].y, TETHYS_MENU_MOUNT, 128u, 16u, 255u, '\0'},
+    {0, 0, nullptr, 0u, 0u, 0u, '\0'}};
+#else
 PauseMenu::PauseEntry controlsPageOne_4CDF00[17] = {
     {184, 205, kAO_ConfirmContinue " more  " kAO_Esc " exit", 128u, 16u, 255u, '\x01'},
     {184, 20, "Actions", 127u, 127u, 127u, '\x01'},
@@ -893,7 +1035,38 @@ PauseMenu::PauseEntry controlsPageOne_4CDF00[17] = {
     {200, 150, "action", 128u, 16u, 255u, '\0'},
     {200, 170, "mount " kAO_Or " zturn", 128u, 16u, 255u, '\0'},
     {0, 0, nullptr, 0u, 0u, 0u, '\0'}};
+#endif
 
+#ifdef TETHYS_MENU_L10N
+// SATURN: 425.ao.2.  Same rule as the controls page -- the eight chord rows and
+// the header chord keep their kAO_* macros, the nine word rows take the
+// executable's text.  Bonus that only shows here: the whistle lines carry the
+// atlas markers 0x17/0x18 that RELIVE's compiled English had lost (it reads
+// "whistle " with a trailing space and nothing after it); the menu sheet is
+// font type 1, which does have those two rects.
+PauseMenu::PauseEntry gamepadGameSpeak_4CDFD0[21] = {
+    {kTethysMenuGameSpeak[0].x, kTethysMenuGameSpeak[0].y, TETHYS_MENU_EXIT, 128u, 16u, 255u, '\x01'},
+    {kTethysMenuGameSpeak[1].x, kTethysMenuGameSpeak[1].y, kTethysMenuGameSpeak[1].s, 127u, 127u, 127u, '\x01'},
+    {kTethysMenuGameSpeak[2].x, kTethysMenuGameSpeak[2].y, kAO_Speak1 " + " kAO_Speak2, 160u, 160u, 160u, '\x01'},
+    {kTethysMenuGameSpeak[3].x, kTethysMenuGameSpeak[3].y, kTethysMenuGameSpeak[3].s, 128u, 16u, 255u, '\x01'},
+    {kTethysMenuGameSpeak[4].x, kTethysMenuGameSpeak[4].y, kTethysMenuGameSpeak[4].s, 128u, 16u, 255u, '\0'},
+    {kTethysMenuGameSpeak[5].x, kTethysMenuGameSpeak[5].y, kTethysMenuGameSpeak[5].s, 128u, 16u, 255u, '\0'},
+    {kTethysMenuGameSpeak[6].x, kTethysMenuGameSpeak[6].y, kTethysMenuGameSpeak[6].s, 128u, 16u, 255u, '\0'},
+    {kTethysMenuGameSpeak[7].x, kTethysMenuGameSpeak[7].y, kTethysMenuGameSpeak[7].s, 128u, 16u, 255u, '\0'},
+    {kTethysMenuGameSpeak[8].x, kTethysMenuGameSpeak[8].y, kTethysMenuGameSpeak[8].s, 128u, 16u, 255u, '\0'},
+    {kTethysMenuGameSpeak[9].x, kTethysMenuGameSpeak[9].y, kTethysMenuGameSpeak[9].s, 128u, 16u, 255u, '\0'},
+    {kTethysMenuGameSpeak[10].x, kTethysMenuGameSpeak[10].y, kTethysMenuGameSpeak[10].s, 128u, 16u, 255u, '\0'},
+    {kTethysMenuGameSpeak[11].x, kTethysMenuGameSpeak[11].y, kTethysMenuGameSpeak[11].s, 128u, 16u, 255u, '\0'},
+    {kTethysMenuGameSpeak[12].x, kTethysMenuGameSpeak[12].y, kAO_Speak1 "+" kAO_Jump_Or_Hello, 160u, 160u, 160u, '\0'},
+    {kTethysMenuGameSpeak[13].x, kTethysMenuGameSpeak[13].y, kAO_Speak1 "+" kAO_Throw, 160u, 160u, 160u, '\0'},
+    {kTethysMenuGameSpeak[14].x, kTethysMenuGameSpeak[14].y, kAO_Speak1 "+" kAO_Crouch, 160u, 160u, 160u, '\0'},
+    {kTethysMenuGameSpeak[15].x, kTethysMenuGameSpeak[15].y, kAO_Speak1 "+" kAO_Action, 160u, 160u, 160u, '\0'},
+    {kTethysMenuGameSpeak[16].x, kTethysMenuGameSpeak[16].y, kAO_Speak2 "+" kAO_Jump_Or_Hello, 160u, 160u, 160u, '\0'},
+    {kTethysMenuGameSpeak[17].x, kTethysMenuGameSpeak[17].y, kAO_Speak2 "+" kAO_Throw, 160u, 160u, 160u, '\0'},
+    {kTethysMenuGameSpeak[18].x, kTethysMenuGameSpeak[18].y, kAO_Speak2 "+" kAO_Crouch, 160u, 160u, 160u, '\0'},
+    {kTethysMenuGameSpeak[19].x, kTethysMenuGameSpeak[19].y, kAO_Speak2 "+" kAO_Action, 160u, 160u, 160u, '\0'},
+    {0, 0, nullptr, 0u, 0u, 0u, '\0'}};
+#else
 PauseMenu::PauseEntry gamepadGameSpeak_4CDFD0[21] = {
     {184, 205, kAO_Esc " exit", 128u, 16u, 255u, '\x01'},
     {184, 20, "GameSpeak", 127u, 127u, 127u, '\x01'},
@@ -916,7 +1089,11 @@ PauseMenu::PauseEntry gamepadGameSpeak_4CDFD0[21] = {
     {192, 148, kAO_Speak2 "+" kAO_Crouch, 160u, 160u, 160u, '\0'},
     {192, 170, kAO_Speak2 "+" kAO_Action, 160u, 160u, 160u, '\0'},
     {0, 0, nullptr, 0u, 0u, 0u, '\0'}};
+#endif
 
+// Not localized, and deliberately: Input_JoyStickEnabled returns true in hard
+// code on Saturn (src/sys_saturn.cxx), so VRender never takes the keyboard arm
+// and these twenty-one entries are unreachable.  menutext.py skips them too.
 PauseMenu::PauseEntry keyboardGameSpeak_4CE0D0[21] = {
     {184, 205, kAO_Esc " exit", 128u, 16u, 255u, '\x01'},
     {184, 20, "GameSpeak", 127u, 127u, 127u, '\x01'},
@@ -1114,7 +1291,7 @@ void PauseMenu::VRender_44E6F0(PrimHeader** ppOt)
             s32 savePolyOffset = 0;
             if (sTethysSaveMsg)
             {
-                const char_type* msg = (sTethysSaveMsg == 1) ? "SAVED" : "SAVE FAILED";
+                const char_type* msg = (sTethysSaveMsg == 1) ? TETHYS_MENU_SAVED : TETHYS_MENU_SAVE_FAILED; // 425.ao.2
                 const u8 r = (sTethysSaveMsg == 1) ? 96u : 255u;
                 const u8 g = (sTethysSaveMsg == 1) ? 255u : 64u;
                 const u8 b = (sTethysSaveMsg == 1) ? 96u : 64u;
@@ -1168,7 +1345,8 @@ void PauseMenu::VRender_44E6F0(PrimHeader** ppOt)
                     }
                     if (w == 2)
                     {
-                        const char_type* empty = "-- LIBRE --";
+                        // 425.ao.2: was French on the Spanish and English discs too.
+                        const char_type* empty = TETHYS_MENU_SLOT_FREE;
                         for (s32 k = 0; empty[k] && w < 30; k++)
                         {
                             line[w++] = empty[k];

@@ -1137,6 +1137,61 @@ s32 Tethys_HeapUsage(u32* pUsedBytes, u32* pLiveBlocks)
     return 0;
 }
 
+// SATURN: 425.ao.1 -- THE NUMBER A WEDGE PHOTO HAS NEVER CARRIED.
+//
+// A staging block that will not fit has two possible causes, and they call for
+// OPPOSITE work: the heap is genuinely FULL (only a smaller resident set or
+// lighter assets help) or it is FRAGMENTED (compaction does).  Nothing on the
+// death screen separated them.  `us` was printed without its denominator -- and
+// the denominator is not the 1,024,000 this file's own comments still quote: on
+// the no-cart target main.cxx re-derives it DOWNWARD to 920,904, so reading a
+// field photo against the literal overstates the free space by 103,096 B.  That
+// one missing number is what turned "the heap is full" into "it must be
+// fragmentation" when the tester's two R1P16C10 wedges came in.
+//
+// So the row now carries us, the real cap, the free total, and this: the largest
+// CONTIGUOUS free run, coalescing adjacent Resource_Free blocks exactly as
+// Allocate_New_Block does before it measures a candidate.  mx close to fr means
+// full; mx far below fr means fragmented.  Same stride walk as
+// Tethys_HeapUsage, and like it, it only ever runs on the fatal path with the
+// heap still intact.
+u32 Tethys_HeapLargestFree()
+{
+    const u8* pBase = sResourceHeap_50EE38;
+    if (!pBase)
+    {
+        return 0;
+    }
+    const u8* pCur = pBase;
+    const u8* pEnd = pBase + kResHeapSize;
+    u32 best = 0;
+    u32 run = 0;
+    u32 guard = 0;
+    while (pCur + sizeof(ResourceManager::Header) <= pEnd && guard++ <= 4096u)
+    {
+        const ResourceManager::Header* pHdr = reinterpret_cast<const ResourceManager::Header*>(pCur);
+        if (pHdr->field_0_size < sizeof(ResourceManager::Header) || (pHdr->field_0_size & 3)
+            || pCur + pHdr->field_0_size > pEnd)
+        {
+            return best; // corrupt stride: report what was measured, never lie
+        }
+        if (pHdr->field_8_type == ResourceManager::Resource_Free)
+        {
+            run += pHdr->field_0_size;
+            if (run > best)
+            {
+                best = run;
+            }
+        }
+        else
+        {
+            run = 0;
+        }
+        pCur += pHdr->field_0_size;
+    }
+    return best;
+}
+
 // SATURN: fatal-time heap accounting (src/sys_saturn.cxx death screen) --
 // the idx-th biggest non-Free block of the resource heap, by selection scan
 // over the used chain (~174 nodes; only runs on the frozen fatal screen).

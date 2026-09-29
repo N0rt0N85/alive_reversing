@@ -34,6 +34,57 @@ const AnimId buttonAnimIds_4BB1B8[4] = {
     AnimId::MenuHighlight_Triangle,
     AnimId::None};
 
+// SATURN: 425.ao.2 -- the localized menu tables; the full rationale is in the
+// banner at the top of PauseMenu.cpp.  Only the remap page's eight action names
+// come from the .inc here.  The four loose lines below are NOT in any of the
+// nine tables menutext.py lifts, so they are the only menu strings in this port
+// that Oddworld did not write -- flagged as such rather than passed off as
+// official.  Accents are octal escapes: this file is UTF-8 and a raw byte would
+// reach the atlas as two and draw two blanks.
+#if defined(TETHYS_SATURN) && !defined(TETHYS_LANG_EN) && defined(TETHYS_LANG_ES) && __has_include("tethys_menu_es.inc")
+    #include "tethys_menu_es.inc"
+    #define TETHYS_MENU_L10N 1
+    #define TETHYS_MM_PRESS_BUTTON "Pulsa un bot\242n"
+    #define TETHYS_MM_FOR_FMT      "para %s"
+    #define TETHYS_MM_OR_START     "o Start para cancelar"
+    #define TETHYS_MM_LOAD_ERROR   "Error al leer la partida"
+#elif defined(TETHYS_SATURN) && !defined(TETHYS_LANG_EN) && !defined(TETHYS_LANG_ES) && __has_include("tethys_menu_fr.inc")
+    #include "tethys_menu_fr.inc"
+    #define TETHYS_MENU_L10N 1
+    #define TETHYS_MM_PRESS_BUTTON "Appuyez sur un bouton"
+    #define TETHYS_MM_FOR_FMT      "pour %s"
+    #define TETHYS_MM_OR_START     "ou Start pour annuler"
+    #define TETHYS_MM_LOAD_ERROR   "Erreur de lecture de la sauvegarde"
+#else
+    #define TETHYS_MM_PRESS_BUTTON "Press button to use"
+    #define TETHYS_MM_FOR_FMT      "for %s"
+    #define TETHYS_MM_OR_START     "or Start to cancel"
+    #define TETHYS_MM_LOAD_ERROR   "Error loading save file"
+#endif
+
+#ifdef TETHYS_SATURN
+// SATURN: 425.ao.1 -- THE LOAD PAGE WAS THROWING TAPS AWAY.
+// The tester: "moving from one save to the next feels slow".  It is not the
+// backup RAM -- a cursor move touches no device at all, the scan happens once
+// when the page opens (IO_EnumerateDirectory, called from To_Load_Update
+// below and nowhere else in the compiled set).  What paces it is AO's own
+// scroll: the render arms field_228 = +-26 and NavigateBetweenTwoPoints bleeds
+// it 4.5, 4.3, 4.1... so it reaches 0 after SEVEN update ticks, each a
+// PSX_VSync(2) -- ~234 ms a line at 60 Hz, ~280 at 50.  That is AO's animation
+// and it stays.
+// What is NOT AO's is that both direction tests are gated on field_228 == 0
+// with the direction read as a LEVEL: press and release inside those seven
+// ticks and the input is simply GONE.  Hold the pad and you crawl; tap it and
+// nothing happens at all.  This latches the dropped direction and replays it
+// the moment the animation lands, so one tap always equals one line, sound and
+// all.  A live direction always beats the latch, and To_Load_Update clears it
+// so a press cannot survive into the next visit (the 420.ao.1 trap: a state
+// latched at T0 that describes the previous screen).
+// The same seven-tick cadence is in three other scrolling lists (controller,
+// FMV select, button remap); left alone until Romain has seen this one.
+static s8 sTethysLoadNavLatch = 0; // -1 up, +1 down, 0 none
+#endif
+
 // TODO: Move out
 ALIVE_VAR(1, 0x507690, s16, sSoundMono_507690, 0);
 
@@ -2288,6 +2339,9 @@ void Menu::To_Load_Update_47D8E0()
     field_1E0_selected_index.raw = 0;
     field_230_bGoBack = 0;
     field_228 = FP_FromInteger(0);
+#ifdef TETHYS_SATURN
+    sTethysLoadNavLatch = 0; // 425.ao.1: never replay last visit's press
+#endif
 
     if (field_1E8_pMenuTrans)
     {
@@ -3762,8 +3816,19 @@ const Menu_Button sRemapScreenButtons_4D0170[10] = {
     {302, 199, AnimId::MenuHighlight_Circle} // Exit
 };
 
+#ifdef TETHYS_MENU_L10N
+// SATURN: 425.ao.2 -- the eight action names of the remap page, from the
+// localized executable (see the banner in PauseMenu.cpp).  They are also read
+// by the "for %s" line below.  Oddworld's own French says "Courrir" and "Pad de
+// loup"; both are kept exactly as shipped.
+const char_type* inputActions_4D0070[8] = {
+    kTethysMenuInputActions[0], kTethysMenuInputActions[1], kTethysMenuInputActions[2],
+    kTethysMenuInputActions[3], kTethysMenuInputActions[4], kTethysMenuInputActions[5],
+    kTethysMenuInputActions[6], kTethysMenuInputActions[7]};
+#else
 const char_type* inputActions_4D0070[8] = {
     "Run", "Sneak", "Jump", "Speak 1", "Action", "Throw", "Crouch", "Speak 2"};
+#endif
 
 
 void Menu::ButtonRemap_Render_47F940(PrimHeader** ppOt)
@@ -3815,7 +3880,7 @@ void Menu::ButtonRemap_Render_47F940(PrimHeader** ppOt)
         const s32 maxFontWidth = 336;
         if (Input_JoyStickEnabled())
         {
-            field_1F4_text = "Press button to use";
+            field_1F4_text = TETHYS_MM_PRESS_BUTTON; // 425.ao.2
         }
         else
         {
@@ -3850,7 +3915,7 @@ void Menu::ButtonRemap_Render_47F940(PrimHeader** ppOt)
         polyOffset = drawnStringOffset;
 
         char_type buffer[40] = {};
-        sprintf(buffer, "for %s", inputActions_4D0070[field_1E0_selected_index.raw]);
+        sprintf(buffer, TETHYS_MM_FOR_FMT, inputActions_4D0070[field_1E0_selected_index.raw]);
         field_1F4_text = buffer;
         auto fontWidth2 = field_FC_font.MeasureWidth_41C280(buffer, FP_FromInteger(1));
         s16 calculatedXposBasedOnWidth2 = 0;
@@ -3882,8 +3947,8 @@ void Menu::ButtonRemap_Render_47F940(PrimHeader** ppOt)
         // SATURN (307.ao.1): there is no Esc, and "none" is not a state our
         // eight-button bijection can hold (src/sys_saturn.cxx, sBind). START is
         // the one unbindable button, so it is what cancels -- say so.
-        field_1F4_text = "or Start to cancel";
-        auto fontWidth3 = field_FC_font.MeasureWidth_41C280("or Start to cancel", FP_FromInteger(1));
+        field_1F4_text = TETHYS_MM_OR_START; // 425.ao.2
+        auto fontWidth3 = field_FC_font.MeasureWidth_41C280(TETHYS_MM_OR_START, FP_FromInteger(1));
 #else
         field_1F4_text = "or Esc for none";
         auto fontWidth3 = field_FC_font.MeasureWidth_41C280("or Esc for none", FP_FromInteger(1));
@@ -4145,7 +4210,7 @@ void Menu::SaveLoadFailed_Render_47DCF0(PrimHeader** ppOt)
 {
     // Note: This string in OG was just "Error" which is completely useless, changed to at least
     // give people a clue about what broke.
-    const char_type* kErrStr = "Error loading save file";
+    const char_type* kErrStr = TETHYS_MM_LOAD_ERROR; // 425.ao.2
 
     s16 xpos = 16;
     const s32 drawWidth = field_FC_font.DrawString_41C360(
@@ -4279,7 +4344,38 @@ void Menu::Load_Update_47D760()
         field_202 = 0;
     }
 
-    if (Input().IsAnyPressed(InputObject::PadIndex::First, InputCommands::eUp))
+#ifdef TETHYS_SATURN
+    // SATURN: 425.ao.1 -- see sTethysLoadNavLatch at the top of this file.
+    bool bNavUp = Input().IsAnyPressed(InputObject::PadIndex::First, InputCommands::eUp) != 0;
+    bool bNavDown = !bNavUp
+        && Input().IsAnyPressed(InputObject::PadIndex::First, InputCommands::eDown | InputCommands::eCheatMode) != 0;
+    if (field_228 != FP_FromInteger(0))
+    {
+        // the animation is running: remember the direction instead of losing it
+        if (bNavUp)
+        {
+            sTethysLoadNavLatch = -1;
+        }
+        else if (bNavDown)
+        {
+            sTethysLoadNavLatch = 1;
+        }
+    }
+    else if (bNavUp || bNavDown)
+    {
+        sTethysLoadNavLatch = 0; // a live direction supersedes a stale latch
+    }
+    else if (sTethysLoadNavLatch != 0)
+    {
+        bNavUp = (sTethysLoadNavLatch < 0);
+        bNavDown = (sTethysLoadNavLatch > 0);
+        sTethysLoadNavLatch = 0;
+    }
+#else
+    const bool bNavUp = Input().IsAnyPressed(InputObject::PadIndex::First, InputCommands::eUp) != 0;
+    const bool bNavDown = Input().IsAnyPressed(InputObject::PadIndex::First, InputCommands::eDown | InputCommands::eCheatMode) != 0;
+#endif
+    if (bNavUp)
     {
         if (field_1E0_selected_index.raw > 0 && field_228 == FP_FromInteger(0))
         {
@@ -4299,7 +4395,7 @@ void Menu::Load_Update_47D760()
     }
     else
     {
-        if (Input().IsAnyPressed(InputObject::PadIndex::First, InputCommands::eDown | InputCommands::eCheatMode))
+        if (bNavDown)
         {
             if (field_1E0_selected_index.raw < (sSaveIdx_9F2DD8 - 1) && field_228 == FP_FromInteger(0))
             {
