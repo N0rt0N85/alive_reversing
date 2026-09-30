@@ -69,7 +69,17 @@ void CC New_Smoke_Particles_419A80(FP xpos, FP ypos, FP scale, s16 count, s16 ty
 
             pParticle->field_B4_velx = (scale * FP_FromInteger(Math_RandomRange_450F20(-10, 10))) / FP_FromInteger(10);
             pParticle->field_B8_vely = ((scale * velYCounter) * FP_FromInteger(Math_RandomRange_450F20(50, 50))) / FP_FromInteger(100);
+#ifdef TETHYS_SATURN
+            // SATURN 427.ao.7: the puff's cels are pre-shrunk to 7/10 in the pack
+            // (tools/converter/anim.py, PRESCALE_CELS), so the scale carries the
+            // inverse and the puff is the same size on screen as it always was.
+            // BOTH the starting scale and its per-tick growth move, because the
+            // growth is in the same units -- correcting only the first would make
+            // the puff expand 43 % too slowly and end 30 % too small.
+            pParticle->field_BC_sprite_scale = scale * FP_FromDouble(10.0 / 7.0);
+#else
             pParticle->field_BC_sprite_scale = scale;
+#endif
 
             if (scale == FP_FromInteger(1))
             {
@@ -80,7 +90,11 @@ void CC New_Smoke_Particles_419A80(FP xpos, FP ypos, FP scale, s16 count, s16 ty
                 pParticle->field_10_anim.field_C_layer = Layer::eLayer_Foreground_Half_17;
             }
 
+#ifdef TETHYS_SATURN
+            pParticle->field_E4_scale_amount = scale * FP_FromDouble(0.03 * 10.0 / 7.0);
+#else
             pParticle->field_E4_scale_amount = scale * FP_FromDouble(0.03);
+#endif
             pParticle->field_10_anim.field_10_frame_delay = static_cast<u16>((i + 3) / 2);
             if (Math_NextRandom() < 127)
             {

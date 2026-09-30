@@ -11,6 +11,41 @@
 #include "Particle.hpp"
 #include "BaseAliveGameObject.hpp"
 
+// SATURN 427.ao.8 -- ONE NAME, BECAUSE TWO SITES HAVE TO AGREE ON THIS NUMBER.
+//
+// field_BC_sprite_scale IS NOT A RENDERING FIELD ON A BOMB, and that is the whole
+// bug. DealDamageRect_417A50 uses it as the SCALE-PLANE DISCRIMINATOR: it damages
+// an object only when
+//
+//     field_BC_sprite_scale == pObj->field_BC_sprite_scale * 2.75
+//
+// which is AO's way of writing "the bomb and the target are on the same plane",
+// full size or the half size a background path uses. The bomb's own scale is set
+// to `scale * 2.75` in the constructor, so the equality reduces to
+// `scale == pObj scale` and nothing else.
+//
+// 427.ao.7 pre-shrank the blast cels to 7/10 (tools/converter/anim.py,
+// PRESCALE_CELS) and multiplied the bomb's scale by 10/7 to put the same picture
+// back on screen. That is correct for the DRAW and it silently made the equality
+// above unsatisfiable, because only ONE of the two sides moved. A mine therefore
+// damaged nothing at all, which the tester found in one sentence: "abe ne meurt
+// plus". Not just Abe: no slig, no mudokon, nothing in blast range.
+//
+// I had asked myself this exact question before shipping and answered it wrong.
+// I checked that the damage RECT is built from field_E4_scale, which is true, and
+// concluded field_BC_sprite_scale was cosmetic -- without reading the per-object
+// FILTER twenty lines further down. Half of the damage path is not the path.
+//
+// The number now has a name and BOTH sites read it, so they cannot drift again.
+// The equality stays exact in fixed point: both sides are the same FP multiply
+// applied to equal operands, so they are bit-identical whenever the planes match,
+// exactly as they were with AO's bare 2.75.
+#ifdef TETHYS_SATURN
+#define TETHYS_BOMB_SPRITE_SCALE (2.75 * 1000.0 / 827.0)
+#else
+#define TETHYS_BOMB_SPRITE_SCALE 2.75
+#endif
+
 namespace AO {
 
 ALIVE_VAR(1, 0x4FFA4C, s16, word_4FFA4C, 0);
@@ -112,7 +147,28 @@ void BaseBomb::VUpdate_417580()
             break;
     }
 
+    // SATURN 427.ao.7: 3 -> 1, AND IT IS A FIDELITY TRADE THE TESTER ASKED FOR
+    // BY NAME ("si c'est trop lourd on les rapproche ?").
+    //
+    // This second blast is the SAME animation as BaseBomb's own, mirrored, at the
+    // same position, started this many frames later; both advance one frame per
+    // tick, so the offset is permanent and the two NEVER share a cel. That is
+    // what makes the mine the one burst in the game the cel cache cannot serve
+    // -- every other effect puts its instances on the same frame in the same
+    // tick and dedups for free.
+    //   Holding a three-frame gap means holding FOUR consecutive cels: 10,880 B
+    // pre-shrunk, plus 3,728 for the rest of the explosion, against a 16,384 B
+    // scratch that also has to decode. It does not fit. At one frame it is two
+    // cels, 9,168 B in all, 74 % of the enlarged cache -- and the second
+    // animation's decode disappears entirely.
+    //   WHAT IT COSTS ON SCREEN: the mirrored blast appears two ticks earlier and
+    // the whole effect ends two ticks sooner, 33 -> 31 ticks. Revert by putting
+    // the 3 back; nothing else depends on the number.
+#ifdef TETHYS_SATURN
+    if (field_10_anim.field_92_current_frame == 1)
+#else
     if (field_10_anim.field_92_current_frame == 3)
+#endif
     {
         const AnimRecord& rec = AO::AnimRec(AnimId::Explosion_Mine);
         u8** ppRes = ResourceManager::GetLoadedResource_4554F0(ResourceManager::Resource_Animation, rec.mResourceId, 1, 0);
@@ -128,15 +184,24 @@ void BaseBomb::VUpdate_417580()
                     rec.mMaxW,
                     rec.mMaxH,
                     ppRes);
+#ifdef TETHYS_SATURN
+                // SATURN 427.ao.3: THE FOUR ASSIGNMENTS MOVED INSIDE THE GUARD.
+                // Upstream writes them after an `else { pParticle = nullptr; }`,
+                // i.e. it dereferences the null it just assigned. On PC that is
+                // unreachable because operator new never returns null; here
+                // ao_new_malloc_447520 returns a SOFT NULL under heap pressure
+                // (the whole point of the refusal policy), and a mine explodes
+                // at exactly the moment the heap is fullest. The result would be
+                // a write through address ~0x30, which is a wild write, not a
+                // fault. Same family as the Animation Init refusal that produced
+                // "no more fatal, but the Mudokon is gone": a refused allocation
+                // must cost this second sprite, never the machine.
+#endif
+                pParticle->field_10_anim.field_4_flags.Set(AnimFlags::eBit5_FlipX);
+                pParticle->field_CC_bApplyShadows &= ~1u;
+                pParticle->field_10_anim.field_B_render_mode = TPageAbr::eBlend_1;
+                pParticle->field_BC_sprite_scale = field_BC_sprite_scale * FP_FromDouble(0.7);
             }
-            else
-            {
-                pParticle = nullptr;
-            }
-            pParticle->field_10_anim.field_4_flags.Set(AnimFlags::eBit5_FlipX);
-            pParticle->field_CC_bApplyShadows &= ~1u;
-            pParticle->field_10_anim.field_B_render_mode = TPageAbr::eBlend_1;
-            pParticle->field_BC_sprite_scale = field_BC_sprite_scale * FP_FromDouble(0.7);
         }
     }
 
@@ -216,7 +281,8 @@ void BaseBomb::DealDamageRect_417A50(const PSX_RECT* pRect)
             if (obj_xpos >= left && obj_xpos <= right)
             {
                 const s16 obj_ypos = FP_GetExponent(pObj->field_AC_ypos);
-                if (obj_ypos >= top && obj_ypos <= bottom && field_BC_sprite_scale == (pObj->field_BC_sprite_scale * FP_FromDouble(2.75)))
+                // SATURN: the constant is shared with the constructor below.
+                if (obj_ypos >= top && obj_ypos <= bottom && field_BC_sprite_scale == (pObj->field_BC_sprite_scale * FP_FromDouble(TETHYS_BOMB_SPRITE_SCALE)))
                 {
                     pObj->VTakeDamage(this);
                 }
@@ -255,7 +321,18 @@ BaseBomb* BaseBomb::ctor_4173A0(FP xpos, FP ypos, s32 /*unused*/, FP scale)
     }
 
     field_CC_bApplyShadows &= ~1u;
-    field_BC_sprite_scale = scale * FP_FromDouble(2.75);
+    // SATURN 427.ao.7: THE BLAST CEL IS PRE-SHRUNK TO 7/10 IN THE PACK
+    // (tools/converter/anim.py, PRESCALE_CELS), so this carries the inverse and
+    // the explosion is the same size on screen as it has always been.
+    //   WHY IT IS ONE LINE AND NOT TWO. The Particle spawned at frame 1 above
+    // takes `field_BC_sprite_scale * 0.7` from THIS value, so it inherits the
+    // correction; correcting it again would make the second blast 43 % too big.
+    //   WHY IT IS SAFE TO MAGNIFY FURTHER. 427.ao.5 restored Animation::VRender's
+    // upscale branch in the renderer, which sizes the VDP1 command from the QUAD
+    // and stretches the texture into it, pad included, at the measured ratio.
+    //   AND WHY IT IS A NAMED CONSTANT: see the header of this file. The damage
+    // filter compares against the same number, and 427.ao.7 moved only this side.
+    field_BC_sprite_scale = scale * FP_FromDouble(TETHYS_BOMB_SPRITE_SCALE);
 
     field_A8_xpos = xpos;
     field_AC_ypos = ypos;

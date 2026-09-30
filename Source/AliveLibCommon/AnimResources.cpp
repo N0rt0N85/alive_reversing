@@ -1342,9 +1342,14 @@ constexpr CombinedAnimRecord kAnimRecords[] = {
     {AnimId::ChantOrb_Particle, 
         {"OMMFLARE.BAN", 1632, 39, 21, kOmmflareResID, PalId::Default},
         {"OMMFLARE.BAN", 1492, 38, 21, AO::kOmmflareAOResID, PalId::Default}},
+    // SATURN 427.ao.7: the AO half's cap follows the pre-shrunk cel (61x44 * 7/10
+    // = 42x30). This is what sizes the per-puff VRAM rect, so it is where the
+    // saving actually lands: 1,408 -> 720 B, times every live puff, times two for
+    // the animated-slot back buffer. The AE half names a different table (5084,
+    // a different chunk) and is untouched.
     {AnimId::SquibSmoke_Particle,
         {"SQBSMK.BAN", 5084, 61, 44, kSquibSmokeResID, PalId::Default},
-        {"SQBSMK.BAN", 4108, 61, 44, AO::kSquibSmokeAOResID, PalId::Default}},
+        {"SQBSMK.BAN", 4108, 42, 30, AO::kSquibSmokeAOResID, PalId::Default}},
     {AnimId::Explosion_Rocks, {"DEBRIS00.BAN", 6484, 71, 36, kDebrisID00ResID, PalId::Default}, kNullAnimDetails},
     {AnimId::Explosion_Sticks, {"STICK.BAN", 1704, 49, 29, kStickGibResID, PalId::Default}, kNullAnimDetails},
     {AnimId::Mine_Flash,
@@ -1407,7 +1412,12 @@ constexpr CombinedAnimRecord kAnimRecords[] = {
     // TODO: check if AO blood.ban is blood or blood drop
     {AnimId::BloodDrop, {"BLOODROP.BAN", 308, 11, 7, kBloodropResID, PalId::Default}, kNullAnimDetails},
 
-    {AnimId::Blood, kNullAnimDetails, { "BLOOD.BAN", 276, 6, 7, AO::kBloodropAOResID, PalId::Default} },
+    // SATURN 427.ao.6: maxW/maxH 6/7 -> 16/15. Animation_Init sizes the VRAM rect
+    // from these two numbers, and the converter now emits this cel as FOUR
+    // droplets inside one 16x15 box (tools/converter/anim.py CLUSTER_CELS), so a
+    // 6x7 rect would be overrun by the upload rather than clip it. The AO half
+    // only; AE's BloodDrop record is untouched.
+    {AnimId::Blood, kNullAnimDetails, { "BLOOD.BAN", 276, 16, 15, AO::kBloodropAOResID, PalId::Default} },
     {AnimId::Bone, { "BTHROW.BND", 456, 15, 9, kBoneResID, PalId::Default}, kNullAnimDetails },
     {AnimId::BoneBag_Idle, { "BONEBAG.BAN", 8748, 64, 60, kBoneBagResID_590, PalId::Default}, kNullAnimDetails },
     {AnimId::BoneBag_HardHit, { "BONEBAG.BAN", 8708, 64, 60, kBoneBagResID_590, PalId::Default}, kNullAnimDetails },
@@ -1501,7 +1511,16 @@ constexpr CombinedAnimRecord kAnimRecords[] = {
         {"EXPLO2.BAN", 27376, 200, 91, AO::kExplo2AOResID, PalId::Default}},
     {AnimId::Explosion_Mine, 
         {"EXPLODE.BND", 51588, 214, 49, kBgexpldResID, PalId::Default},
-        {"EXPLODE.BND", 51600, 214, 49, AO::kBgexpldAOResID, PalId::Default}},
+        // SATURN 427.ao.8: the AO half's cap follows the pre-shrunk cel (214x49 *
+        // 827/1000 = 176x40, and the largest cel IS the cap here, measured).
+        // 176 is the point of the odd factor: sat_tex_w(176) = 88 exactly, so the
+        // row carries no CMDSIZE pad at all.
+        // Animation_Init_417FD0 sizes the VRAM rect from these two bytes, so
+        // leaving them would claim 5,488 B per rect for 2,720 B of picture -- and
+        // the renderer would count every upload as oversized against its
+        // vram_alloc contract. The AE half above is untouched: it names a
+        // different table (51588), in a different chunk, and AE does not run.
+        {"EXPLODE.BND", 51600, 176, 40, AO::kBgexpldAOResID, PalId::Default}},
 
     {AnimId::Explosion_Small, { "SMEXP.BAN", 14108, 99, 46, kSmallExplo2ResID, PalId::Default}, kNullAnimDetails },
     {AnimId::FallingCrate_Falling, { "FALLBONZ.BAN", 8076, 86, 47, kF2rockResID, PalId::Default}, kNullAnimDetails },

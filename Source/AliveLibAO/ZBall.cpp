@@ -106,6 +106,48 @@ ZBall* ZBall::ctor_478590(Path_ZBall* pTlv, s32 tlvInfo)
         }
 
         field_10_anim.vDecode();
+
+#ifdef TETHYS_SATURN
+        // SATURN 427.ao.4 -- THE THREE BALLS STOP DECODING ON THE SAME TICK.
+        //
+        // WHAT THIS COSTS TODAY, measured on the delivered F2.LVL rather than
+        // estimated. Swinging_Ball_Normal (F2ZBALL.BAN chunk 2001, table 72172)
+        // is fps=2 -- a DELAY, so one new cel every two ticks -- 27 frames, and
+        // its cels run 7,248 to 13,104 B. Both screens that carry ZBalls carry
+        // THREE of them (F2 path 3 cell 4 and F2 path 7 cell 1, all speed
+        // eNormal_0, start_pos Out/In/Center), and the three land on frames 0,
+        // 13 and 6 through the switch above.
+        //   Different FRAMES, same PARITY: SetFrame_402AC0 arms the counter at 1
+        // and the vDecode above re-arms all three to frame_delay = 2, so
+        // AnimateAll decrements them in lockstep and all three decompress on the
+        // SAME tick, then nothing on the next. The worst such tick sums
+        // f[25]+f[19]+f[6] = 34,384 B = 21.83 ms of decompression alone, against
+        // a 33.4 ms budget, for as long as the player stands on the screen. This
+        // is not a burst like an explosion: it is the steady state of two shipped
+        // screens, and it is the largest single decode tick found anywhere in the
+        // game, worse than a mine.
+        //
+        // WHY ONE BALL AND WHY THE CENTRE ONE. At fps=2 there are exactly two
+        // parities, so three balls cannot spread further than 2+1 and the choice
+        // is which one moves. Enumerated over all 27 frame sizes and both phases:
+        // moving the CENTRE ball gives 21,496 B = 13.64 ms, moving Out or In
+        // gives 25,992 or 26,208 B. So -8.19 ms, and the arithmetic is exhaustive
+        // rather than sampled.
+        //
+        // WHAT IT DOES NOT CHANGE. Every ball still shows the same frames in the
+        // same order at the same rate, so the image is pixel-identical; the MEAN
+        // is untouched (9.78 ms/tick either way) because the same bytes are
+        // decoded, just not all on one tick. The centre ball's cycle shifts by
+        // ONE tick, which moves its ZBall/SackWobble SFX and its smacker rect
+        // (kZBall_Anim_Frame_Fns_4CEBF8) by 16.7 ms. Nothing in AO compares two
+        // balls' frame numbers to each other, so no behaviour keys on their being
+        // in phase -- and being in phase is not something AO arranged, it is a
+        // side effect of all three constructing on the same tick.
+        if (pTlv->field_18_start_pos == Path_ZBall::StartPos::eCenter_0)
+        {
+            field_10_anim.field_E_frame_change_counter = 1;
+        }
+#endif
     }
 
     if (pTlv->field_1A_scale != Scale_short::eFull_0)

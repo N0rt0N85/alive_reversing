@@ -45,6 +45,289 @@ extern "C" unsigned int Tethys_gDcRaw;
 // 16 KiB without one -- src/main.cxx) and reads 0 when there is no scratch.
 extern "C" unsigned int Tethys_gDbufScratchBytes;
 extern "C" unsigned char* Tethys_gDbufScratch;
+
+// SATURN 427.ao.3 -- WHAT THE SHARED SCRATCH ALREADY HOLDS, ONE ENTRY DEEP.
+//
+// WHY THIS EXISTS. A Gibs object is EIGHT Animation instances that share ONE
+// chunk: one head, two arms and five bodies, and the five bodies all read the
+// SAME frame table. They sit consecutively in gObjList_animations_505564, so
+// AnimateAll walks them back to back and decompresses the identical cel five
+// times into the identical scratch, then uploads it to five different VRAM
+// rects. Measured on the delivered packs: Abe blown up by a meat saw builds two
+// Gibs objects, 6,688 B of decompression on the peak advance tick, of which
+// only 2,256 B is distinct content. A Slig death is 2,544 B of which 1,464 B
+// (58 %) is the same two cels decoded again.
+//
+// WHAT IT IS AND IS NOT. It memoises the DECOMPRESSION only. The upload still
+// runs for every instance, because each has its own VRAM rect -- so the frame
+// is pixel-identical and no slot, no rect and no timing changes. It is one
+// entry because the repeats are CONSECUTIVE by construction (the parts are
+// pushed in order at Gibs.cpp:122); a deeper memo would cost state to catch
+// nothing.
+//
+// THE THREE WAYS THE SCRATCH CAN STOP HOLDING WHAT WE THINK, all closed here:
+//   1. the chant glow composites INTO pDst between the decode and the upload
+//      (387.ao.1, route 3), so the buffer is no longer the pristine decode --
+//      the memo is dropped right after it runs;
+//   2. the FMV driver borrows the same scratch (movie_cinepak.cxx), so that
+//      hand-out drops it too, at its single site, the same discipline the .CAM
+//      bulk block uses;
+//   3. a frame too big for the scratch decodes into its OWN buffer instead
+//      (the fb fallback), which leaves the scratch untouched -- so the memo
+//      stays VALID there, and that is why the update below is conditional
+//      rather than unconditional.
+// The key is the source pointer PLUS the declared destination length. A heap
+// compaction moves the block under us, which changes the pointer, which is a
+// miss -- the safe direction. Nothing here can serve the wrong bytes: a miss
+// costs exactly what today costs.
+// 427.ao.5 -- THE ONE-ENTRY MEMO BECOMES A CEL CACHE, IN THE SAME BUFFER.
+//
+// WHAT 427.ao.3 COULD NOT DO. One entry only catches instances decoding the
+// SAME cel on the SAME tick, which is the Gibs shape (eight parts sharing one
+// chunk, walked back to back). It catches nothing when the instances are a few
+// frames APART -- and that is the more common shape: New_Smoke_Particles spawns
+// three SquibSmoke puffs a tick apart, OrbWhirlWind spawns sixteen chant orbs
+// four ticks apart, a mine's echo Particle trails its blast by three frames.
+// Every one of those decodes a cel a sibling decoded a moment ago.
+//
+// WHAT MAKES IT FREE. The shared scratch is 16,384 B without a cartridge and
+// 32,768 with, and it held exactly ONE cel. Measured over the delivered packs,
+// the WHOLE decoded loop of each repeating effect fits inside it:
+//     chant orbs (OMMFLARE 312)   1,600 B over 8 cels
+//     smoke      (SQBSMK 354)     7,048 B over 8 cels
+//     gibs       (ABEBLOW 25)     1,952 B over 8 cels
+//     blood      (BLOODROP 366)      72 B over 5 cels
+// so an animation whose loop is cached decodes each cel ONCE and never again,
+// however many instances it has and however they are staggered. The two cases
+// that do NOT fit are the ones whose cels are huge: Explosion_Mine is 122,496 B
+// over 30 cels and Swinging_Ball_Normal 277,376 B over 27, i.e. 7.5x and 16.9x
+// the buffer. Those want a smaller SOURCE, not a bigger cache.
+//
+// THE LAYOUT, and it is chosen so a big decode does not flush the useful half.
+// Cached entries are bump-allocated DOWNWARD from the top of the scratch and
+// never cross the half-way mark; a cel too big to cache (over kTethysCelMax)
+// decodes at offset 0 UPWARD, exactly as it always did. The two regions meet
+// only when a single cel needs more than half the buffer -- 8 KiB without a
+// cartridge -- and only then does anything get evicted. Everything in R1 except
+// the ZBall is under that.
+//
+// WHAT CAN GO WRONG AND WHERE IT IS CLOSED. The key is the cel's source pointer
+// plus its declared destination length, so:
+//   * a heap COMPACTION moves the block: the pointer changes, every entry for
+//     it misses, and a miss costs exactly what today costs. But the address it
+//     vacated can be re-tenanted, so ResourceManager::Reclaim_Memory_455660
+//     flushes the cache outright rather than relying on that.
+//   * a resource is FREED and its address reused: FreeResource_Impl_4555B0
+//     flushes for the same reason.
+//   * the chant glow composites INTO the decoded cel (387.ao.1 route 3), so the
+//     buffer no longer holds the pristine decode -- dropped right after it runs.
+//   * the FMV driver borrows the whole scratch (movie_cinepak.cxx) -- dropped at
+//     its single hand-out point.
+//   * a frame too big for the scratch decodes into its OWN buffer (the fb
+//     fallback), which leaves the scratch untouched, so entries stay valid.
+// Only type 4/5 frames ever reach the scratch (bTethysScratch tests the
+// compression type), so a type-0 cel -- which is uploaded straight from the
+// block and never decoded -- can neither enter nor evict.
+//
+// THE UPLOAD IS UNCHANGED. Like the memo it replaces, this caches the
+// DECOMPRESSION only; every instance still uploads to its own VRAM rect, so the
+// frame is pixel-identical and no slot, rect or timing moves.
+// 427.ao.7: 2048 -> 2816. The number is not rounder than the thing it has to
+// admit: the largest PRE-SHRUNK Explosion_Mine cel is 2,720 B (214x49 * 7/10 ->
+// 149x34 -> 80x34 at 8bpp, measured off the emitted chunk), and at 2,048 it was
+// the one burst in the game whose cels could not enter the cache at all. Every
+// other effect was already under the old cap and unaffected: rocks 600, sticks
+// 252, meat 600, flares 1,720, smoke 1,408, gibs 576.
+// 427.ao.8: 2816 -> 3520, to admit the 827/1000 blast cel (176x40 -> 88x40 at
+// 8bpp = 3,520 B exactly). It also admits Abe's biggest type-5 cels (3,072 B,
+// ABEBSIC.BAN 84x64), which used to decode below the floor and cost the cache
+// nothing -- that is what the floor move below pays for.
+static const unsigned int kTethysCelMax = 3520u;   // per-entry cap, bytes
+static const unsigned int kTethysCelSlots = 24u;
+
+struct TethysCelEntry
+{
+    const unsigned char* src;
+    unsigned int len;
+    unsigned int off;
+};
+static TethysCelEntry sTethysCel[kTethysCelSlots];
+static unsigned int sTethysCelN = 0;
+static unsigned int sTethysCelLow = 0;              // 0 == not yet armed
+
+extern "C" unsigned int Tethys_gDbufMemoHits = 0;   // 'sv' on overlay row 3
+// 427.ao.6: the blood resource block, published by Blood::ctor_4072B0. A cel
+// decoded out of THIS block is composed into a cluster before it is uploaded
+// (src/blood_scatter.cxx) and must therefore never be served from, or entered
+// into, the cel cache: the composition is PER OBJECT, so handing object B the
+// buffer object A just composed would give both the same layout, which is the
+// whole point of moving the draw to runtime. Blood cels are 28 B, so excluding
+// them costs the cache nothing it wanted.
+extern "C" unsigned char* Tethys_gBloodBlock = nullptr;
+extern "C" void Tethys_BloodScatter(unsigned char* pDst, int psxW, int psxH,
+                                    int dstCap, unsigned int objSeed,
+                                    unsigned int frameSeed);
+extern "C" unsigned int Tethys_gDbufCelLive = 0;    // 'e'  on overlay row 28
+extern "C" unsigned int Tethys_gDbufCelWraps = 0;   // 'ev' on overlay row 28
+
+// 427.ao.8: AND FROM A QUARTER TO AN EIGHTH, 12,288 -> 14,336 B without a
+// cartridge, because raising the per-entry cap to 3,520 pulls Abe's own 3,072 B
+// cels into the cache and they have to fit BESIDE the blast, not instead of it.
+// Measured for the 827/1000 blast: window of 2 cels 7,040 B, plus everything
+// else allocated in the same tick (Abe up to 3,072, rock 600, smoke 720, flash
+// 192, mudokon 1,360) = 12,984 B, so 1,352 B of slack against 14,336.
+//   The floor is what a cel TOO BIG to cache may overwrite, and on a mine screen
+// nothing decodes below it any more: the largest type-5 cel there is the blast's
+// own 3,520 B, which is now cached rather than decoded low.
+//
+// 427.ao.7: THE SPLIT MOVED FROM A HALF TO A QUARTER, 8,192 -> 12,288 B of cache
+// without a cartridge.
+//
+// WHY IT HAD TO. The mine's two animations run three frames apart forever
+// (BaseBomb spawns its Particle at frame 3 and both advance one frame a tick),
+// so for the second one's decode to become a hit the cache must hold gap+1
+// consecutive cels. Measured on the pre-shrunk chunk: 2 cels 5,440 B, 3 cels
+// 8,160, 4 cels 10,880 -- and the rest of the explosion (one rock cel 600, one
+// flare 1,720, one smoke 1,408) adds 3,728 on top. Against the old 8,192 not
+// even a one-frame gap fitted.
+//
+// WHAT IT COSTS, and it is a real cost stated plainly: a cel too big to cache
+// decodes at offset 0 UPWARD, and anything it reaches is dropped
+// (TethysCelEvictLow). Raising the ceiling from 8,192 to 12,288 means a decode
+// between 4,096 and 8,192 B now evicts where it used to be free. That is
+// bounded and local -- it drops only the entries actually overwritten, the
+// biggest such cels belong to the ZBall screens where no explosion happens, and
+// `ev` on row 28 is the instrument that says whether it hurts.
+static inline unsigned int TethysCelFloor()
+{
+    return Tethys_gDbufScratchBytes / 8u;
+}
+
+extern "C" void Tethys_DbufScratchForget()
+{
+    sTethysCelN = 0;
+    sTethysCelLow = Tethys_gDbufScratchBytes;
+    Tethys_gDbufCelLive = 0;
+}
+
+// Offset of this cel inside the scratch, or -1.
+static long TethysCelFind(const unsigned char* src, unsigned int len)
+{
+    for (unsigned int i = 0; i < sTethysCelN; i++)
+    {
+        if (sTethysCel[i].src == src && sTethysCel[i].len == len)
+        {
+            return static_cast<long>(sTethysCel[i].off);
+        }
+    }
+    return -1;
+}
+
+// Reserve room for a cel we are about to decode, or -1 if it cannot be cached.
+static long TethysCelAlloc(const unsigned char* src, unsigned int len)
+{
+    if (len == 0u || len > kTethysCelMax)
+    {
+        return -1;
+    }
+    const unsigned int need = (len + 3u) & ~3u;
+    const unsigned int low = TethysCelFloor();
+    if (Tethys_gDbufScratchBytes <= low || need > Tethys_gDbufScratchBytes - low)
+    {
+        return -1;
+    }
+    if (sTethysCelLow == 0u || sTethysCelLow > Tethys_gDbufScratchBytes)
+    {
+        sTethysCelLow = Tethys_gDbufScratchBytes;   // first use
+    }
+    // 427.ao.7 -- A RING, NOT A RESET, AND IT IS WHAT MAKES A STAGGERED INSTANCE
+    // WORK AT ALL.
+    //
+    // The old policy dropped EVERY entry when the bump pointer ran out. That is
+    // fine for an animation whose instances share a frame -- the twelve rocks of
+    // a burst all decode the same cel in the same tick and hit before any wrap
+    // can happen -- and it is exactly wrong for instances that DO NOT: the entry
+    // a second instance is waiting for is by construction one of the oldest, so
+    // the wrap threw away precisely what the hit depended on. With four or five
+    // new entries a tick, a 12 KB region wraps every three or four ticks and a
+    // three-tick-old cel was a coin toss.
+    //
+    // Now the pointer alone wraps, back to the top, and an allocation drops ONLY
+    // the entries whose bytes it actually overwrites. That makes the cache hold
+    // the most recent N cels for as long as they fit, which is the property a
+    // staggered instance needs -- and the overlap test also means the bump
+    // pointer no longer has to satisfy any invariant, so TethysCelEvictLow's
+    // conservative re-derivation below can leave it anywhere without risk.
+    if (sTethysCelLow < low + need)
+    {
+        sTethysCelLow = Tethys_gDbufScratchBytes;   // the POINTER wraps, not the table
+        Tethys_gDbufCelWraps++;
+    }
+    const unsigned int celOff = sTethysCelLow - need;
+    {
+        unsigned int k = 0;
+        for (unsigned int i = 0; i < sTethysCelN; i++)
+        {
+            const unsigned int a = sTethysCel[i].off;
+            const unsigned int b = a + ((sTethysCel[i].len + 3u) & ~3u);
+            if (b <= celOff || a >= celOff + need)
+            {
+                sTethysCel[k++] = sTethysCel[i];    // no overlap: it survives
+            }
+        }
+        sTethysCelN = k;
+    }
+    if (sTethysCelN >= kTethysCelSlots)
+    {
+        // The table, not the bytes, is what ran out. Forget the OLDEST, which is
+        // entry 0 because the array is kept in allocation order.
+        for (unsigned int i = 1; i < sTethysCelN; i++)
+        {
+            sTethysCel[i - 1] = sTethysCel[i];
+        }
+        sTethysCelN--;
+    }
+    sTethysCelLow = celOff;
+    sTethysCel[sTethysCelN].src = src;
+    sTethysCel[sTethysCelN].len = len;
+    sTethysCel[sTethysCelN].off = sTethysCelLow;
+    sTethysCelN++;
+    Tethys_gDbufCelLive = sTethysCelN;
+    return static_cast<long>(sTethysCelLow);
+}
+
+// A cel too big to cache owns [0, len) of the scratch. Drop what it overwrites.
+static void TethysCelEvictLow(unsigned int len)
+{
+    if (len <= TethysCelFloor())
+    {
+        return;                                     // cannot reach any entry
+    }
+    unsigned int k = 0;
+    for (unsigned int i = 0; i < sTethysCelN; i++)
+    {
+        if (sTethysCel[i].off >= len)
+        {
+            sTethysCel[k++] = sTethysCel[i];
+        }
+    }
+    if (k != sTethysCelN)
+    {
+        sTethysCelN = k;
+        Tethys_gDbufCelLive = k;
+        // Re-derive the bump pointer from what survived: handing out space below
+        // a survivor is fine, handing out space it occupies is not.
+        unsigned int lowest = Tethys_gDbufScratchBytes;
+        for (unsigned int i = 0; i < k; i++)
+        {
+            if (sTethysCel[i].off < lowest)
+            {
+                lowest = sTethysCel[i].off;
+            }
+        }
+        sTethysCelLow = lowest;
+    }
+}
 extern "C" unsigned int Tethys_gDbufRaw[2];
 extern "C" unsigned int Tethys_gDbufBytes[2];
 extern "C" unsigned int Tethys_gDbufFall;
@@ -637,12 +920,55 @@ void Animation::UploadTexture(const FrameHeader* pFrameHeader, const PSX_RECT& v
                     dstCap = field_28_dbuf_size;
                     Tethys_gDbufFall++; // 'fb': this frame decoded into its own buffer
                 }
+                // 427.ao.3: the source of this cel, and how many bytes it makes.
+                // Both are read straight out of the frame header, so they cost
+                // nothing the decoder was not already going to load.
+                const u8* const pTethysSrc = reinterpret_cast<const u8*>(&pFrameHeader->field_8_width2);
+                const unsigned int tethysDestLen = *reinterpret_cast<const u32*>(pTethysSrc);
+                // 427.ao.5: ask the cel cache before paying for a decode, and if
+                // it misses, decode INTO the cache so the next instance of this
+                // cel -- this tick or three ticks from now -- finds it. See the
+                // cache above for the whole argument.
+                bool bTethysCelHit = false;
+                // 427.ao.6: a blood cel is composed per object after this decode,
+                // so it can neither be served from the cache nor enter it.
+                const bool bTethysBlood = (Tethys_gBloodBlock != nullptr
+                                           && field_20_ppBlock != nullptr
+                                           && *field_20_ppBlock == Tethys_gBloodBlock);
+                if (bTethysScratch && !bTethysBlood)
+                {
+                    const long celOff = TethysCelFind(pTethysSrc, tethysDestLen);
+                    if (celOff >= 0)
+                    {
+                        pDst = Tethys_gDbufScratch + celOff;
+                        dstCap = static_cast<s32>(Tethys_gDbufScratchBytes - static_cast<u32>(celOff));
+                        bTethysCelHit = true;
+                        Tethys_gDbufMemoHits++;
+                    }
+                    else
+                    {
+                        const long newOff = TethysCelAlloc(pTethysSrc, tethysDestLen);
+                        if (newOff >= 0)
+                        {
+                            pDst = Tethys_gDbufScratch + newOff;
+                            dstCap = static_cast<s32>(Tethys_gDbufScratchBytes - static_cast<u32>(newOff));
+                        }
+                        else
+                        {
+                            // Too big to cache: decode at offset 0 as before, and
+                            // drop whatever that overwrites (nothing, unless this
+                            // cel needs more than half the buffer).
+                            TethysCelEvictLow(tethysDestLen);
+                        }
+                    }
+                }
+                if (!bTethysCelHit)
                 {
                     // ONE rate now, not three. Kept because the next hardware slot
                     // has to see that the move actually took: r should land near
                     // the old rB (~141) and nowhere near the old rA (~161).
                     const unsigned int t0 = TETHYS_PT();
-                    Decompress_Type_4_5_461770(reinterpret_cast<const u8*>(&pFrameHeader->field_8_width2), pDst);
+                    Decompress_Type_4_5_461770(pTethysSrc, pDst);
                     // SATURN (ao242.6) THE PARENT SPLIT. vDecode is reached from
                     // AnimateAll AND from VUpdate (Set_Animation_Data_402A40,
                     // Init_402D20), so every tick charged to [0] was charged to
@@ -653,7 +979,30 @@ void Animation::UploadTexture(const FrameHeader* pFrameHeader, const PSX_RECT& v
                     // row 7's r stays a true rate over its own population.
                     const u32 kPar = Tethys_gInAnimate ? 0u : 1u;
                     Tethys_gDbufRaw[kPar] += TETHYS_PT() - t0; // ao262.18: unguarded
-                    Tethys_gDbufBytes[kPar] += *reinterpret_cast<const u32*>(&pFrameHeader->field_8_width2);
+                    Tethys_gDbufBytes[kPar] += tethysDestLen;
+                }
+                // SATURN 427.ao.6 -- THE BLOOD CLUSTER, COMPOSED HERE.
+                //
+                // Same seam as the chant glow below and for the same reason: this
+                // is the only point in the frame where the cel exists as writable
+                // indices. The seed is the OWNING OBJECT mixed with the current
+                // frame, which is what makes the layout differ between the three
+                // Blood objects a meat-saw kill builds AND between ticks, instead
+                // of being one arrangement baked into the disc.
+                if (bTethysBlood)
+                {
+                    // TWO SEEDS, NOT ONE, and the split is what frees the
+                    // anchor droplet: the object's address alone is constant for
+                    // the object's whole life, so the compositor can draw a
+                    // stable-but-not-cornered anchor from it, while the frame
+                    // term keeps the other three moving every tick.
+                    Tethys_BloodScatter(pDst,
+                                        pFrameHeader->field_4_width,
+                                        pFrameHeader->field_5_height,
+                                        dstCap,
+                                        static_cast<unsigned int>(
+                                            reinterpret_cast<unsigned long>(field_94_pGameObj)),
+                                        static_cast<unsigned int>(field_92_current_frame) * 2654435761u);
                 }
                 // SATURN (387.ao.1) ROUTE 3 -- THE CHANT GLOW, composited
                 // into the cel between the decompression and the upload.
@@ -683,6 +1032,15 @@ void Animation::UploadTexture(const FrameHeader* pFrameHeader, const PSX_RECT& v
                                               pFrameHeader->field_4_width,
                                               pFrameHeader->field_5_height,
                                               dstCap);
+                    // 427.ao.3: pDst is no longer the pristine decode, so the
+                    // cache above must not claim it is. Only matters on the
+                    // GameSpeak menu, which is the only place the glow is armed.
+                    // 427.ao.5: this now drops every entry, not one -- cheap, and
+                    // the menu is the one screen where that costs nothing.
+                    if (bTethysScratch)
+                    {
+                        Tethys_DbufScratchForget();
+                    }
                 }
                 renderer.Upload(AnimFlagsToBitDepth(field_4_flags), vram_rect, pDst);
 #else

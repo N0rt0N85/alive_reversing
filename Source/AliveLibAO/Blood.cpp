@@ -14,10 +14,61 @@
 #undef min
 #undef max
 
+#ifdef TETHYS_SATURN
+extern "C" unsigned char* Tethys_gBloodBlock; // 427.ao.6, AliveLibAO/Animation.cpp
+#endif
+
 namespace AO {
 
 void Blood_ForceLink()
 { }
+
+#ifdef TETHYS_SATURN
+// SATURN 427.ao.6 -- FOUR DROPLETS PER SPRITE, SO A QUARTER OF THE SPRITES.
+//
+// The cel is four droplets now (tools/converter/anim.py CLUSTER_CELS), because
+// sat_tex_w already rounds a cel's Saturn width up to a multiple of eight and a
+// blood droplet is THREE texels wide: five columns per sprite were being stored,
+// uploaded and drawn as nothing, on up to 96 sprites per death.
+//
+// WHAT THIS DIVIDES AND WHAT IT DELIBERATELY DOES NOT. It divides the number of
+// sprites SUBMITTED, and nothing else: the buffer is still allocated for AO's
+// full count, every particle is still initialised and still moved, and
+// field_116_total_count / field_112_to_render_count stay in AO's own units so
+// that VUpdate_407750's shed of ten a tick -- and therefore the spray's
+// LIFETIME -- is bit-identical.
+//   THAT IS A SAFETY PROPERTY, not tidiness. The chord can change the mode at
+// any instant, including between an object's construction and its next render.
+// If the ALLOCATION had been divided, switching to mode 3 (one droplet per
+// sprite, AO's full count) would read four times past the end of a buffer sized
+// for a quarter. Sizing for the worst case costs what AO already spends and
+// makes every mode transition safe by construction.
+//   The first version of this patch divided the count itself and scaled the shed
+// to three, which is wrong for a reason worth keeping written down: 12 particles
+// (Slig.cpp:913 and Slog.cpp:1811, a body shot) becomes 3, and 3 - 3 == 0 is
+// read as exhausted by the test on the very next line, so that spray lost its
+// last rendered tick while a 50 one did not. One constant cannot preserve four
+// different counts, and an adversarial audit is what found it rather than a test.
+//
+// WHY THIS PUTS MORE BLOOD ON SCREEN THAN THE UNPATCHED BUILD, which is the
+// opposite of what dividing usually does. A meat-saw kill builds THREE Blood
+// objects of 50 (MeatSaw.cpp:367/379/391) = 150 droplets, and the renderer's
+// per-frame blood allowance is 96 (renderer_saturn.cxx kBloodCapPacked), so 54
+// of them never drew at all for the six frames before the shed starts. Thirteen
+// groups times three objects is 39 sprites carrying 156 drops, all of them
+// inside the allowance: more blood, 60 % fewer commands, and less fill.
+extern "C" unsigned char Tethys_gBloodMode;   // src/blood_scatter.cxx, START+L+R
+
+static inline s32 Tethys_BloodGroups(s32 n)
+{
+    // Mode 3 is the BEFORE of the A/B: one droplet per sprite, so it needs AO's
+    // own count back or it would be a quarter of the blood and prove nothing.
+    return (Tethys_gBloodMode == 3) ? n : ((n + 3) / 4);
+}
+#define TETHYS_BLOOD_GROUPS(n) Tethys_BloodGroups(n)
+#else
+#define TETHYS_BLOOD_GROUPS(n) (n)
+#endif
 
 Blood* Blood::ctor_4072B0(FP xpos, FP ypos, FP xOff, FP yOff, FP scale, s16 count)
 {
@@ -29,6 +80,17 @@ Blood* Blood::ctor_4072B0(FP xpos, FP ypos, FP xOff, FP yOff, FP scale, s16 coun
 
     const AnimRecord& rec = AO::AnimRec(AnimId::Blood);
     u8** ppRes = ResourceManager::GetLoadedResource_4554F0(ResourceManager::Resource_Animation, rec.mResourceId, 1, 0);
+#ifdef TETHYS_SATURN
+    // SATURN 427.ao.6: name the block, so vDecode can recognise a blood cel by
+    // POINTER rather than by a flag threaded through the Animation (which has no
+    // spare field and is shared with AE). One compare per decode, and it is
+    // exact: only this resource ever lands at this address, and if the heap moves
+    // it the next Blood object re-publishes it before any of its cels decode.
+    if (ppRes)
+    {
+        Tethys_gBloodBlock = *ppRes;
+    }
+#endif
     Animation_Init_417FD0(rec.mFrameTableOffset, rec.mMaxW, rec.mMaxH, ppRes, 1);
 
     field_10_anim.field_4_flags.Clear(AnimFlags::eBit15_bSemiTrans);
@@ -238,7 +300,7 @@ void Blood::VRender_407810(PrimHeader** ppOt)
         PSX_Point xy = {32767, 32767};
         PSX_Point wh = {-32767, -32767};
 
-        for (s32 i = 0; i < field_112_to_render_count; i++)
+        for (s32 i = 0; i < TETHYS_BLOOD_GROUPS(field_112_to_render_count); i++)
         {
             BloodParticle* pParticle = &field_E8_pResBuf[i];
             Prim_Sprt* pSprt = &pParticle->field_10_prims[gPsxDisplay_504C78.field_A_buffer_index];

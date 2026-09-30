@@ -1995,6 +1995,7 @@ extern "C" u8* Tethys_CamStreamBulk(u32* pSectors);
 // into; Commit publishes it only once the End! sentinel has been seen. Every
 // one of them is a no-op returning null/nothing without a cartridge, so the
 // no-cart path is byte-identical to bt1053.
+extern "C" void Tethys_DbufScratchForget();  // 427.ao.5: AliveLibAO/Animation.cpp
 extern "C" u8* Tethys_CamCacheFind(const char_type* name, u32 sectors);
 extern "C" u8* Tethys_CamCacheClaim(const char_type* name, u32 sectors);
 extern "C" void Tethys_CamCacheCommit(u8* claimed);
@@ -2002,6 +2003,9 @@ extern "C" void Tethys_CamCacheCommit(u8* claimed);
 // sector rather than its name -- a span is a run of sectors, and the position
 // is what the LvlFileRecord already carries.
 extern "C" u8* Tethys_CamCachePathFind(s32 start, u32 sectors);
+// 427.ao.7: the door slots, which the span had made unreachable. See cam_cache.cxx.
+extern "C" void Tethys_CamCacheNoteServed(const char_type* name, u32 sectors, const u8* mem);
+extern "C" void Tethys_CamCachePreserveServed();
 // SATURN (bt1064): the .CAM LZ4 container. Decoder in src/lz4_saturn.cxx,
 // staging carved off the bulk block in src/renderer_saturn.cxx.
 extern "C" u32 Tethys_Lz4Decode(const u8* src, u32 srcLen, u8* dst, u32 dstCap);
@@ -2426,6 +2430,11 @@ extern "C" void Tethys_CamPathPreload(const void* pCamNames, s32 count)
         return;
     }
 
+    // SATURN 427.ao.7: BEFORE the span is re-reserved, and it has to be before --
+    // the record being saved is sitting inside the span this call is about to
+    // hand over to the next path.
+    Tethys_CamCachePreserveServed();
+
     const u32 span = static_cast<u32>(hi - lo);
     u8* pDst = Tethys_CamCachePathClaim(span);
     if (!pDst)
@@ -2533,7 +2542,15 @@ void CC ResourceManager::Tethys_StreamCamFile(Camera* pCamera, bool bitsOnly)
     // slots are for now is the doors already walked through, which is the one
     // case a span of the CURRENT path cannot cover by construction.
     rd.mem = Tethys_CamCachePathFind(pRec->field_C_start_sector, camSectors);
-    if (!rd.mem)
+    if (rd.mem)
+    {
+        // SATURN 427.ao.7: remember WHICH screen the span just served and where
+        // it sits inside it. At the next path boundary that record is the one we
+        // are walking away from, and the one we come back to if we re-cross the
+        // door -- so it is copied into a slot before the span is overwritten.
+        Tethys_CamCacheNoteServed(pCamera->field_1E_fileName, camSectors, rd.mem);
+    }
+    else
     {
         rd.mem = Tethys_CamCacheFind(pCamera->field_1E_fileName, camSectors);
     }
@@ -3229,6 +3246,15 @@ s16 CC ResourceManager::FreeResource_Impl_4555B0(u8* handle)
 {
     if (handle)
     {
+#ifdef TETHYS_SATURN
+        // SATURN 427.ao.5: the cel cache keys on the cel's ADDRESS inside a
+        // resource block. A freed block's address can be handed to a different
+        // resource, and a cel of that new tenant could land at the same address
+        // with the same declared length -- which would be a false hit serving
+        // the wrong pixels. Flushing here costs one decode per cached cel after
+        // any free and makes that impossible. See Animation.cpp's cache note.
+        Tethys_DbufScratchForget();
+#endif
         Header* pHeader = Get_Header_455620(&handle);
         if (pHeader->field_4_ref_count)
         {
@@ -3284,6 +3310,15 @@ void CC ResourceManager::Reclaim_Memory_455660(u32 sizeToReclaim)
     {
         return;
     }
+
+#ifdef TETHYS_SATURN
+    // SATURN 427.ao.5: this is the compactor -- it MOVES blocks, so every cel
+    // address the cache holds may now belong to a different resource. A moved
+    // block usually just makes the cache miss, which is harmless, but a block
+    // sliding INTO a vacated address can reproduce an old cel's address with an
+    // equal length. Flush and let the next decode refill. See Animation.cpp.
+    Tethys_DbufScratchForget();
+#endif
 
     // If we failed to allocate a block or no size was passed then attempt to reclaim the whole heap
     if (sAllocationFailed_9F0E50 || sizeToReclaim == 0)
