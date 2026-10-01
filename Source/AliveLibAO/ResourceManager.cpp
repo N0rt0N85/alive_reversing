@@ -3246,15 +3246,6 @@ s16 CC ResourceManager::FreeResource_Impl_4555B0(u8* handle)
 {
     if (handle)
     {
-#ifdef TETHYS_SATURN
-        // SATURN 427.ao.5: the cel cache keys on the cel's ADDRESS inside a
-        // resource block. A freed block's address can be handed to a different
-        // resource, and a cel of that new tenant could land at the same address
-        // with the same declared length -- which would be a false hit serving
-        // the wrong pixels. Flushing here costs one decode per cached cel after
-        // any free and makes that impossible. See Animation.cpp's cache note.
-        Tethys_DbufScratchForget();
-#endif
         Header* pHeader = Get_Header_455620(&handle);
         if (pHeader->field_4_ref_count)
         {
@@ -3264,6 +3255,30 @@ s16 CC ResourceManager::FreeResource_Impl_4555B0(u8* handle)
             {
                 return 0;
             }
+#ifdef TETHYS_SATURN
+            // SATURN 427.ao.5: the cel cache keys on the cel's ADDRESS inside a
+            // resource block. A freed block's address can be handed to a
+            // different resource, and a cel of that new tenant could land at the
+            // same address with the same declared length -- which would be a
+            // false hit serving the wrong pixels. See Animation.cpp's cache note.
+            //
+            // SATURN 429.ao.1: AND IT BELONGS HERE, NOT AT THE TOP OF THE
+            // FUNCTION, which is why the cache was not paying. 427.ao.5 flushed
+            // on EVERY call, before the ref count was even read -- so a
+            // decrement from 35 to 34, which frees nothing and re-tenants no
+            // address, threw the whole cache away. A mine explosion is a storm
+            // of exactly that: ParticleBurst spawns 35 falling rocks off one
+            // resource and every rock that dies called this. That is the gap
+            // between the ~29 hits an explosion should produce and the 12 the
+            // hardware capture reported.
+            //   The invariant is unchanged and the proof is one line long: an
+            // address can only be handed to another resource once the block
+            // carrying it is marked Resource_Free, and that assignment is the
+            // very next statement. Nothing between the old site and this one
+            // can re-tenant anything. The compactor keeps its own flush in
+            // Reclaim_Memory_455660, where blocks MOVE.
+            Tethys_DbufScratchForget();
+#endif
             pHeader->field_8_type = Resource_Free;
             pHeader->field_6_flags = 0;
             sManagedMemoryUsedSize_9F0E48 -= pHeader->field_0_size;
