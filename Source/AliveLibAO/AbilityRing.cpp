@@ -263,7 +263,21 @@ void AbilityRing::VRender_456340(PrimHeader** ppOt)
         // only the drawing is merged: each emitted quad spans from the edge where
         // its group began to the edge where it ends, i.e. a 16-gon. At the ring's
         // 50 px death radius a 22.5-degree chord sags ~1 px.
-        const s32 kSegPerPoly = 4;
+        //
+        // SATURN 431.ao.1: TWO, i.e. a 32-gon, and it is paid for rather than
+        // borrowed. The renderer now sheds a ring whose brightest channel has
+        // faded to 3 of 31 (RingColourCode), which ends a ring at its sixth tick
+        // instead of its thirteenth; a ring is born every eighth tick, so only
+        // ONE generation per terminator is ever alive and the live count is 2
+        // rather than 4. 2 x 32 = 64 quads, exactly the allowance that 4 x 16
+        // used, so this is the same budget spent on shape.
+        //   WHY SHAPE. An offline plate of a ring over its real background, tick
+        // by tick, with the same colour and the same saturating add on both
+        // sides, measured the two rasterisations at the same covered area to
+        // within 4 %: we are NOT brighter than the original. What the 16-gon is,
+        // is ANGULAR -- at the 48 px radius each facet is a dead-straight 19 px
+        // chord -- and a polygon reads where a circle does not.
+        const s32 kSegPerPoly = 2;
         s16 gx3 = x3;
         s16 gy3 = y3;
         s16 gx4 = x4;
