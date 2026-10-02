@@ -145,6 +145,8 @@ extern "C" u32 Tethys_gInAnimate;// the parent flag for Upload's two callers
 ALIVE_VAR_EXTERN(SaveData, gSaveBuffer_505668);
 static u16 sStartSpawnLaps = 0; // bt1017: see the boot-spawn note in the loop
 static u8 sStartSpawnDone = 0;
+static u8 sStartSpawnArmed = 0; // 434.ao.1: the held chord, latched over the window
+extern "C" volatile u32 Tethys_gPadWord; // src/sys_saturn.cxx -- live pad-0 AE word
 #endif
 extern "C" u32 Tethys_gAbeX;   // bt1016: world position, for the boot-spawn
 extern "C" u32 Tethys_gAbeY;   // coordinates -- read, never invented
@@ -743,16 +745,46 @@ EXPORT void CC Game_Loop_437630()
         // off Abe standing on the possession screen via the bt1016 ax/ay
         // readout. Deriving them from the camera-cell geometry is exactly what
         // broke bt1014. Set TETHYS_START_CAM=0 in the Makefile to disable.
-        if (!sStartSpawnDone && ++sStartSpawnLaps > 120 && sActiveHero_507678
+        // 434.ao.1: ARMED BY A HELD CHORD, AND THE DESTINATION CAN LEAVE R1.
+        // The level was hardcoded here, which put every screen worth testing
+        // out of reach -- there is no HintFly TLV anywhere in Rupture Farms.
+        // And an unconditional jump means the disc can only ever test the
+        // screen it lands on; this build has to serve three separate fixes, so
+        // the spawn now waits for THROW+SNEAK held together inside the same
+        // four-second window it already counted. Two buttons because people
+        // mash through the logos, sampled across the window rather than on one
+        // tick so the gesture does not have to be frame-accurate.
+        //   TETHYS_START_HOLD=0 restores bt1017's unconditional spawn for an
+        // A/B session, where the point is that every build lands identically.
+        // TETHYS_START_CAM=0 still compiles the whole thing out.
+        if (!sStartSpawnDone && sActiveHero_507678
             && gMap_507BA8.field_0_current_level == LevelIds::eRuptureFarms_1)
         {
-            sStartSpawnDone = 1;
-            gSaveBuffer_505668.field_234_current_level = LevelIds::eRuptureFarms_1;
-            gSaveBuffer_505668.field_236_current_path = TETHYS_START_PATH;
-            gSaveBuffer_505668.field_238_current_camera = TETHYS_START_CAM;
-            gSaveBuffer_505668.field_224_xpos = TETHYS_START_X;
-            gSaveBuffer_505668.field_228_ypos = TETHYS_START_Y;
-            SaveGame::LoadFromMemory_459970(&gSaveBuffer_505668, 1);
+            ++sStartSpawnLaps;
+#if TETHYS_START_HOLD
+            // eThrowItem | eSneak, read off the live pad-0 word the overlay
+            // already publishes. With no item in hand THROW only makes Abe say
+            // "I dunno", so the chord is audible and harmless when it misses.
+            if ((Tethys_gPadWord & 0xC0u) == 0xC0u)
+            {
+                sStartSpawnArmed = 1;
+            }
+#else
+            sStartSpawnArmed = 1;
+#endif
+            if (sStartSpawnLaps > 120)
+            {
+                sStartSpawnDone = 1;
+                if (sStartSpawnArmed)
+                {
+                    gSaveBuffer_505668.field_234_current_level = static_cast<LevelIds>(TETHYS_START_LEVEL);
+                    gSaveBuffer_505668.field_236_current_path = TETHYS_START_PATH;
+                    gSaveBuffer_505668.field_238_current_camera = TETHYS_START_CAM;
+                    gSaveBuffer_505668.field_224_xpos = TETHYS_START_X;
+                    gSaveBuffer_505668.field_228_ypos = TETHYS_START_Y;
+                    SaveGame::LoadFromMemory_459970(&gSaveBuffer_505668, 1);
+                }
+            }
         }
 #endif
 #endif

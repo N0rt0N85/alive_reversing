@@ -17,6 +17,27 @@ void HintFly_ForceLink()
 
 namespace AO {
 
+// SATURN 434.ao.1: ONE TABLE PER LANGUAGE, AND THE ENGLISH ONE COMPILES OUT.
+// The field report: "le disque espagnol montre le mot anglais a la place de
+// guiaran". RELIVE compiles the English words in, so every disc spelled English
+// whatever its data was. tools/hintflymsg.py lifts the 36 words out of the
+// localized AbeWin.exe the same way tools/lcdmsg.py lifts the marquee, and this
+// is bt997's lesson applied a second time: the table is REPLACED rather than
+// overlaid, so the English literals lose their last referrer and the linker
+// drops them -- the cost is the delta, not the sum.
+//   Same failure policy as the marquee, deliberately: a language whose .inc is
+// absent keeps the English below, which is pure A-Z and always renders. A
+// missing file must never fail the build and must never silently ship the OTHER
+// language's words. TETHYS_LANG_EN asks for English EXPLICITLY and must get it
+// even on a machine where the localized .inc files exist, which is every
+// machine that has ever built the French disc.
+#if defined(TETHYS_SATURN) && !defined(TETHYS_LANG_EN) && defined(TETHYS_LANG_ES) && __has_include("tethys_hintfly_es.inc")
+#include "tethys_hintfly_es.inc"
+#define gHintFlyMessages_4C6A10 kTethysHintFlyMsgs
+#elif defined(TETHYS_SATURN) && !defined(TETHYS_LANG_EN) && !defined(TETHYS_LANG_ES) && __has_include("tethys_hintfly_fr.inc")
+#include "tethys_hintfly_fr.inc"
+#define gHintFlyMessages_4C6A10 kTethysHintFlyMsgs
+#else
 const char_type* gHintFlyMessages_4C6A10[] = {
     "SNEAK TO BOMB",
     "ABE WAS HERE",
@@ -54,6 +75,7 @@ const char_type* gHintFlyMessages_4C6A10[] = {
     "SCOUT FROM AFAR",
     "DO NOT FORGET THE FLINTLOCK",
     "THEY WONT CHASE WHAT THEY CANT SEE"};
+#endif
 
 
 #ifndef TETHYS_SATURN
@@ -1359,6 +1381,71 @@ const u8* pHintFlyAlphabet_4C7268[] = {
     HintFlyLetter_X_4C6FE8,
     HintFlyLetter_Y_4C7000,
     HintFlyLetter_Z_4C7010,
+    // SATURN 434.ao.1: THE SHIPPED ALPHABET HAS 56 ENTRIES, NOT 26, and the
+    // missing thirty are not decoration -- the localized message tables index
+    // two of them on purpose. Read out of all three executables we have (GOG
+    // English, Steam French, Spanish), the array at VA 0x4C7268 holds 56
+    // pointers in every one of them, identical in shape:
+    //
+    //   26..31 ('[' .. '`')  repeat 'A' -- filler across the punctuation range,
+    //                        which is how the original fills a gap it never
+    //                        indexes, so this is a transcription and not a
+    //                        choice of ours;
+    //   32..53 ('a' .. 'v')  the accented letters;
+    //   54 ('w')             the DOT, 2 flies  -- the apostrophe;
+    //   55 ('x')             the UNDERSCORE, 6 flies -- the hyphen.
+    //
+    // That last pair is the point. The French table spells "DEFIE LwANNEAU" and
+    // "CHAUVExSOURIS": 'w' and 'x' are not typos and must not be folded onto a
+    // space, they ARE the punctuation. With a 26-entry array those two bytes
+    // read 28 and 29 entries past the end, which is what the 432.ao.1 bounds
+    // guard below turned into "draw nothing" -- correct as a guard, wrong as a
+    // rendering. Four tables RELIVE never transcribed (VA 0x4C7140, 0x4C7158,
+    // 0x4C7200, 0x4C70A8 in the English image) stand at 'A' here for the same
+    // reason the original's own filler does: no shipped message in any of the
+    // three languages reaches indices 26..53, so they are unreachable rather
+    // than approximated. Adding them would mean committing extracted game data,
+    // which this repository does not do.
+    HintFlyLetter_A_4C6DB0,            // [26] '['  filler, as shipped
+    HintFlyLetter_A_4C6DB0,            // [27] '\\'
+    HintFlyLetter_A_4C6DB0,            // [28] ']'
+    HintFlyLetter_A_4C6DB0,            // [29] '^'
+    HintFlyLetter_A_4C6DB0,            // [30] '_'
+    HintFlyLetter_A_4C6DB0,            // [31] '`'
+    // 32..53 are the ACCENTED letters in the shipped array and they are filled
+    // with 'A' here, which is a measured choice and not laziness. Those glyph
+    // tables are `static`, so with nothing referencing them GCC drops them
+    // whole: naming them costs 411 B of .rodata plus their pointers, and NO
+    // message in any of the three shipped tables can index them -- the
+    // localizers used no high bytes at all, and tools/hintflymsg.py refuses
+    // any byte outside A-Z, space, 'w' and 'x', so an accented word FAILS THE
+    // BUILD rather than silently drawing an 'A' here. The pool is 25 KB under
+    // its floor; 411 B of unreachable data is not a trade worth making. The
+    // real mapping is recorded per line so restoring it is mechanical.
+    HintFlyLetter_A_4C6DB0,            // [32] 'a'  = A_diaeresis_4C7028
+    HintFlyLetter_A_4C6DB0,            // [33] 'b'  = A_grave_4C7060
+    HintFlyLetter_A_4C6DB0,            // [34] 'c'  = A_acute_4C7078
+    HintFlyLetter_A_4C6DB0,            // [35] 'd'  = A_circumflex_4C7090
+    HintFlyLetter_A_4C6DB0,            // [36] 'e'  = O_diaeresis_4C71A0
+    HintFlyLetter_A_4C6DB0,            // [37] 'f'  = O_circumflex_4C71E8
+    HintFlyLetter_A_4C6DB0,            // [38] 'g'  = O_acute_4C71D0
+    HintFlyLetter_A_4C6DB0,            // [39] 'h'  = O_grave_4C71B8
+    HintFlyLetter_A_4C6DB0,            // [40] 'i'  = E_acute_4C7100
+    HintFlyLetter_A_4C6DB0,            // [41] 'j'  = E_grave_4C70E0
+    HintFlyLetter_A_4C6DB0,            // [42] 'k'  = E_circumflex_4C7120
+    HintFlyLetter_A_4C6DB0,            // [43] 'l'  = not transcribed (VA 4C7140)
+    HintFlyLetter_A_4C6DB0,            // [44] 'm'  = not transcribed (VA 4C7158)
+    HintFlyLetter_A_4C6DB0,            // [45] 'n'  = I_circumflex_4C7170
+    HintFlyLetter_A_4C6DB0,            // [46] 'o'  = not transcribed (VA 4C7200)
+    HintFlyLetter_A_4C6DB0,            // [47] 'p'  = U_circumflex_4C7248
+    HintFlyLetter_A_4C6DB0,            // [48] 'q'  = U_acute_4C7230
+    HintFlyLetter_A_4C6DB0,            // [49] 'r'  = U_grave_4C7218
+    HintFlyLetter_A_4C6DB0,            // [50] 's'  = N_tilde_4C7188
+    HintFlyLetter_A_4C6DB0,            // [51] 't'  = C_cedilla_4C70C8
+    HintFlyLetter_A_4C6DB0,            // [52] 'u'  = ash_4C7040
+    HintFlyLetter_A_4C6DB0,            // [53] 'v'  = not transcribed (VA 4C70A8)
+    HintFlyLetters_dot_4C725C,         // [54] 'w'  THE APOSTROPHE
+    HintFlyLetter_underscore_4C7260,   // [55] 'x'  THE HYPHEN
 };
 
 #ifdef TETHYS_SATURN
@@ -1375,15 +1462,19 @@ const u8* pHintFlyAlphabet_4C7268[] = {
 // word where it should spell GUIARAN.
 //   Unknown bytes are SKIPPED rather than folded onto a letter: a missing glyph
 // leaves the rest of the word readable, a wrong glyph misspells it silently.
-//   Worth knowing for when the strings arrive: the accented glyphs already EXIST
-// in this file -- A/E/I/O/U with acute, grave, circumflex and diaeresis, plus
-// C cedilla, N tilde and the ash -- they are simply not in the 26-entry table
-// above. Localising the fly words is therefore a mapping job from the game's
-// DOS codepage to those arrays, not an art job.
+//   434.ao.1: THE BOUND IS NOW 56 AND THE TABLE ABOVE REACHES THAT FAR. The
+// paragraph this replaces guessed that localising would be "a mapping job from
+// the game's DOS codepage to those arrays". It is not: the localizers did not
+// use high bytes at all, they used the ASCII slots the 56-entry array already
+// provides, and the only two any of the three shipped tables touch are 'w' and
+// 'x' -- the apostrophe and the hyphen. Reading the real array settled in one
+// measurement what the guess had the wrong shape of. The guard stays, because
+// the reason for it stands whatever the table's length: an unknown byte must
+// not become a wild particle count.
 static const u8* HintFlyGlyph(char_type c)
 {
     const u32 i = static_cast<u32>(static_cast<u8>(c)) - static_cast<u32>('A');
-    return (i < 26u) ? pHintFlyAlphabet_4C7268[i] : nullptr;
+    return (i < ALIVE_COUNTOF(pHintFlyAlphabet_4C7268)) ? pHintFlyAlphabet_4C7268[i] : nullptr;
 }
 #endif
 
