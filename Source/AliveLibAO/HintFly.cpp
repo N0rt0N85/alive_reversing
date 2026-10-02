@@ -1361,6 +1361,32 @@ const u8* pHintFlyAlphabet_4C7268[] = {
     HintFlyLetter_Z_4C7010,
 };
 
+#ifdef TETHYS_SATURN
+// SATURN 432.ao.1: THE ALPHABET IS 26 ENTRIES AND NOTHING CHECKED THE INDEX.
+// Three sites compute pHintFlyAlphabet_4C7268[c - 'A'] -- the longest-word
+// measure, the particle layout and the on-screen length -- and none of them
+// bounds c. Any byte outside A-Z reads past the table, and the FIRST thing done
+// with the result is pArray[0], a particle COUNT that then drives
+// Allocate_New_Locked_Resource and a write loop. A stray byte is not a wrong
+// letter, it is a wild allocation followed by a wild write.
+//   It is latent today because all 36 messages are hardcoded English and
+// strictly A-Z (checked), but it is exactly the edge the Spanish localisation
+// walks into: the tester's report is that the Spanish disc spells the English
+// word where it should spell GUIARAN.
+//   Unknown bytes are SKIPPED rather than folded onto a letter: a missing glyph
+// leaves the rest of the word readable, a wrong glyph misspells it silently.
+//   Worth knowing for when the strings arrive: the accented glyphs already EXIST
+// in this file -- A/E/I/O/U with acute, grave, circumflex and diaeresis, plus
+// C cedilla, N tilde and the ash -- they are simply not in the 26-entry table
+// above. Localising the fly words is therefore a mapping job from the game's
+// DOS codepage to those arrays, not an art job.
+static const u8* HintFlyGlyph(char_type c)
+{
+    const u32 i = static_cast<u32>(static_cast<u8>(c)) - static_cast<u32>('A');
+    return (i < 26u) ? pHintFlyAlphabet_4C7268[i] : nullptr;
+}
+#endif
+
 ALIVE_VAR(1, 0x4C6AA4, u8, sHintFlyRndSeed_4C6AA4, 37);
 
 static u8 HintFly_NextRandom()
@@ -1414,7 +1440,15 @@ HintFly* HintFly::ctor_42A820(Path_HintFly* pTlv, s32 tlvInfo)
             }
             else
             {
+#ifdef TETHYS_SATURN
+                {   // SATURN 432.ao.1: see HintFlyGlyph -- an unknown byte adds
+                    // nothing instead of reading past the table.
+                    const u8* pG = HintFlyGlyph(*pMsg);
+                    if (pG) { curWordLen += pG[0]; }
+                }
+#else
                 curWordLen += pHintFlyAlphabet_4C7268[(*pMsg) - 'A'][0];
+#endif
             }
             pMsg++;
         }
@@ -1597,7 +1631,12 @@ void HintFly::FormWordAndAdvanceToNextWord_42AF90()
     s32 particleIdx = 0;
     for (s32 i = 0; i < letterCount; i++)
     {
+#ifdef TETHYS_SATURN
+        const u8* pArray = HintFlyGlyph(msgPtr[i]); // SATURN 432.ao.1
+        if (!pArray) { continue; }                  // unknown byte: no flies
+#else
         const auto pArray = pHintFlyAlphabet_4C7268[msgPtr[i] - 'A'];
+#endif
         //const auto pArray = HintFlyLetter_E_circumflex_4C7120; // letter test code
         // First element is the count of "pixels" that make up a word
         const s32 total = pArray[0];
@@ -1804,7 +1843,14 @@ void HintFly::VUpdate_42B3D0()
                 const char_type* pMsgIter = gHintFlyMessages.GetMessage(gMap_507BA8.field_0_current_level, gMap_507BA8.field_2_current_path, field_11C_message_id) + field_11E_msg_idx;
                 while (*pMsgIter != ' ' && *pMsgIter != '\0')
                 {
+#ifdef TETHYS_SATURN
+                    {   // SATURN 432.ao.1: see HintFlyGlyph
+                        const u8* pG = HintFlyGlyph(*pMsgIter);
+                        if (pG) { len += pG[0]; }
+                    }
+#else
                     len += pHintFlyAlphabet_4C7268[(*pMsgIter) - 'A'][0];
+#endif
                     pMsgIter++;
                 }
                 field_120_idx = 0;
