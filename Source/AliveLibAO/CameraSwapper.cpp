@@ -190,7 +190,7 @@ void CameraSwapper::Init_48C830(u8** ppCamRes, CameraSwapEffects changeEffect)
     field_28_changeEffect = changeEffect;
 
 #ifdef TETHYS_SATURN
-    // SATURN 421.ao.3 -- LES VOLETS NE FONT PLUS ATTENDRE.
+    // SATURN 421.ao.3 -- THE WIPES NO LONGER MAKE YOU WAIT.
     //
     // AO recomposes a wipe one slice per tick, and this port draws none of it:
     // under TETHYS_SATURN ScreenManager::InvalidateRect_406E40 is compiled to a

@@ -148,7 +148,7 @@ void BaseBomb::VUpdate_417580()
     }
 
     // SATURN 427.ao.7: 3 -> 1, AND IT IS A FIDELITY TRADE THE TESTER ASKED FOR
-    // BY NAME ("si c'est trop lourd on les rapproche ?").
+    // BY NAME ("if it is too heavy, shall we bring them closer together?").
     //
     // This second blast is the SAME animation as BaseBomb's own, mirrored, at the
     // same position, started this many frames later; both advance one frame per

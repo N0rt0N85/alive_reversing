@@ -394,8 +394,8 @@ EXPORT s32 CC MIDI_Allocate_Channel_49D660(s32 not_used, s32 priority)
 // SATURN (bt1112/bt1117): THE OWNING SEQUENCE OF A NOTE, WHICH AO NEVER RECORDED.
 //
 // Reported symptom: the secret-area jingle rang on for ~18 s and the Mudokon-
-// rescue one for ~16 s, and the tester's own reading of it was right -- "le son
-// se prolonge jusqu'a ce que l'ambiance reprenne, au lieu de s'arreter".
+// rescue one for ~16 s, and the tester's own reading of it was right -- "the
+// sound carries on until the ambience resumes, instead of stopping".
 //
 // MEASURED, so the numbers are not in doubt (scratchpad seqlen/seqsim/VH dump,
 // run against the SHIPPED cd/data/R1.LVL and cross-checked on the untouched PC

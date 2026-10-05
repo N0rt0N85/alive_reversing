@@ -214,9 +214,9 @@ const Menu_Element sBtnArray_Options_4D0400[2] = {{145, 204, InputCommands::eUnP
 #ifdef TETHYS_SATURN
 // SATURN (383.ao.1): THE COORDINATES ARE LOCALIZED DATA, AND THIS TABLE WAS NOT.
 //
-// The tester's report -- "B de s'accroupir est trop a droite, comme X et Y de
-// sauter en courant et le A de action; Z de marcher discretement est trop a
-// gauche" -- names a SIGN SPLIT, and no term in the centring arithmetic can
+// The tester's report -- "crouch on B is too far right, like run-jump on X
+// and Y and action on A; sneak on Z is too far
+// left" -- names a SIGN SPLIT, and no term in the centring arithmetic can
 // produce one: a constant bias moves every letter the same way.  The varying
 // term is xpos itself.  RELIVE's values are decompiled from the US executable,
 // while this disc ships the FRENCH panel art, which was re-laid-out around
@@ -1278,8 +1278,8 @@ void Menu::VRender_47AC00(PrimHeader** ppOt)
 #ifdef TETHYS_SATURN
     // SATURN (397.ao.1): THE PHRASE FILE'S OWN CLUT GOES TO THE PALETTE RECT.
     //
-    // Field report, the GameSpeak page: "les orbes du chant sont bugguees,
-    // mauvaises couleurs sur Abe". The glow (chant_glow.cxx) lights Abe by
+    // Field report, the GameSpeak page: "the chant orbs are buggy,
+    // wrong colours on Abe". The glow (chant_glow.cxx) lights Abe by
     // rewriting his decompressed cel with 16 indices that chantmix.py authored
     // INTO ABESPK5.BAN's CLUT -- and that CLUT was never uploaded. Abe's
     // palette rect is written exactly twice on this screen, MenuDoor at
@@ -1910,8 +1910,8 @@ EXPORT void Menu::MainScreen_Update_47AF60()
         {
 #ifdef TETHYS_SATURN
             // SATURN (302.ao.1): THE ATTRACT DEMO CANNOT RUN HERE, AND WAITING
-            // FOR IT IS A SOFT-LOCK. Field report: "en idle, au bout d'un certain
-            // temps abe dit bye et lance quelque chose, qui freeze le jeu" -- the
+            // FOR IT IS A SOFT-LOCK. Field report: "when idle, after a while Abe says
+            // bye and throws something, which freezes the game" -- the
             // menu parks on the Loading camera, loop and music still running, pad dead.
             //
             // The mechanism, read at source. This branch arms gAttract_507698 and asks
@@ -4865,7 +4865,7 @@ void CC Menu::RenderElement_47A4E0(s32 xpos, s32 ypos, s32 input_command, PrimHe
     // screen was 1-3 rows short of whatever was asked here and varied per
     // glyph -- see the measurement table in TextRunRecord
     // (src/renderer_saturn.cxx). Three passes tuned this number against that
-    // error, which is why "les lettres sont a peine trop grandes" kept coming
+    // error, which is why "the letters are barely too big" kept coming
     // back on four screens.
     //   The numbers below are chosen against the MEASURED old output rather
     // than by eye: AO's 0.84 now renders 18 rows where the old path drew 15-16,

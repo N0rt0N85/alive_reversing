@@ -18,7 +18,7 @@ void HintFly_ForceLink()
 namespace AO {
 
 // SATURN 434.ao.1: ONE TABLE PER LANGUAGE, AND THE ENGLISH ONE COMPILES OUT.
-// The field report: "le disque espagnol montre le mot anglais a la place de
+// The field report: "the Spanish disc shows the English word in place of
 // guiaran". RELIVE compiles the English words in, so every disc spelled English
 // whatever its data was. tools/hintflymsg.py lifts the 36 words out of the
 // localized AbeWin.exe the same way tools/lcdmsg.py lifts the marquee, and this
