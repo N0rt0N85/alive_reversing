@@ -4352,11 +4352,16 @@ void Menu::Load_Update_47D760()
     if (field_228 != FP_FromInteger(0))
     {
         // the animation is running: remember the direction instead of losing it
-        if (bNavUp)
+        // 442.ao.6: only a NEW press (IsAnyHeld = down this tick, not the last).
+        // bNavUp/bNavDown are the LEVEL, so the press that STARTED this move was
+        // latched too while the finger was still down, and replayed when the
+        // animation landed: two lines a tap. Invisible while this page ran at
+        // ~9 fps (a tick outlasted the press); every tap at 30 fps.
+        if (Input().IsAnyHeld(InputObject::PadIndex::First, InputCommands::eUp))
         {
             sTethysLoadNavLatch = -1;
         }
-        else if (bNavDown)
+        else if (Input().IsAnyHeld(InputObject::PadIndex::First, InputCommands::eDown | InputCommands::eCheatMode))
         {
             sTethysLoadNavLatch = 1;
         }

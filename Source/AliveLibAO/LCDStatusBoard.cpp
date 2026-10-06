@@ -7,6 +7,9 @@
 #include "Game.hpp"
 #include "DDCheat.hpp"
 #include "PathDataExtensions.hpp"
+#ifdef TETHYS_SATURN
+#include "PauseMenu.hpp" // SATURN 442.ao.7: hidden while paused, see VRender
+#endif
 
 namespace AO {
 
@@ -119,6 +122,14 @@ void LCDStatusBoard::VRender(PrimHeader** ppOt)
 
 void LCDStatusBoard::VRender_441AB0(PrimHeader** ppOt)
 {
+#ifdef TETHYS_SATURN
+    // SATURN 442.ao.7: hidden while the pause menu is up, same reason as
+    // LCDScreen (see its VRender).
+    if (pPauseMenu_5080E0 && pPauseMenu_5080E0->field_11C)
+    {
+        return;
+    }
+#endif
     char_type text[12] = {};
     sprintf(text, "%02d", Path_GetTotalMuds(gMap_507BA8.field_0_current_level, gMap_507BA8.field_2_current_path) - sRescuedMudokons_5076C0 - sKilledMudokons_5076BC);
 

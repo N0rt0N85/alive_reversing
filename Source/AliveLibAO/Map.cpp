@@ -2043,6 +2043,11 @@ void Map::GoTo_Camera_445050()
         // (Declared at namespace scope up top: a linkage-specification is not
         // legal at block scope, unlike the plain externs above it.)
         Tethys_CamCacheReset();
+        // SATURN 442.ao.1: and give the menu pins' block back to the heap --
+        // leaving the menu is the moment they stop meaning anything, and the
+        // next level needs every byte (ResourceManager.cpp, the pins block).
+        extern bool Tethys_MenuPinsRelease();
+        Tethys_MenuPinsRelease();
 #endif
 
         // Free all cameras

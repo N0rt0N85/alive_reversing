@@ -671,6 +671,13 @@ inline void SetClut(T* prim, s16 clut)
     prim->mUv.tpage_clut_pad = clut;
 }
 
+#ifdef TETHYS_SATURN
+// SATURN: 442.ao.6 -- the CLUT FG1.cpp puts on a CERTIFIED foreground piece so
+// the Saturn renderer can skip it when it covers nothing. Here because both
+// sides include this header; why that is safe is in src/pack_contract.hpp.
+static const u16 kFg1MarkClut = 0xFFFF;
+#endif
+
 template <class T>
 inline s16 GetClut(T* prim)
 {

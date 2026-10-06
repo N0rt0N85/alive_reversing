@@ -14,6 +14,9 @@
 #include "Compression.hpp"
 #include "../AliveLibAE/Renderer/IRenderer.hpp"
 #include "FG1Reader.hpp"
+#ifdef TETHYS_SATURN
+#include "PauseMenu.hpp" // SATURN 442.ao.7: hidden while paused, see VRender
+#endif
 
 namespace AO {
 
@@ -179,7 +182,17 @@ void FG1::Convert_Chunk_To_Render_Block_453BA0(const Fg1Chunk* pChunk, Fg1Block*
     const s16 width_rounded = (pChunk->field_8_width + 1) & ~1u;
     if (vram_alloc_450860(pChunk->field_8_width, pChunk->field_A_height, &pBlock->field_58_rect))
     {
+#ifdef TETHYS_SATURN
+        // SATURN: 442.ao.6 -- bit 15 of the layer field is the converter's
+        // certificate that this piece IS the background shown under it
+        // (tools/converter/fg1.py FG1_SKIPPABLE). Off before the index: AO's
+        // own data only ever holds 0 or 1 there.
+        const u16 rawLayer = pChunk->field_2_layer_or_decompressed_size;
+        const bool bSkippable = (rawLayer & 0x8000u) != 0;
+        pBlock->field_66_mapped_layer = sFg1_layer_to_bits_layer_4BC024[rawLayer & 0x7FFFu];
+#else
         pBlock->field_66_mapped_layer = sFg1_layer_to_bits_layer_4BC024[pChunk->field_2_layer_or_decompressed_size];
+#endif
 
         PSX_RECT rect = {};
         rect.x = pBlock->field_58_rect.x;
@@ -219,6 +232,16 @@ void FG1::Convert_Chunk_To_Render_Block_453BA0(const Fg1Chunk* pChunk, Fg1Block*
             SetUV3(&rPoly, u1, v1);
 
             SetRGB0(&rPoly, 128, 128, 128);
+#ifdef TETHYS_SATURN
+            // SATURN: 442.ao.6 -- a CERTIFIED piece tells the renderer it may be
+            // skipped when nothing was drawn under it. The constant is in
+            // Primitives_common.hpp; why skipping one is invisible is in
+            // src/pack_contract.hpp. An uncertified piece draws every frame.
+            if (bSkippable)
+            {
+                SetClut(&rPoly, static_cast<s16>(kFg1MarkClut));
+            }
+#endif
         }
     }
     else
@@ -440,6 +463,16 @@ void FG1::VRender_453D50(PrimHeader** ppOt)
     // array. The zeroed count already makes this loop a no-op; this says so
     // where a reader will look for it.
     if (!field_20_chnk_res)
+    {
+        return;
+    }
+    // SATURN 442.ao.7: NOT DRAWN WHILE THE PAUSE MENU IS UP, at Romain's
+    // request. The veil dims the background (NBG1 colour offset) and every
+    // palette, but these pieces are direct-colour sprites that neither reaches,
+    // so they stayed at full brightness over a dimmed screen. field_11C is 1
+    // exactly while PauseMenu's modal loop runs (set on entry, cleared by every
+    // exit before the loop breaks), so the first game frame draws them again.
+    if (pPauseMenu_5080E0 && pPauseMenu_5080E0->field_11C)
     {
         return;
     }

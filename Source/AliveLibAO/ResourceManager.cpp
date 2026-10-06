@@ -365,6 +365,161 @@ void Tethys_ReleaseStickyResources()
     // level change that actually needs it.
 }
 
+// SATURN 442.ao.1 -- THE MENU PINS: three main-menu pages kept in RAM WITHOUT a
+// cart, so that coming back to them costs no CD at all.
+//
+// WHY. AO changes menu page at the top of its white flash, and the screen holds
+// that white for the whole synchronous read of the next page's .CAM (31-57
+// sectors = two commands, ~0.4-0.6 s at the console's 109.6 ms per command +
+// 6.6 ms per sector). Without a cart nothing was ever kept, so every return to
+// the main menu paid it again. The tester set the order: main menu, GameSpeak,
+// then Load only if it fits for free.
+//
+// HOW, AND WHY IT IS FREE. One LOCKED block, last-fit at the heap top -- the
+// movie borrow's own recipe below, which keeps it out of the compaction flow --
+// sized to exactly the records it holds, and taken only when the heap would
+// still have kTethysMenuPinMargin left beside it: room for the largest GameSpeak
+// phrase file (ABESPK6, 120,832 B staged) plus the largest page's own chunks
+// (S1P01C06's FG1, 100,632 B) with slack, so in normal menu use nothing ever
+// has to ask for it back. When something does, it is handed back FIRST: before
+// a movie borrows (Begin, the FMV page), when the menu streams its Loading page
+// (442.ao.3: BEFORE anything that outlives the menu is allocated -- see
+// Tethys_MenuPinsBeforeStream), at the level change that leaves the menu, and
+// inside the allocator's last chance before a refusal or a RES NULL.
+// The one moment it cannot go back is while a .CAM streams, because the stream
+// may be reading from it or filling it -- so a stream that would find the heap
+// short gives it back BEFORE it starts (kTethysCamStreamReserve).
+//   The peak gauge (pk) never sees it: restored on release, as for the movie.
+//   With a cart this never arms -- the path span already holds all fifteen
+// menu pages (cam_cache.cxx).
+extern "C" void Tethys_CamPinsInit(u8* block, const char_type* const* names,
+                                   const u32* sectors, u32 count); // src/cam_cache.cxx
+extern "C" volatile u32 Tethys_gCartHeapBytes;                     // src/main.cxx
+static const char_type* const kTethysMenuPins[3] = {
+    "S1P01C01.CAM",  // main menu: every other page returns here
+    "S1P01C03.CAM",  // GameSpeak (gamepad: the only layout a Saturn has)
+    "S1P01C06.CAM"}; // Load
+static const u32 kTethysMenuPinMargin = 262144;    // phrase 120,832 + C06 FG1 100,632 + slack
+static const u32 kTethysCamStreamReserve = 112640; // the largest page's own chunks + slack
+static const u32 kTethysMenuPinResId = 0x4E49504D; // 'MPIN', readable in a heap top-8
+static u8** sppTethysMenuPins = nullptr;
+static u32 sTethysMenuPinBytes = 0;
+static u32 sTethysMenuPinPeakSnap = 0;
+static bool sTethysPinsBusy = false;
+
+// Does p point into the pins' block? (Locked, so compaction never moves it.)
+static bool Tethys_MenuPinsHold(const u8* p)
+{
+    return sppTethysMenuPins && p && p >= *sppTethysMenuPins
+        && p < *sppTethysMenuPins + (sTethysMenuPinBytes - sizeof(ResourceManager::Header));
+}
+
+// Give the block back. Refused (false) when there is nothing to give or while a
+// .CAM streams from or into it; true = the bytes are free again.
+bool Tethys_MenuPinsRelease()
+{
+    if (!sppTethysMenuPins || sTethysPinsBusy)
+    {
+        return false;
+    }
+    Tethys_CamPinsInit(nullptr, nullptr, nullptr, 0);
+    ResourceManager::FreeResource_455550(sppTethysMenuPins);
+    sppTethysMenuPins = nullptr;
+    // pk without the block: every peak taken while it was held included it.
+    const u32 pk = sPeakedManagedMemUsage_9F0E4C - sTethysMenuPinBytes;
+    sPeakedManagedMemUsage_9F0E4C = (pk > sTethysMenuPinPeakSnap) ? pk : sTethysMenuPinPeakSnap;
+    sTethysMenuPinBytes = 0;
+    return true;
+}
+
+// Called at the top of every .CAM stream, before the cache is consulted.
+static void Tethys_MenuPinsBeforeStream(const char_type* pCamName)
+{
+    if (Tethys_gCartHeapBytes != 0)
+    {
+        return;
+    }
+    bool pinned = false;
+    for (s32 i = 0; i < 3; i++)
+    {
+        if (strcmp(pCamName, kTethysMenuPins[i]) == 0)
+        {
+            pinned = true;
+        }
+    }
+    if (!pinned)
+    {
+        // Any other page: the stream will not touch the pins, so the allocator
+        // can still take them back mid-stream if its chunks need the room.
+        //   442.ao.3: EXCEPT THE LOADING PAGE. It is the menu committing to
+        // leave (Begin, level select and the attract demo at MainMenu.cpp:2259,
+        // Load at :4639 -- its only two gateways), and what runs next makes
+        // LOCKED last-fit blocks that outlive the menu: the PauseMenu's 16,816 B
+        // font (Font.cpp:483, from NewGameStart :2666 or LoadSave_Update :4153)
+        // and DemoPlayback's. Last-fit carved them directly UNDER the pins, so
+        // Map.cpp:2050 freed the pins above a block compaction never moves: in
+        // the 442.ao.2 field fatal 499,544 B were free, split 293,408 / 206,136,
+        // and R1's 481,296 B VabBody was RES NULL. Released here, those blocks
+        // land at the heap top exactly as they did before the pins existed.
+        if (strcmp(pCamName, "S1P01C21.CAM") == 0)
+        {
+            Tethys_MenuPinsRelease();
+        }
+        return;
+    }
+    if (sppTethysMenuPins)
+    {
+        // This stream will read or fill a pin, and then nothing may take the
+        // block back: if its own chunks might not fit beside it, release now.
+        if (kResHeapSize - sManagedMemoryUsedSize_9F0E48 < kTethysCamStreamReserve)
+        {
+            Tethys_MenuPinsRelease();
+        }
+        return;
+    }
+    // Arm on a pinned page only: by then the menu's own set is loaded.
+    // Strict priority: the first page that does not fit ends the list.
+    const char_type* names[3];
+    u32 sectors[3];
+    u32 n = 0;
+    u32 total = 0;
+    const u32 freeBytes = kResHeapSize - sManagedMemoryUsedSize_9F0E48;
+    for (s32 i = 0; i < 3; i++)
+    {
+        const LvlFileRecord* pRec = sLvlArchive_4FFD60.Find_File_Record_41BED0(kTethysMenuPins[i]);
+        if (!pRec)
+        {
+            break;
+        }
+        const u32 bytes = static_cast<u32>(pRec->field_10_num_sectors) << 11;
+        if (total + bytes + sizeof(ResourceManager::Header) + kTethysMenuPinMargin > freeBytes)
+        {
+            break;
+        }
+        names[n] = kTethysMenuPins[i];
+        sectors[n] = static_cast<u32>(pRec->field_10_num_sectors);
+        total += bytes;
+        n++;
+    }
+    if (n == 0)
+    {
+        return;
+    }
+    sTethysMenuPinPeakSnap = sPeakedManagedMemUsage_9F0E4C;
+    u8** ppBlock = ResourceManager::Alloc_New_Resource_ImplEx(
+        ResourceManager::Resource_DecompressionBuffer, kTethysMenuPinResId,
+        total, true, ResourceManager::eLastMatching,
+        false /*bReclaimOnFail*/, false /*bFatalOnFail*/);
+    if (!ppBlock)
+    {
+        sPeakedManagedMemUsage_9F0E4C = sTethysMenuPinPeakSnap;
+        return; // fragmented right now: no pins, the menu reads as it always did
+    }
+    sppTethysMenuPins = ppBlock;
+    sTethysMenuPinBytes = total + sizeof(ResourceManager::Header);
+    Tethys_CamPinsInit(*ppBlock, names, sectors, n);
+}
+
 // SATURN (P7 Tier-2 no-cart): the movie-time heap borrow. A playing movie
 // pauses the whole game (nothing else allocates), so the Cinepak buffers
 // (~367 KB: ring 204,800 + decode 153,600 + work 8,656) borrow ONE locked
@@ -416,6 +571,10 @@ extern "C" u32 Tethys_gMbAsk = 0;
 
 EXPORT u8** CC Tethys_MovieBorrowHeap(u32 bytes)
 {
+    // 442.ao.1: the menu pins sit exactly where this block wants to go (the
+    // heap top), and a movie from the menu (Begin, the FMV page) is the moment
+    // they are not needed: hand them back before measuring anything.
+    Tethys_MenuPinsRelease();
     sTethysMovieBorrowPeakSnap = sPeakedManagedMemUsage_9F0E4C;
     u8** ppBlock = nullptr;
     Tethys_gMbUsed0 = sManagedMemoryUsedSize_9F0E48;
@@ -937,6 +1096,7 @@ public:
                         if (Tethys_gState0Retries % 100 == 10)
                         {
                             Tethys_ReleaseStickyResources();
+                            Tethys_MenuPinsRelease(); // 442.ao.1: a lender, so it pays first
                             const s16 savedPending = sResources_Pending_Loading_9F0E38;
                             sResources_Pending_Loading_9F0E38 = 0;
                             ResourceManager::Reclaim_Memory_455660(0);
@@ -2465,6 +2625,9 @@ void CC ResourceManager::Tethys_StreamCamFile(Camera* pCamera, bool bitsOnly)
     {
         Tethys_CamStreamFatal("CAM stream: CD miss ", pCamera->field_1E_fileName);
     }
+    // SATURN 442.ao.1: the menu pins arm on their first page, or go back to the
+    // heap BEFORE a stream it could not otherwise serve. See the busy flag below.
+    Tethys_MenuPinsBeforeStream(pCamera->field_1E_fileName);
 
     // SATURN (bt1049) counted this file's bytes here as `kc`; bt1051 RETIRES it
     // with the answer. On hardware, lk - kc read 104, 106 and 108 KB across
@@ -2563,6 +2726,10 @@ void CC ResourceManager::Tethys_StreamCamFile(Camera* pCamera, bool bitsOnly)
     {
         rd.mirror = Tethys_CamCacheClaim(pCamera->field_1E_fileName, camSectors);
     }
+    // SATURN 442.ao.1: BUSY only when this stream reads from the menu pins or
+    // fills one -- then nothing may hand their block back until the stream
+    // ends. Any other page leaves the allocator free to take it back mid-stream.
+    sTethysPinsBusy = Tethys_MenuPinsHold(rd.mem) || Tethys_MenuPinsHold(rd.mirror);
 
     // SATURN (bt1064): decide raw-or-container before the walk. This MUST come
     // after mem/mirror are set -- it issues the record's first read, and that
@@ -2632,6 +2799,7 @@ void CC ResourceManager::Tethys_StreamCamFile(Camera* pCamera, bool bitsOnly)
                     Tethys_CamStreamFatal("CAM refresh: torn ", pCamera->field_1E_fileName);
                 }
                 Tethys_CamStreamEnd();
+                sTethysPinsBusy = false; // 442.ao.1
                 return;
             }
         }
@@ -2688,6 +2856,7 @@ void CC ResourceManager::Tethys_StreamCamFile(Camera* pCamera, bool bitsOnly)
     // torn check. Null when nothing was claimed (cache hit, no cart, oversized
     // record), and Commit ignores null, so this needs no guard of its own.
     Tethys_CamCacheCommit(rd.mirror);
+    sTethysPinsBusy = false; // 442.ao.1: the pins may be lent back again
     pCamera->field_30_flags |= 1u; // camera resources ready (no field_C_ppBits: Bits live in VDP2)
 }
 #endif
@@ -2766,6 +2935,18 @@ u8** ResourceManager::Alloc_New_Resource_ImplEx(u32 type, u32 id, u32 size, bool
         Reclaim_Memory_455660(0);
         ppNewRes = Allocate_New_Block_454FE0(size + sizeof(Header), allocType);
     }
+#ifdef TETHYS_SATURN
+    // SATURN 442.ao.1: before ANY refusal -- the soft null below or the RES NULL
+    // fatal -- the menu pins give their block back (they are a loan, never a
+    // tenant), and the allocation gets one more try. Refused while a .CAM
+    // streams from or into them; Tethys_MenuPinsBeforeStream covers that case
+    // by releasing ahead of a stream the heap could not serve.
+    if (!ppNewRes && bReclaimOnFail && Tethys_MenuPinsRelease())
+    {
+        Reclaim_Memory_455660(0);
+        ppNewRes = Allocate_New_Block_454FE0(size + sizeof(Header), allocType);
+    }
+#endif
 
     if (ppNewRes)
     {

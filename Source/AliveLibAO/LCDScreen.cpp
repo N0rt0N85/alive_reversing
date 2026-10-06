@@ -15,6 +15,9 @@
 #include "Input.hpp"
 #include "Renderer/IRenderer.hpp"
 #include "../AliveLibCommon/PathDataExtensionsTypes.hpp"
+#ifdef TETHYS_SATURN
+#include "PauseMenu.hpp" // SATURN 442.ao.7: hidden while paused, see VRender
+#endif
 
 namespace AO {
 
@@ -480,6 +483,15 @@ void LCDScreen::VRender(PrimHeader** ppOt)
 
 void LCDScreen::VRender_434400(PrimHeader** ppOt)
 {
+#ifdef TETHYS_SATURN
+    // SATURN 442.ao.7: hidden while the pause menu is up, like FG1 (see its
+    // VRender): the letters are composited through the text LUT arena, which
+    // the pause veil does not walk, so they stayed bright over a dimmed screen.
+    if (pPauseMenu_5080E0 && pPauseMenu_5080E0->field_11C)
+    {
+        return;
+    }
+#endif
     if (sNumCamSwappers_507668 == 0)
     {
         const FP_Point* camPos = pScreenManager_4FF7C8->field_10_pCamPos;
