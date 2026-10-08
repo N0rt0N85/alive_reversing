@@ -622,7 +622,12 @@ EXPORT s32 CC MIDI_PlayerPlayMidiNote_49D730(s32 vabId, s32 program, s32 note, s
                             panRight,
                             (f32) freq,
                             pChannel,
+#ifdef TETHYS_SATURN
+                            // SATURN (445.ao.3): bit 1 = the tone's reverb flag
+                            playFlags | ((pVagOff->field_C & kTethysToneReverb) ? 2u : 0u),
+#else
                             playFlags,
+#endif
                             priority_);
                         volume_ = volume;
                         usedChannelBits |= 1 << midiChannel_;
@@ -1027,7 +1032,12 @@ EXPORT void CC SsVabTransBody_49D3E0(VabBodyRecord* pVabBody, s16 vabId)
                     auto pVag = &GetSpuApiVars()->sConvertedVagTable().table[vabId][prog][tone];
                     if (pVag->field_10_vag == i)
                     {
+#ifdef TETHYS_SATURN
+                        // SATURN (445.ao.3): keep the reverb bit SsVabOpenHead set.
+                        pVag->field_C = static_cast<u8>((pVag->field_C & kTethysToneReverb) | unused_field);
+#else
                         pVag->field_C = unused_field;
+#endif
 
                         if (!(unused_field & 4) && !pVag->field_0_adsr_attack && pVag->field_6_adsr_release)
                         {
@@ -1355,7 +1365,12 @@ static bool CC Tethys_TransBody_Streamed(const LvlFileRecord* pRec, s16 vabId, u
                     auto pVag = &GetSpuApiVars()->sConvertedVagTable().table[vabId][prog][tone];
                     if (pVag->field_10_vag == i)
                     {
+#ifdef TETHYS_SATURN
+                        // SATURN (445.ao.3): keep the reverb bit SsVabOpenHead set.
+                        pVag->field_C = static_cast<u8>((pVag->field_C & kTethysToneReverb) | unused_field);
+#else
                         pVag->field_C = unused_field;
+#endif
 
                         if (!(unused_field & 4) && !pVag->field_0_adsr_attack && pVag->field_6_adsr_release)
                         {

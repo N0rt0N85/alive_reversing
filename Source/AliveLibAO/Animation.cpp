@@ -143,17 +143,56 @@ extern "C" unsigned char* Tethys_gDbufScratch;
 // ABEBSIC.BAN 84x64), which used to decode below the floor and cost the cache
 // nothing -- that is what the floor move below pays for.
 static const unsigned int kTethysCelMax = 3520u;   // per-entry cap, bytes
-static const unsigned int kTethysCelSlots = 24u;
+static const unsigned int kTethysCelSlots = 24u;   // == kSlzMaxJobs, src/slave_lzss.cxx
+
+// 445.ao.1 -- WHO OWES AN ENTRY ITS BYTES. The slave SH-2 now decodes cels one
+// tick ahead into this cache (src/slave_lzss.cxx has the whole design), so an
+// entry can exist before its bytes do:
+//   >= 0              a job of the batch in flight. NEVER served: until
+//                     Tethys_CelFence settles it, the bytes may not be there.
+//   kTethysCelSlave   the slave wrote it and nothing has used it yet. The first
+//                     hit counts in Tethys_gSlzHit -- a decode the master did not
+//                     have to do, which is the only number that says it paid.
+//   kTethysCelMine    everything else, i.e. the cache as it always was.
+static const int kTethysCelMine = -1;
+static const int kTethysCelSlave = -2;
 
 struct TethysCelEntry
 {
     const unsigned char* src;
     unsigned int len;
     unsigned int off;
+    int job;
 };
 static TethysCelEntry sTethysCel[kTethysCelSlots];
 static unsigned int sTethysCelN = 0;
 static unsigned int sTethysCelLow = 0;              // 0 == not yet armed
+
+// src/slave_lzss.cxx
+extern "C" const unsigned char Tethys_kSlzOn;
+extern "C" unsigned char Tethys_gSlzActive;
+extern "C" unsigned char Tethys_gSlzDead;
+extern "C" unsigned int Tethys_gSlzHit;
+extern "C" void Tethys_SlzBegin();
+extern "C" int Tethys_SlzAdd(const unsigned char* src, unsigned char* dst, unsigned int len);
+extern "C" int Tethys_SlzRoom();
+extern "C" void Tethys_SlzDrop(int job);
+extern "C" void Tethys_SlzKick();
+extern "C" void Tethys_SlzJoin();
+extern "C" int Tethys_SlzJobDone(int job);
+extern "C" void Tethys_CelFence();
+
+// Every function below that READS or RESHAPES the cache calls this first. A batch
+// in flight is closed before anything else touches the scratch, so no site has
+// to know whether the slave is running -- including the ones (FreeResource, the
+// compactor, the film's loan) that only reach the cache through
+// Tethys_DbufScratchForget. Between AnimateAll and the flush, the one window the
+// slave is meant to use, none of them runs.
+#define TETHYS_CEL_QUIESCE()        \
+    if (Tethys_gSlzActive)          \
+    {                               \
+        Tethys_CelFence();          \
+    }
 
 extern "C" unsigned int Tethys_gDbufMemoHits = 0;   // 'sv' on overlay row 3
 // 427.ao.6: the blood resource block, published by Blood::ctor_4072B0. A cel
@@ -205,27 +244,47 @@ static inline unsigned int TethysCelFloor()
 
 extern "C" void Tethys_DbufScratchForget()
 {
+    TETHYS_CEL_QUIESCE(); // 445.ao.1: the slave may be writing into what this forgets
     sTethysCelN = 0;
     sTethysCelLow = Tethys_gDbufScratchBytes;
     Tethys_gDbufCelLive = 0;
 }
 
-// Offset of this cel inside the scratch, or -1.
-static long TethysCelFind(const unsigned char* src, unsigned int len)
+// Index of this cel's entry, or -1. No side effects: the prefetch walk asks it
+// too, and a cel it finds is not a decode anybody saved.
+static long TethysCelLookup(const unsigned char* src, unsigned int len)
 {
     for (unsigned int i = 0; i < sTethysCelN; i++)
     {
         if (sTethysCel[i].src == src && sTethysCel[i].len == len)
         {
-            return static_cast<long>(sTethysCel[i].off);
+            return static_cast<long>(i);
         }
     }
     return -1;
 }
 
+// Offset of this cel inside the scratch, or -1.
+static long TethysCelFind(const unsigned char* src, unsigned int len)
+{
+    TETHYS_CEL_QUIESCE();
+    const long i = TethysCelLookup(src, len);
+    if (i < 0)
+    {
+        return -1;
+    }
+    if (sTethysCel[i].job == kTethysCelSlave)
+    {
+        sTethysCel[i].job = kTethysCelMine;
+        Tethys_gSlzHit++;
+    }
+    return static_cast<long>(sTethysCel[i].off);
+}
+
 // Reserve room for a cel we are about to decode, or -1 if it cannot be cached.
 static long TethysCelAlloc(const unsigned char* src, unsigned int len)
 {
+    TETHYS_CEL_QUIESCE();
     if (len == 0u || len > kTethysCelMax)
     {
         return -1;
@@ -274,6 +333,14 @@ static long TethysCelAlloc(const unsigned char* src, unsigned int len)
             {
                 sTethysCel[k++] = sTethysCel[i];    // no overlap: it survives
             }
+            else
+            {
+                // 445.ao.1: an entry of the batch being built (the prefetch walk
+                // is the only caller that can meet one) loses its bytes to this
+                // allocation, so its job must never run: the slave would write
+                // into the cel that now owns them.
+                Tethys_SlzDrop(sTethysCel[i].job);
+            }
         }
         sTethysCelN = k;
     }
@@ -281,6 +348,7 @@ static long TethysCelAlloc(const unsigned char* src, unsigned int len)
     {
         // The table, not the bytes, is what ran out. Forget the OLDEST, which is
         // entry 0 because the array is kept in allocation order.
+        Tethys_SlzDrop(sTethysCel[0].job); // 445.ao.1: same reason as above
         for (unsigned int i = 1; i < sTethysCelN; i++)
         {
             sTethysCel[i - 1] = sTethysCel[i];
@@ -291,6 +359,7 @@ static long TethysCelAlloc(const unsigned char* src, unsigned int len)
     sTethysCel[sTethysCelN].src = src;
     sTethysCel[sTethysCelN].len = len;
     sTethysCel[sTethysCelN].off = sTethysCelLow;
+    sTethysCel[sTethysCelN].job = kTethysCelMine; // the prefetch walk overwrites it
     sTethysCelN++;
     Tethys_gDbufCelLive = sTethysCelN;
     return static_cast<long>(sTethysCelLow);
@@ -299,6 +368,7 @@ static long TethysCelAlloc(const unsigned char* src, unsigned int len)
 // A cel too big to cache owns [0, len) of the scratch. Drop what it overwrites.
 static void TethysCelEvictLow(unsigned int len)
 {
+    TETHYS_CEL_QUIESCE();
     if (len <= TethysCelFloor())
     {
         return;                                     // cannot reach any entry
@@ -327,6 +397,38 @@ static void TethysCelEvictLow(unsigned int len)
         }
         sTethysCelLow = lowest;
     }
+}
+
+// 445.ao.1 -- CLOSE THE SLAVE'S BATCH AND SETTLE EVERY ENTRY IT OWED. Called by
+// Tethys_PresentFrameOnce before the sprite flush (the planned end of the
+// window), and by TETHYS_CEL_QUIESCE from anything that touches the cache while
+// a batch is still open. Tethys_SlzJoin waits until the slave has LEFT the batch
+// and purges this CPU's cache lines over every destination it wrote, so an
+// entry it finished is as good as one decoded here. An entry it never reached is
+// dropped: its bytes are whatever the scratch held before.
+extern "C" void Tethys_CelFence()
+{
+    if (!Tethys_gSlzActive)
+    {
+        return;
+    }
+    Tethys_SlzJoin();
+    unsigned int k = 0;
+    for (unsigned int i = 0; i < sTethysCelN; i++)
+    {
+        TethysCelEntry e = sTethysCel[i];
+        if (e.job >= 0)
+        {
+            if (!Tethys_SlzJobDone(e.job))
+            {
+                continue;
+            }
+            e.job = kTethysCelSlave;
+        }
+        sTethysCel[k++] = e;
+    }
+    sTethysCelN = k;
+    Tethys_gDbufCelLive = k;
 }
 extern "C" unsigned int Tethys_gDbufRaw[2];
 extern "C" unsigned int Tethys_gDbufBytes[2];
@@ -669,6 +771,149 @@ extern "C" volatile u32 Tethys_gAnimBadPtr = 0;
 extern "C" volatile s32 Tethys_gChantGlowOn;
 extern "C" void Tethys_ChantGlowComposite(void* pAnim, u8* pDst, s32 psxW, s32 psxH,
                                           s32 capBytes);
+
+// 445.ao.1 -- THE PREFETCH WALK. The slave half, and why it runs one tick ahead,
+// is in src/slave_lzss.cxx.
+//
+// WHICH ANIMATIONS. AnimateAll decodes an animation when its frame counter,
+// decremented, reaches 0: the ones that stand at 1 now. Read AFTER this tick's
+// AnimateAll, the counter names exactly who decodes on the next one -- unless
+// the game changes the animation in between (a state change in VUpdate), and
+// then the entry is simply never asked for.
+//
+// WHICH FRAME. VDecode_403550's frame step, mirrored without its side effects:
+// forward or backward, back to the loop start or held on the last frame. Its
+// frame callbacks are not mirrored; they run before the frame header is read
+// and do not choose the cel.
+//
+// WHAT IS REFUSED, and every refusal means "the master decodes it next tick, as
+// it always did": whatever the scratch path would not take (not type 4/5,
+// longer than a cache entry, the blood block, the chant menu), whatever a
+// Get_FrameHeader_403A00 firewall would reject -- every offset is bounded by the
+// block's own size here -- and whatever is not an Animation. The list also holds
+// AnimationUnknown, whose vDecode is empty and whose fields are not these; there
+// is no RTTI, so the vtable pointer tells them apart.
+extern "C" u32 Tethys_AnimBlockBytes(u8** ppRes); // ResourceManager.cpp
+static const void* sTethysAnimVptr = nullptr;     // latched in VDecode_403550
+
+static void TethysPrefetchOne(Animation* pAnim)
+{
+    u8** const ppBlock = pAnim->field_20_ppBlock;
+    if (!ppBlock || !*ppBlock || !Tethys_BlockPtrSane(*ppBlock) || pAnim->field_84_vram_rect.w <= 0)
+    {
+        return;
+    }
+    const u8* const pBlock = *ppBlock;
+    const u32 blockBytes = Tethys_AnimBlockBytes(ppBlock);
+    const u32 tableOff = static_cast<u32>(pAnim->field_18_frame_table_offset);
+    if (blockBytes < 12u || (tableOff & 3u) || tableOff > blockBytes - 12u)
+    {
+        return;
+    }
+    const AnimationHeader* const pHead = reinterpret_cast<const AnimationHeader*>(pBlock + tableOff);
+    const s32 nFrames = pHead->field_2_num_frames;
+    if (nFrames <= 0 || static_cast<u32>(nFrames) > (blockBytes - tableOff - 8u) / 4u)
+    {
+        return;
+    }
+    const BitField32<AnimFlags>& flags = pAnim->field_4_flags;
+    if (nFrames == 1 && flags.Get(AnimFlags::eBit12_ForwardLoopCompleted))
+    {
+        return; // VDecode_403550 leaves before decoding anything
+    }
+    s32 frame = pAnim->field_92_current_frame;
+    if (flags.Get(AnimFlags::eBit19_LoopBackwards))
+    {
+        frame = static_cast<s16>(frame - 1);
+        if (frame < pHead->field_4_loop_start_frame)
+        {
+            frame = flags.Get(AnimFlags::eBit8_Loop) ? nFrames - 1 : frame + 1;
+        }
+    }
+    else
+    {
+        frame = static_cast<s16>(frame + 1);
+        if (frame >= nFrames)
+        {
+            frame = flags.Get(AnimFlags::eBit8_Loop) ? pHead->field_4_loop_start_frame : frame - 1;
+        }
+    }
+    if (frame < 0 || frame >= nFrames)
+    {
+        return;
+    }
+    const u32 infoOff = pHead->mFrameOffsets[frame];
+    if ((infoOff & 3u) || infoOff >= blockBytes || blockBytes - infoOff < sizeof(FrameInfoHeader))
+    {
+        return;
+    }
+    const u32 headOff = reinterpret_cast<const FrameInfoHeader*>(pBlock + infoOff)->field_0_frame_header_offset;
+    if ((headOff & 3u) || headOff >= blockBytes || blockBytes - headOff < sizeof(FrameHeader))
+    {
+        return;
+    }
+    const FrameHeader* const pFrame = reinterpret_cast<const FrameHeader*>(pBlock + headOff);
+    if (pFrame->field_7_compression_type != CompressionType::eType_4_RLE
+        && pFrame->field_7_compression_type != CompressionType::eType_5_RLE)
+    {
+        return;
+    }
+    const u8* const pSrc = reinterpret_cast<const u8*>(&pFrame->field_8_width2);
+    const u32 len = *reinterpret_cast<const u32*>(pSrc);
+    if (len == 0u || len > kTethysCelMax || len > Tethys_gDbufScratchBytes)
+    {
+        return;
+    }
+    if (pBlock == Tethys_gBloodBlock       // composed per object, never cached
+        || TethysCelLookup(pSrc, len) >= 0 // cached already, or asked for by this walk
+        || !Tethys_SlzRoom())
+    {
+        return;
+    }
+    const long off = TethysCelAlloc(pSrc, len);
+    if (off < 0)
+    {
+        return;
+    }
+    // TethysCelAlloc appends, so the new entry is the last one. Tethys_SlzRoom
+    // says the add below succeeds; if it ever did not, the entry would be a cel
+    // with no bytes behind it, so it is taken back rather than trusted.
+    const int job = Tethys_SlzAdd(pSrc, Tethys_gDbufScratch + off, len);
+    if (job < 0)
+    {
+        sTethysCelN--;
+        Tethys_gDbufCelLive = sTethysCelN;
+        return;
+    }
+    sTethysCel[sTethysCelN - 1].job = job;
+}
+
+// Game.cpp, right after AnimateAll.
+extern "C" void Tethys_CelPrefetch()
+{
+    if (!Tethys_kSlzOn || Tethys_gSlzDead || Tethys_gDbufScratch == nullptr
+        || Tethys_gChantGlowOn || sTethysAnimVptr == nullptr || !gObjList_animations_505564)
+    {
+        return;
+    }
+    TETHYS_CEL_QUIESCE(); // a batch with no present since: settle it before reusing the list
+    Tethys_SlzBegin();
+    for (s32 i = 0; i < gObjList_animations_505564->Size(); i++)
+    {
+        AnimationBase* const pBase = gObjList_animations_505564->ItemAt(i);
+        if (!pBase)
+        {
+            break;
+        }
+        if (pBase->field_4_flags.Get(AnimFlags::eBit2_Animate)
+            && pBase->field_E_frame_change_counter == 1
+            && *reinterpret_cast<const void* const*>(pBase) == sTethysAnimVptr)
+        {
+            TethysPrefetchOne(static_cast<Animation*>(pBase));
+        }
+    }
+    Tethys_SlzKick();
+}
 #endif
 
 void Animation::UploadTexture(const FrameHeader* pFrameHeader, const PSX_RECT& vram_rect, s16 width_bpp_adjusted)
@@ -1081,6 +1326,12 @@ void Animation::VDecode_403550()
     {
         Tethys_gAnimBadBlock++; // firewall skip count (an/ap detail dropped bt867 to fund the overrun fix)
         return;
+    }
+    // 445.ao.1: the prefetch walk's type test. `this` is an Animation here by
+    // construction -- AnimationUnknown's vDecode is empty and never comes here.
+    if (!sTethysAnimVptr)
+    {
+        sTethysAnimVptr = *reinterpret_cast<const void* const*>(this);
     }
 #endif
 

@@ -129,6 +129,7 @@ extern "C" u32 Tethys_gPhRend;
 extern "C" u32 Tethys_gScrRaw;   // vs  ScreenManager::VRender
 extern "C" u32 Tethys_gDrawWalk; // n   drawables walked
 extern "C" u32 Tethys_gInAnimate;// the parent flag for Upload's two callers
+extern "C" void Tethys_CelPrefetch(); // 445.ao.1: AliveLibAO/Animation.cpp
 // SATURN (bt1030): pu owns the possession spike -- 25 ms of a 47 ms worst
 // tick against 4 ms quiet -- and pu is one number over the whole object list.
 // These three split it WITHOUT summing anything: the single most expensive
@@ -804,6 +805,13 @@ EXPORT void CC Game_Loop_437630()
         {
             GetGameAutoPlayer().SyncPoint(SyncPoints::AnimateAll);
             AnimationBase::AnimateAll_4034F0(gObjList_animations_505564);
+#ifdef TETHYS_SATURN
+            // SATURN 445.ao.1: hand the NEXT tick's cels to the slave SH-2, which
+            // decodes them while VRender and the OT walk run below. Closed before
+            // the sprite flush (Tethys_PresentFrameOnce). AliveLibAO/Animation.cpp
+            // and src/slave_lzss.cxx carry the design.
+            Tethys_CelPrefetch();
+#endif
         }
 
 #ifdef TETHYS_SATURN

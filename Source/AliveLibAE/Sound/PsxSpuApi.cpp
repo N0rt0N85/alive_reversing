@@ -407,6 +407,13 @@ EXPORT s16 CC SsVabOpenHead_4FC620(VabHeader* pVabHeader)
                 pData->field_F_prog = static_cast<u8>(pVagAttr->field_14_prog);
                 pData->field_10_vag = LOBYTE(pVagAttr->field_16_vag) - 1;
                 pData->field_C = 0;
+#ifdef TETHYS_SATURN
+                // SATURN (445.ao.3): the reverb flag the PC port dropped here.
+                if (pVagAttr->field_1_mode & 4)
+                {
+                    pData->field_C = kTethysToneReverb;
+                }
+#endif
                 pData->field_D_vol = pVagAttr->field_2_vol;
                 pData->field_E_priority = pVagAttr->field_0_priority;
                 pData->field_8_min = pVagAttr->field_6_min;
@@ -716,7 +723,12 @@ EXPORT s32 CC MIDI_PlayMidiNote_4FCB30(s32 vabId, s32 program, s32 note, s32 lef
                         panRight,
                         pChannel->field_10_freq, // freq
                         pChannel,
+#ifdef TETHYS_SATURN
+                        // SATURN (445.ao.3): bit 1 = the tone's reverb flag
+                        playFlags | ((pVagIter->field_C & kTethysToneReverb) ? 2u : 0u),
+#else
                         playFlags,
+#endif
                         pVagIter->field_E_priority);
 
                     if (program == 4 || program == 5 || program == 8 || program == 23 || program == 24 || program == 25)
@@ -1620,28 +1632,49 @@ EXPORT void CC SsSetTableSize_4FE0B0(void*, s32, s32)
 
 // TODO: Removed 4FE330
 
+#ifdef TETHYS_SATURN
+// SATURN (445.ao.3): the reverb calls reach the SCSP DSP (src/sound_saturn.cxx).
+// The type stays a stub: the Saturn has one program, SGL's REVERB01.
+extern "C" void Tethys_SndReverbOn(s32 on);
+extern "C" void Tethys_SndReverbDepth(s32 depth);
+extern "C" void Tethys_SndReverbClear(void);
+#endif
+
 EXPORT void SsUtReverbOn_4FE340()
 {
-    // Stub
+#ifdef TETHYS_SATURN
+    Tethys_SndReverbOn(1);
+#endif
 }
 
 EXPORT void SsUtReverbOff_4FE350()
 {
-    // Stub
+#ifdef TETHYS_SATURN
+    Tethys_SndReverbOn(0);
+#endif
 }
 EXPORT void CC SsUtSetReverbType_4FE360(s32)
 {
     // Stub
 }
 
+#ifdef TETHYS_SATURN
+EXPORT void SsUtSetReverbDepth_4FE380(s32 leftDepth, s32 /*rightDepth*/)
+{
+    Tethys_SndReverbDepth(leftDepth); // every caller passes the same value twice
+}
+#else
 EXPORT void SsUtSetReverbDepth_4FE380(s32, s32)
 {
     // Stub
 }
+#endif
 
 EXPORT void SpuClearReverbWorkArea_4FA690(s32)
 {
-    // Stub
+#ifdef TETHYS_SATURN
+    Tethys_SndReverbClear();
+#endif
 }
 
 

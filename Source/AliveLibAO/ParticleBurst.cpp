@@ -33,6 +33,38 @@ static inline FP Random_Speed(FP scale)
     return FP_FromRaw((Math_NextRandom() - 128) << 13) * scale;
 }
 
+#ifdef TETHYS_SATURN
+// SATURN 445.ao.2 -- A BURST IS SIZED AT BIRTH BY THE ROOM IN THE FRAME.
+// 347.ao.1 capped every burst at 12 because the bound it must respect is the
+// FRAME's 128 VDP1 commands, not the burst's. So a burst now asks the frame:
+// the commands the last flush offered, minus the debris it drew (the rest of
+// the scene), plus every item the live bursts already hold (as if all of them
+// were on screen), plus a margin for what an explosion's own tick adds besides
+// debris (its flash, the gibs, the blood). What is left is its size, never less
+// than 347.ao.1's 12 -- so no screen gets fewer debris than before -- and never
+// more than 40. A mine in a quiet corridor gets its 35 rocks and its sparks
+// whole; a crowded screen gets 12 a burst, exactly as before. The size is fixed
+// for the burst's life, so nothing pops in for a frame and out the next.
+extern "C" u32 Tethys_gSubmit; // renderer_saturn.cxx: sprites offered to the last flush
+static const s32 kTethysFrameCmds = 128;   // kMaxFrameSprites, SglAcceptCap
+static const s32 kTethysDebrisMargin = 24; // [est] one explosion tick's other sprites
+static const s32 kTethysDebrisFloor = 12;  // 347.ao.1's cap, now the minimum
+static s32 sTethysLiveDebris = 0;          // items held by the live bursts
+static u32 sTethysDrawnTick = 0xFFFFFFFFu;
+static s32 sTethysDrawnCur = 0;            // debris laid down this tick
+static s32 sTethysDrawnLast = 0;           // ... and on the tick before
+static void TethysDebrisRoll()
+{
+    const u32 now = static_cast<u32>(gnFrameCount_507670);
+    if (sTethysDrawnTick != now)
+    {
+        sTethysDrawnLast = (sTethysDrawnTick + 1u == now) ? sTethysDrawnCur : 0;
+        sTethysDrawnCur = 0;
+        sTethysDrawnTick = now;
+    }
+}
+#endif
+
 ParticleBurst* ParticleBurst::ctor_40D0F0(FP xpos, FP ypos, s16 particleCount, FP scale, BurstType type)
 {
     ctor_417C10();
@@ -70,8 +102,18 @@ ParticleBurst* ParticleBurst::ctor_40D0F0(FP xpos, FP ypos, s16 particleCount, F
     // heap for one boulder.  The OG counts are 20 (bombs, Shrykull), 25
     // (falling items), 35 (the mine) and that 150, so at 12 every site except
     // the boulder gets most of its shower back.
-    #define TETHYS_MAX_BURST_PARTICLES 12
-    if (particleCount > TETHYS_MAX_BURST_PARTICLES) { particleCount = TETHYS_MAX_BURST_PARTICLES; }
+    // 445.ao.2: no longer a constant -- see the block above Random_Speed. 40 is
+    // the most any burst can get (every site's whole shower except the boulder:
+    // 5,440 B of heap instead of 20,400) and 12 the least.
+    #define TETHYS_MAX_BURST_PARTICLES 40
+    {
+        TethysDebrisRoll();
+        const s32 scene = static_cast<s32>(Tethys_gSubmit) - sTethysDrawnLast;
+        s32 room = kTethysFrameCmds - kTethysDebrisMargin - (scene > 0 ? scene : 0) - sTethysLiveDebris;
+        room = (room > TETHYS_MAX_BURST_PARTICLES) ? TETHYS_MAX_BURST_PARTICLES : room;
+        room = (room < kTethysDebrisFloor) ? kTethysDebrisFloor : room;
+        if (particleCount > room) { particleCount = static_cast<s16>(room); }
+    }
 #endif
     SetVTable(this, 0x4BA480);
     field_4_typeId = Types::eParticleBurst_19;
@@ -86,6 +128,13 @@ ParticleBurst* ParticleBurst::ctor_40D0F0(FP xpos, FP ypos, s16 particleCount, F
     // compaction). If it doesn't fit in free space, ppRes is null and the else
     // branch marks the burst dead -- the rocks just don't spawn, no compaction.
     field_E4_ppRes = ResourceManager::Alloc_New_Resource_Impl(ResourceManager::ResourceType::Resource_3DGibs, 0, sizeof(ParticleBurst_Item) * particleCount, true, ResourceManager::BlockAllocMethod::eLastMatching, false);
+    // 445.ao.2: a burst too big for the free space falls back to the old 12
+    // (1,632 B) rather than to nothing, so a full heap is never worse than before.
+    if (!field_E4_ppRes && particleCount > kTethysDebrisFloor)
+    {
+        particleCount = kTethysDebrisFloor;
+        field_E4_ppRes = ResourceManager::Alloc_New_Resource_Impl(ResourceManager::ResourceType::Resource_3DGibs, 0, sizeof(ParticleBurst_Item) * particleCount, true, ResourceManager::BlockAllocMethod::eLastMatching, false);
+    }
 #else
     field_E4_ppRes = ResourceManager::Allocate_New_Locked_Resource_454F80(ResourceManager::ResourceType::Resource_3DGibs, 0, sizeof(ParticleBurst_Item) * particleCount);
 #endif
@@ -182,6 +231,9 @@ ParticleBurst* ParticleBurst::ctor_40D0F0(FP xpos, FP ypos, s16 particleCount, F
             }
 
             field_EC_count = particleCount;
+#ifdef TETHYS_SATURN
+            sTethysLiveDebris += particleCount; // 445.ao.2: handed back by dtor_40D5A0
+#endif
             field_F0_timer = gnFrameCount_507670 + 91;
             field_A8_xpos = xpos;
             field_AC_ypos = ypos;
@@ -240,6 +292,14 @@ BaseGameObject* ParticleBurst::dtor_40D5A0()
     if (field_E4_ppRes)
     {
         ResourceManager::FreeResource_455550(field_E4_ppRes);
+#ifdef TETHYS_SATURN
+        // 445.ao.2: counted where field_EC_count was set, i.e. only by a burst
+        // that both got its array and joined the drawable list.
+        if (!field_6_flags.Get(BaseGameObject::eListAddFailed_Bit1))
+        {
+            sTethysLiveDebris -= field_EC_count;
+        }
+#endif
     }
     return dtor_417D10();
 }
@@ -361,6 +421,10 @@ void ParticleBurst::VRender_40D7F0(PrimHeader** ppOt)
         {
             if (pItem->field_4_y >= screen_bottom && pItem->field_4_y <= screen_top)
             {
+#ifdef TETHYS_SATURN
+                TethysDebrisRoll(); // 445.ao.2: the next burst's measure of the scene
+                sTethysDrawnCur++;
+#endif
                 PSX_RECT rect = {};
                 if (bFirst)
                 {

@@ -224,6 +224,12 @@ EXPORT s16 CC SsUtChangePitch_4FDF70(s16 voice, s32 /*vabId*/, s32 /*prog*/, s16
 // (no FPU -- the f64 pow() these paths used costs thousands of cycles each).
 // x256 = exponent in 1/256-semitone units; returns the frequency multiplier.
 EXPORT f32 CC Tethys_Pow12_Saturn(s32 x256);
+
+// SATURN (445.ao.3): Converted_Vag::field_C keeps the tone's PSX reverb flag
+// (VagAtr mode 4) in bit 7. Every reader of field_C tests bit 2 only (the loop
+// flag, `>> 2 & 1`), so the bit rides along unseen until a note-on hands it to
+// SND_PlayEx as playFlags bit 1 (src/sound_saturn.cxx, the SCSP DSP reverb).
+constexpr u8 kTethysToneReverb = 0x80;
 #endif
 
 EXPORT s16 CC SsSeqOpen_4FD6D0(u8* pSeqData, s16 seqIdx);
