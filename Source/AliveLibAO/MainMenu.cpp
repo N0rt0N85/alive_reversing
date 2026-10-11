@@ -1808,6 +1808,10 @@ void Menu::MainScreen_Render_47BED0(PrimHeader** ppOt)
     }
 }
 
+#ifdef TETHYS_SATURN
+extern "C" s32 Tethys_CheatButtonHeld(); // src/sys_saturn.cxx: R down on pad 1 (446.ao.3)
+#endif
+
 EXPORT void Menu::MainScreen_Update_47AF60()
 {
     // Calculate idle timers for playing game play demos
@@ -1854,7 +1858,20 @@ EXPORT void Menu::MainScreen_Update_47AF60()
         bSmallerTimeout = gDemoPlay_507694;
     }
     const s32 idleMax = bSmallerTimeout != 0 ? 300 : 1500;
+#ifdef TETHYS_SATURN
+    // SATURN (446.ao.2-3): the PSX title-screen codes (CheatController.cpp) are
+    // typed holding R and contain Square and Circle, which select the
+    // highlighted entry here even as GameSpeak (the verb bit rides beside the
+    // bank's enabler): the first Square would leave the menu. While R is held,
+    // the face buttons only feed the cheat controller; the directions still move
+    // the cursor, as on the PSX. eCheatMode is out of the set as well: it is now
+    // the flight code's pulse (sys_saturn.cxx), not a key.
+    const bool bTethysSelect = !Tethys_CheatButtonHeld()
+        && Input().IsAnyHeld(InputObject::PadIndex::First, (InputCommands::eThrowItem | InputCommands::eUnPause_OrConfirm | InputCommands::eDoAction | InputCommands::eBack));
+    if (bTethysSelect || field_1DC_idle_input_counter > idleMax)
+#else
     if (Input().IsAnyHeld(InputObject::PadIndex::First, (InputCommands::eThrowItem | InputCommands::eUnPause_OrConfirm | InputCommands::eDoAction | InputCommands::eCheatMode | InputCommands::eBack)) || field_1DC_idle_input_counter > idleMax)
+#endif
     {
         if (field_1DC_idle_input_counter <= idleMax)
         {
@@ -2059,7 +2076,13 @@ void Menu::GoToSelectedMenuPage_47BC50()
 
         if (field_226_bToLevelSelect)
         {
+#ifdef TETHYS_SATURN
+            // SATURN (446.ao.2): the level select runs on the LOAD page (C06, kept
+            // in RAM since 442.ao.1), its list and its controls; see To_Load_Update.
+            gMap_507BA8.SetActiveCam_444660(LevelIds::eMenu_0, 1, CameraIds::Menu::eLoad_6, CameraSwapEffects::eInstantChange_0, 0, 0);
+#else
             gMap_507BA8.SetActiveCam_444660(LevelIds::eMenu_0, 1, CameraIds::Menu::eLvlSelect_31, CameraSwapEffects::eInstantChange_0, 0, 0);
+#endif
             field_1CC_fn_update = &Menu::ToNextMenuPage_47BD80;
             return;
         }
@@ -2168,6 +2191,18 @@ void Menu::ToNextMenuPage_47BD80()
 {
     if (sNumCamSwappers_507668 <= 0)
     {
+#ifdef TETHYS_SATURN
+        if (field_226_bToLevelSelect)
+        {
+            // SATURN (446.ao.2): exactly the eLoad_3 case below; the flag stays
+            // set and turns the page into the level list.
+            field_204_flags &= ~2u;
+            field_1CC_fn_update = &Menu::To_Load_Update_47D8E0;
+            field_1D0_fn_render = &Menu::Load_Render_47DDA0;
+            field_1E0_selected_index.raw = 0;
+        }
+        else
+#endif
         if (field_224_bToFmvSelect || field_226_bToLevelSelect)
         {
             field_204_flags &= ~2u;
@@ -2347,6 +2382,24 @@ void Menu::To_Load_Update_47D8E0()
     {
         if (field_1E8_pMenuTrans->field_16_bDone)
         {
+#ifdef TETHYS_SATURN
+            // SATURN (446.ao.2): THE LEVEL SELECT, ON THE LOAD PAGE. Its rows are
+            // AO's own fifteen starts (sLevelList_4D0300), in AO's order and not
+            // sorted; confirming one starts it (Load_Update_47D760) as AO's own
+            // level page did. Every name fits the 32-char row.
+            if (field_226_bToLevelSelect)
+            {
+                sSaveIdx_9F2DD8 = 0;
+                for (const MenuFMV& rec : sLevelList_4D0300)
+                {
+                    strncpy(sSaveNames_9F1DD8[sSaveIdx_9F2DD8].field_0_mName, rec.field_0_name, 31);
+                    sSaveNames_9F1DD8[sSaveIdx_9F2DD8].field_0_mName[31] = 0;
+                    sSaveIdx_9F2DD8++;
+                }
+            }
+            else
+            {
+#endif
             sSaveIdx_9F2DD8 = 0;
             IO_EnumerateDirectory("*.sav", [](const char_type* fileName, u32 /*lastWriteTime*/)
                                   {
@@ -2369,6 +2422,9 @@ void Menu::To_Load_Update_47D8E0()
                                       }
                                   });
             qsort(sSaveNames_9F1DD8, sSaveIdx_9F2DD8, sizeof(SaveName), &Menu::StringsEqual_47DA20);
+#ifdef TETHYS_SATURN
+            }
+#endif
 
             field_1DC_idle_input_counter = 0;
             field_1FE = 0;
@@ -4422,6 +4478,23 @@ void Menu::Load_Update_47D760()
 
     if (Input().IsAnyHeld(InputObject::PadIndex::First, (InputCommands::eThrowItem | InputCommands::eUnPause_OrConfirm | InputCommands::eDoAction)))
     {
+#ifdef TETHYS_SATURN
+        if (field_226_bToLevelSelect)
+        {
+            // SATURN (446.ao.2): a row of the level list starts its level, exactly
+            // as FMV_Select_Update_47E8D0 does for AO's own level page.
+            const MenuFMV* pRec = &sLevelList_4D0300[field_1E0_selected_index.raw];
+            field_20E_level = pRec->field_4_level_id;
+            field_210_path = pRec->field_6;
+            field_212_camera = pRec->field_8;
+            field_214_abe_xpos = pRec->field_C;
+            field_216_abe_ypos = pRec->field_E;
+            field_20C_bStartInSpecificMap = 1;
+            field_1E8_pMenuTrans->StartTrans_436560(Layer::eLayer_FadeFlash_40, 1, 0, 16);
+            field_1CC_fn_update = &Menu::Level_Cheat_To_Loading_Update_47ED50;
+            return;
+        }
+#endif
         if (sSaveIdx_9F2DD8)
         {
             field_230_bGoBack = 0;
@@ -4637,6 +4710,11 @@ void Menu::Load_BackToMainScreen_Update_47DA40()
         {
             if (field_202 == 0)
             {
+#ifdef TETHYS_SATURN
+                // SATURN (446.ao.2): leaving the level list: the next visit to
+                // the load page lists the saves again.
+                field_226_bToLevelSelect = 0;
+#endif
                 gMap_507BA8.SetActiveCam_444660(LevelIds::eMenu_0, 1, CameraIds::Menu::eMainMenu_1, CameraSwapEffects::eInstantChange_0, 0, 0);
             }
             else

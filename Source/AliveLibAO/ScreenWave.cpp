@@ -15,6 +15,17 @@ void Forcelink_ScreenWave()
 
 namespace AO {
 
+#ifdef TETHYS_SATURN
+// SATURN (446.ao.1): the bells' wave is drawn by the renderer
+// (src/renderer_saturn.cxx, THE BELLS' WAVE): VDP2 bends the background inside
+// the ring, VDP1 bends the sprites it crosses. AO's way -- 128 quads a tick
+// textured from the frame buffer -- has no Saturn equivalent (VDP1 cannot read
+// its frame buffer), so this object only keeps its radius and hands the ring
+// over every frame. Same five ints on both sides: an extern "C" arity mismatch
+// links in silence.
+extern "C" void Tethys_ScreenWaveDraw(s32 xPsx, s32 yPsx, s32 radius, s32 width, s32 layer);
+#endif
+
 static constexpr s32 kMaxUVCount = 32;
 static constexpr s32 kMaxPolygons = 4;
 
@@ -37,6 +48,12 @@ ScreenWave* ScreenWave::ctor_462A70(FP xpos, FP ypos, Layer layer, FP width, FP 
     field_4_typeId = Types::eScreenWave_83;
     gObjList_drawables_504618->Push_Back(this);
 
+#ifdef TETHYS_SATURN
+    // SATURN (446.ao.1): no 14,080 B 'evaW' block. Its allocator is fatal on
+    // failure (the null test below was unreachable), so on a full heap striking
+    // a bell could end the game; and nothing in it is used here any more.
+    field_14_ppRes = nullptr;
+#else
     // TODO: Using frame counter as an ID seems extremely dangerous due to id collision risk!
     field_14_ppRes = reinterpret_cast<ScreenWave_Data**>(ResourceManager::Allocate_New_Locked_Resource_454F80('evaW', gnFrameCount_507670, sizeof(ScreenWave_Data)));
     if (!field_14_ppRes)
@@ -44,6 +61,7 @@ ScreenWave* ScreenWave::ctor_462A70(FP xpos, FP ypos, Layer layer, FP width, FP 
         field_6_flags.Set(BaseGameObject::eDead_Bit3);
         return this;
     }
+#endif
 
     field_10_layer = layer;
     field_1C_ypos = ypos;
@@ -76,6 +94,13 @@ ScreenWave* ScreenWave::ctor_462A70(FP xpos, FP ypos, Layer layer, FP width, FP 
 
     field_20_fp1 = FP_FromInteger(1);
     field_24_fp1 = FP_FromInteger(1);
+
+#ifdef TETHYS_SATURN
+    // SATURN (446.ao.1): the width is all the renderer needs from the tables
+    // below (unused s32 slot of the original layout).
+    field_28 = FP_GetExponent(width);
+    return this;
+#endif
 
     const FP uv1_off = (width / FP_FromInteger(4));
     const FP uv2_off = (width / FP_FromInteger(2));
@@ -121,6 +146,9 @@ BaseGameObject* ScreenWave::dtor_463010()
 {
     SetVTable(this, 0x4BC9A0);
     gObjList_drawables_504618->Remove_Item(this);
+#ifdef TETHYS_SATURN
+    if (field_14_ppRes) // SATURN (446.ao.1): never allocated, see the ctor
+#endif
     ResourceManager::FreeResource_455550(reinterpret_cast<u8**>(field_14_ppRes));
     return dtor_487DF0();
 }
@@ -164,6 +192,9 @@ void ScreenWave::VUpdate_463080()
     {
         field_2C += field_30_speed;
 
+#ifdef TETHYS_SATURN
+        return; // SATURN (446.ao.1): the radius is the whole state, see the ctor
+#endif
         auto pData = reinterpret_cast<ScreenWave_Data*>(*field_14_ppRes);
 
         for (s32 i = 0; i < 32; i++)
@@ -200,6 +231,14 @@ void ScreenWave::VRender_463130(PrimHeader** ppOt)
     {
         return;
     }
+
+#ifdef TETHYS_SATURN
+    // SATURN (446.ao.1): the ring AO would draw this frame -- band [R + w/2,
+    // R + w] around the bell, R = field_2C -- goes to the renderer instead.
+    Tethys_ScreenWaveDraw(field_36_screen_xpos, field_38_screen_ypos,
+                          FP_GetExponent(field_2C), field_28, static_cast<s32>(field_10_layer));
+    return;
+#endif
 
     ScreenWave_Data* pScreenWaveData = *field_14_ppRes;
 

@@ -20,6 +20,9 @@
 #include "Game.hpp"
 #include "stdlib.hpp"
 #include "Midi.hpp"
+#ifdef TETHYS_SATURN
+#include "Sound.hpp" // SND_Restart_476340, after the MovieStone (446.ao.3)
+#endif
 #include "Movie.hpp"
 #include "CircularFade.hpp"
 #include "DeathFadeOut.hpp"
@@ -1168,6 +1171,18 @@ void Abe::vUpdate_41FDB0()
         {
             field_2A8_flags.Clear(Flags_2A8::e2A8_Bit7);
         }
+
+#ifdef TETHYS_SATURN
+        // SATURN (446.ao.2): A DEATH IN FLIGHT RESPAWNS. The flying branch below
+        // replaces the motion machine with ToFall every tick, so the motion a
+        // death sets (knockback, gas death, ...) never ran, nor the dead state
+        // that respawns Abe: the death fade stayed black for ever. Dead, Abe
+        // leaves flight mode and dies normally; the code turns it back on.
+        if (sDDCheat_FlyingEnabled_50771C && sControlledCharacter_50767C == this && field_100_health <= FP_FromInteger(0))
+        {
+            sDDCheat_FlyingEnabled_50771C = 0;
+        }
+#endif
 
         if (sDDCheat_FlyingEnabled_50771C && sControlledCharacter_50767C == this)
         {
@@ -4224,27 +4239,21 @@ void Abe::Motion_0_Idle_423520()
                 case TlvTypes::MovieStone_51:
                 case TlvTypes::DemoPlaybackStone_96:
                 {
-#ifdef TETHYS_SATURN
-                    // SATURN (346.ao.1; was the four-stone gate): two stones
-                    // stay inert, and neither for the reason the 2026-07
-                    // comment gave.  MovieStone is the closest to viable now
-                    // that the FMV backend ships -- there is exactly ONE in the
-                    // whole game (R2P11C03, HALTS.DDV) and its camera already
-                    // carries both anims -- but it has never been exercised and
-                    // it re-enters DecompressCameraToVRam on the way out, which
-                    // is its own S7 story; it wants a build of its own.
-                    // DemoPlayback is moot: walking every converted PATH.BND
-                    // finds ZERO DemoPlaybackStone_96 TLVs on the disc, so the
-                    // case is unreachable whatever we do with it.
-                    // Play the shrug, as before.
-                    field_FC_current_motion = eAbeMotions::Motion_36_DunnoBegin_423260;
-                    break;
-#else
+                    // SATURN (446.ao.3): the MovieStone is live again, on the OG
+                    // path (346.ao.1 had it shrug). There is ONE in the game,
+                    // R2P11C03, and its film HALTS is on the disc both as a film
+                    // (.CPK) and as stills (.SLP); its camera carries both anims.
+                    // The way out is no longer a story of its own: the Saturn
+                    // DecompressCameraToVRam is a guarded no-op, and the end of
+                    // the film (movie_stub.cxx RestoreBackground) re-reads this
+                    // camera's background, the respawn's path. The music is the
+                    // one thing added (eGetHandstoneType_1, eHandstoneEnd_5).
+                    // DemoPlaybackStone is moot: no converted PATH.BND holds
+                    // one, and eHandstoneStart_0 does not look one up.
                     field_F0_pTlv = pTlv;
                     field_FC_current_motion = eAbeMotions::Motion_88_HandstoneBegin_430590;
                     field_110_state.stone = StoneStates::eHandstoneStart_0;
                     return;
-#endif
                 }
                 case TlvTypes::BoomMachine_97:
                 {
@@ -8455,15 +8464,12 @@ void Abe::Motion_88_HandstoneBegin_430590()
                     FP_GetExponent(field_AC_ypos),
                     TlvTypes::DemoPlaybackStone_96);
 #else
-                // SATURN (346.ao.1): search only for the stone types we are
-                // allowed to ENTER.  This block re-reads the world at Abe's
-                // exact position and REASSIGNS field_F0_pTlv, so the OG order
-                // Demo -> Bell -> Movie -> Hand could route us into a branch
-                // the dispatch above deliberately declined -- the type Abe
-                // entered on and the type this state acts on are not the same
-                // variable.  Only the Demo and Movie lookups are dropped; Bell
-                // and Hand keep their OG order, and the transition SFX keeps
-                // its OG placement on the leg we take.
+                // SATURN (346.ao.1, 446.ao.3): this block re-reads the world at
+                // Abe's exact position and REASSIGNS field_F0_pTlv in the OG
+                // order Demo -> Bell -> Movie -> Hand. Only the Demo lookup is
+                // dropped (no DemoPlaybackStone on the disc, and its playback
+                // reads the little-endian .JOY); the Movie one is back with
+                // the stone, and the transition SFX keeps its OG placement.
                 field_F0_pTlv = nullptr;
 #endif
                 if (!field_F0_pTlv)
@@ -8475,14 +8481,12 @@ void Abe::Motion_88_HandstoneBegin_430590()
                         TlvTypes::BellSongStone_54);
                 if (!field_F0_pTlv)
                 {
-#ifndef TETHYS_SATURN
                     field_F0_pTlv = gMap_507BA8.TLV_Get_At_446260(
                         FP_GetExponent(field_A8_xpos),
                         FP_GetExponent(field_AC_ypos),
                         FP_GetExponent(field_A8_xpos),
                         FP_GetExponent(field_AC_ypos),
                         TlvTypes::MovieStone_51);
-#endif
                     sAbeSound_507730 = SFX_Play_43AE60(SoundEffect::HandstoneTransition_13, 127, -300, 0);
                     if (!field_F0_pTlv)
                         field_F0_pTlv = gMap_507BA8.TLV_Get_At_446260(
@@ -8544,6 +8548,16 @@ void Abe::Motion_88_HandstoneBegin_430590()
                         u32 aux = 0;
                         Get_fmvs_sectors_44FEB0(
                             pFmvInfo->field_0_pName, 0, 0, &aux, 0, 0);
+#ifdef TETHYS_SATURN
+                        // SATURN (446.ao.3): the film's player swaps the sound
+                        // driver out (movie_cinepak.cxx) and leaves the music to
+                        // the next camera change to restart, which a stone never
+                        // makes. Stop it here whatever plays (film, stills or
+                        // nothing) and restart it in eHandstoneEnd_5: the pause
+                        // menu's pair. HALTS's record asks for silence anyway
+                        // (field_8_stop_music = 1).
+                        SND_StopAll_4762D0();
+#endif
                         auto pMovie = ao_new<Movie>();
                         if (pMovie)
                         {
@@ -8671,6 +8685,15 @@ void Abe::Motion_88_HandstoneBegin_430590()
                     SND_Stop_Channels_Mask_4774A0(sAbeSound_507730);
                     sAbeSound_507730 = 0;
                 }
+#ifdef TETHYS_SATURN
+                // SATURN (446.ao.3): the music the MovieStone stopped comes back,
+                // after the stale transition-SFX mask above so that mask cannot
+                // cut one of its first notes.
+                if (field_170_hand_stone_type.mType == TlvTypes::MovieStone_51)
+                {
+                    SND_Restart_476340();
+                }
+#endif
                 ResourceManager::FreeResource_455550(
                     ResourceManager::GetLoadedResource_4554F0(ResourceManager::Resource_Animation, AOResourceID::kSpotliteAOResID, 0, 0));
             }

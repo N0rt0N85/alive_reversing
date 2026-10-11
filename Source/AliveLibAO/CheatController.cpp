@@ -5,6 +5,12 @@
 #include "Map.hpp"
 #include "Input.hpp"
 
+#ifdef TETHYS_SATURN
+// SATURN (446.ao.3): src/sys_saturn.cxx, 1 while R is down on pad 1. No
+// arguments on either side: an extern "C" arity mismatch links silently.
+extern "C" s32 Tethys_CheatButtonHeld();
+#endif
+
 namespace AO {
 
 ALIVE_VAR(1, 0x4FF958, CheatController*, pCheatController_4FF958, nullptr);
@@ -51,6 +57,37 @@ struct CheatEntry final
 ALIVE_ASSERT_SIZEOF(CheatEntry, 0x14);
 
 
+#ifdef TETHYS_SATURN
+// SATURN (446.ao.2): THE PSX CODES, NOT THE PC ONES. RELIVE carries the PC
+// keyboard's tables (hold Shift; six Throws for the fart gas, arrows only on the
+// menu); these are the PlayStation's, entered holding R1. The game reads that R1
+// as Run, but the player's thumb knows it as the right shoulder, so we ask for R
+// (446.ao.3; 446.ao.2 took Run, i.e. X). The PSX face buttons are the Saturn
+// diamond (sys_saturn.cxx): Square = Action (A), Cross = Crouch/Roll (B),
+// Circle = Throw (C), Triangle = Hop (Y).
+//   Green farts, in play:  Up, Left, Right, Square, Circle, Cross
+//   Voice locks, in play:  Triangle, Up, Circle, Left, Cross, Down, Square, Right
+//   FMV select, title:     Up, Left, Right, Square, Circle, Triangle, Square,
+//                          Right, Left, Up, Right
+//   Level select, title:   Down, Right, Left, Right, Square, Circle, Square,
+//                          Triangle, Circle, Square, Right, Left
+// These replace the PC tables outright: they were the only other way in.
+const InputCommands sCheatKeyArray_FartGas_4C50B8[] = {
+    eUp, eLeft, eRight, eDoAction, eThrowItem, eCrouchOrRoll,
+};
+
+const InputCommands sCheatKeyArray_VoiceLocks_4C50C8[] = {
+    eHop, eUp, eThrowItem, eLeft, eCrouchOrRoll, eDown, eDoAction, eRight,
+};
+
+const InputCommands sCheatKeyArray_FMV_4C50D8[] = {
+    eUp, eLeft, eRight, eDoAction, eThrowItem, eHop, eDoAction, eRight, eLeft, eUp, eRight,
+};
+
+const InputCommands sCheatKeyArray_LevelSelect_4C50E8[] = {
+    eDown, eRight, eLeft, eRight, eDoAction, eThrowItem, eDoAction, eHop, eThrowItem, eDoAction, eRight, eLeft,
+};
+#else
 const InputCommands sCheatKeyArray_FartGas_4C50B8[] = {
     eThrowItem,
     eThrowItem,
@@ -90,6 +127,7 @@ const InputCommands sCheatKeyArray_LevelSelect_4C50E8[] = {
     eLeft,
     eUp,
 };
+#endif
 
 CheatEntry stru_4C50F8[4] = {
     {~0, ALIVE_COUNTOF(sCheatKeyArray_FartGas_4C50B8), sCheatKeyArray_FartGas_4C50B8, 0, &CheatController_Cheat_FartGas_40FB70},
@@ -142,11 +180,25 @@ void CheatController::VUpdate()
 
 void CheatController::VUpdate_40FC40()
 {
+#ifdef TETHYS_SATURN
+    // SATURN (446.ao.2-3): compare the game verbs only. Held R makes every face
+    // button arrive as GameSpeak bank 2, i.e. its enabler beside the PSX face bit
+    // (AO/Input.cpp:57-107); and if a remap moves that bank off R, our A carries
+    // Confirm and our B carries Back instead (sys_saturn.cxx). Either way an exact
+    // match would never see Square or Cross.
+    const u16 held = static_cast<u16>(Input().Held() & ~(InputCommands::eLeftGamespeak | InputCommands::eRightGameSpeak | InputCommands::eUnPause_OrConfirm | InputCommands::ePause | InputCommands::eBack | InputCommands::eCheatMode));
+#else
     const u16 held = Input().Held();
+#endif
     if (held)
     {
         // Only do cheat code check if shift is held
+#ifdef TETHYS_SATURN
+        // SATURN (446.ao.3): R, which AO cannot see alone (sys_saturn.cxx).
+        if (Tethys_CheatButtonHeld())
+#else
         if (Input().IsAnyPressed(InputCommands::eRun))
+#endif
         {
             for (auto& cheatEntry : stru_4C50F8)
             {

@@ -231,6 +231,7 @@ public:
     // re-uploaded -> black screen. Re-pushing FG1/Anim into the already-populated
     // field_0_array would double-free in Camera::dtor, hence Bits-only.
     static void CC Tethys_StreamCamFile(Camera* pCamera, bool bitsOnly = false);
+    static void CC Tethys_PrefetchCamFile(const char_type* pName); // SATURN 446.ao.8
 #endif
 };
 

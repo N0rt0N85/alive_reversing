@@ -864,6 +864,7 @@ void Map::ScreenChange_Common()
 // the level does -- it is consumed several frames later, by which time
 // field_10_screenChangeEffect belongs to the next screen.
 extern "C" void Tethys_OnScreenChange(s32 inMenu, s32 effect);
+extern "C" void Tethys_FlipMark(s32 k); // SATURN 446.ao.8: row 20 `a`/`b` marks
 #endif
 
 void Map::ScreenChange_4444D0()
@@ -881,6 +882,80 @@ void Map::ScreenChange_4444D0()
     // time field_0_current_level may already be the next one.
     Tethys_OnScreenChange(field_0_current_level == LevelIds::eMenu_0 ? 1 : 0,
                           static_cast<s32>(field_10_screenChangeEffect));
+    // SATURN 446.ao.8: start the new screen's .CAM read NOW, under the teardown
+    // and the heap compaction below (measurement at
+    // ResourceManager::Tethys_PrefetchCamFile). Inside the loaded level only (a
+    // level change swaps the .LVL), never for a film, which owns the drive.
+    // 446.ao.9: AND THE WALKING CHANGE. 446.ao.8 served eInstantChange_2 alone
+    // and its capture adopted 1 read in 9 changes: walking off a screen edge is
+    // eSliceCam_1, whose camera Handle_PathTransition_444DD0 only picks AFTER
+    // the compaction. It is predicted here the same way it will be picked: the
+    // PathTransition TLV under the hero, else the neighbouring cell in the
+    // direction of travel. A wrong guess costs one stopped read: the reader
+    // restarts any read that is not its record.
+    if (field_0_current_level != LevelIds::eMenu_0)
+    {
+        char_type camName[20] = {};
+        LevelIds lvl = field_A_level;
+        CameraSwapEffects eff = field_10_screenChangeEffect;
+        if (field_6_state == CamChangeStates::eInstantChange_2)
+        {
+            Path_Format_CameraName_4346B0(camName, field_A_level, field_C_path, field_E_camera);
+        }
+        else if (field_6_state == CamChangeStates::eSliceCam_1)
+        {
+            Path_Change* pTlv = nullptr;
+            if (field_18_pAliveObj)
+            {
+                const s16 x = static_cast<s16>(FP_GetExponent(field_18_pAliveObj->field_A8_xpos));
+                const s16 y = static_cast<s16>(FP_GetExponent(field_18_pAliveObj->field_AC_ypos));
+                pTlv = static_cast<Path_Change*>(TLV_Get_At_446260(x, y, x, y, TlvTypes::PathTransition_1));
+            }
+            if (pTlv)
+            {
+                lvl = pTlv->field_18_level;
+                eff = kPathChangeEffectToInternalScreenChangeEffect_4CDC78[pTlv->field_20_wipe];
+                Path_Format_CameraName_4346B0(camName, pTlv->field_18_level, pTlv->field_1A_path, pTlv->field_1C_camera);
+            }
+            else
+            {
+                eff = CameraSwapEffects::eLeftToRight_1; // a slide, set by Handle_PathTransition
+                s32 cx = field_20_camX_idx;
+                s32 cy = field_22_camY_idx;
+                switch (field_14_direction)
+                {
+                    case MapDirections::eMapLeft_0:
+                        cx--;
+                        break;
+                    case MapDirections::eMapRight_1:
+                        cx++;
+                        break;
+                    case MapDirections::eMapTop_2:
+                        cy--;
+                        break;
+                    case MapDirections::eMapBottom_3:
+                        cy++;
+                        break;
+                    default:
+                        break;
+                }
+                if (cx >= 0 && cy >= 0 && cx < field_24_max_cams_x && cy < field_26_max_cams_y)
+                {
+                    const u8* pPathRes = *GetPathResourceBlockPtr(field_2_current_path);
+                    const CameraName* pCam = reinterpret_cast<const CameraName*>(
+                        pPathRes + sizeof(CameraName) * (cx + cy * field_24_max_cams_x));
+                    memcpy(camName, pCam->name, sizeof(CameraName));
+                }
+            }
+        }
+        if (camName[0] && lvl == field_0_current_level
+            && eff != CameraSwapEffects::ePlay1FMV_5 && eff != CameraSwapEffects::ePlay2FMVs_9
+            && eff != CameraSwapEffects::ePlay3FMVs_10 && eff != CameraSwapEffects::eUnknown_11)
+        {
+            strcat(camName, ".CAM");
+            ResourceManager::Tethys_PrefetchCamFile(camName);
+        }
+    }
 #endif
 
     if (sMap_bDoPurpleLightEffect_507C9C && field_0_current_level != LevelIds::eBoardRoom_12)
@@ -951,6 +1026,9 @@ void Map::ScreenChange_4444D0()
         }
     }
 
+#ifdef TETHYS_SATURN
+    Tethys_FlipMark(0); // SATURN 446.ao.8: row 20 `a` = T0 to here (the teardown)
+#endif
     ScreenChange_Common();
 }
 
@@ -1702,6 +1780,12 @@ Path_TLV* Map::TLV_First_Of_Type_In_Camera_4464A0(TlvTypes type, s32 camX)
     return pTlvIter;
 }
 
+#ifdef TETHYS_SATURN
+// SATURN 446.ao.11: the camera GoTo_Camera already asked for (the block above
+// its old-camera teardown); Load_Path_Items must not ask a second time.
+static Camera* sTethysAskedEarly = nullptr;
+#endif
+
 void Map::Load_Path_Items_445DA0(Camera* pCamera, LoadMode loadMode)
 {
     if (!pCamera)
@@ -1756,7 +1840,16 @@ void Map::Load_Path_Items_445DA0(Camera* pCamera, LoadMode loadMode)
                 pCamera);
 #endif
             sCameraBeingLoaded_507C98 = pCamera;
-            Loader_446590(pCamera->field_14_cam_x, pCamera->field_16_cam_y, LoadMode::LoadResourceFromList_1, TlvTypes::None_m1); // none = load all
+#ifdef TETHYS_SATURN
+            if (sTethysAskedEarly == pCamera)
+            {
+                sTethysAskedEarly = nullptr; // 446.ao.11: asked before the old camera let go
+            }
+            else
+#endif
+            {
+                Loader_446590(pCamera->field_14_cam_x, pCamera->field_16_cam_y, LoadMode::LoadResourceFromList_1, TlvTypes::None_m1); // none = load all
+            }
         }
         else
         {
@@ -1931,6 +2024,8 @@ void Map::GoTo_Camera_445050()
 {
 #ifdef TETHYS_SATURN
     Tethys_gBootPhase = 1;
+    Tethys_FlipMark(1); // SATURN 446.ao.8: row 20 `b` ends here (the heap compaction)
+    sTethysAskedEarly = nullptr; // SATURN 446.ao.11: never carried across a change
     // SATURN 420.ao.2: the effect is FINAL here and not yet consumed -- both
     // dispatch paths (ScreenChange_Common and Handle_PathTransition) reach this
     // function, and FlipEnd, which arms the ramp that draws the wipe, runs
@@ -2274,6 +2369,34 @@ void Map::GoTo_Camera_445050()
 
     ResourceManager::LoadingLoop_41EAD0(bShowLoadingIcon);
 
+#ifdef TETHYS_SATURN
+    // SATURN 446.ao.11 -- ASK FOR WHAT THE NEW SCREEN NEEDS BEFORE THE OLD ONE
+    // LETS GO (Romain's design, 2026-10-11). Row 23 of 446.ao.10 caught every
+    // change re-reading 16-112 KB it had just freed: LCDFONT.FNT on 7 changes
+    // of 9, ABEHOIST.BAN on 4, all 8 records of the return to c4. AO kept FIVE
+    // cameras (this one and its four neighbours), so the camera Abe walked off
+    // was reused as a neighbour and its references survived. This port builds
+    // only the current one (memory), so the old camera is destroyed just below,
+    // releasing everything it held, BEFORE Load_Path_Items asked for the new
+    // screen's resources, which then came back from the record cache or the CD.
+    // Asking first reads nothing: the request pass walks the path's TLVs, which
+    // are in memory, and only QUEUES what is missing. A resource both screens
+    // use gains the new camera's reference before the old camera drops its own,
+    // so only what the new screen does not need is freed, and the queue holds
+    // only what is really absent. The queued files still load in LoadingLoop
+    // after the stream, i.e. after the frees, so the heap peak does not grow.
+    // A respawn reuses its camera (flag 1 set): nothing to ask, as before.
+    {
+        Camera* pNew = field_34_camera_array[0];
+        if (pNew && !(pNew->field_30_flags & 1))
+        {
+            sCameraBeingLoaded_507C98 = pNew;
+            Loader_446590(pNew->field_14_cam_x, pNew->field_16_cam_y, LoadMode::LoadResourceFromList_1, TlvTypes::None_m1);
+            sCameraBeingLoaded_507C98 = nullptr;
+            sTethysAskedEarly = pNew;
+        }
+    }
+#endif
     // Free each camera itself
     for (s32 i = 0; i < ALIVE_COUNTOF(field_48_stru_5); i++)
     {

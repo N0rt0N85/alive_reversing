@@ -325,6 +325,161 @@ static void Tethys_StickyMaterialize(u32 type, u32 id)
     }
 }
 
+// SATURN 446.ao.12 -- A RELEASED RESOURCE STAYS WHERE IT IS WHILE THE HEAP HAS
+// ROOM. Romain, 2026-10-11: "on ne devrait pas TOUT garder en memoire sans
+// raison (sauf si on a de la marge)", and the cartridge should keep resources,
+// not only backgrounds. 446.ao.11 stopped the re-reads between ADJACENT
+// screens; row 23 of its capture still showed 156 KB re-read from screens
+// visited EARLIER (ABEHOIST + LCDFONT on c3, R1SWITCH + ABEPULL on c7, 84 KB on
+// the return to c4), each file ~110-150 ms.
+//   A chunk that came out of a resource file (Move_Resources marks it) and whose
+// last reference goes is KEPT instead of freed: same address, same bytes, type
+// and id intact. The accounting treats it as free (sManagedMemoryUsedSize drops
+// as before, so `us` and `pk` keep meaning the live set), and:
+//   * a request that takes a reference (GetLoadedResource with addUseCount, as
+//     LoadResource does) finds it and revives it: no file read;
+//   * a PEEK (addUseCount 0) never sees it, exactly as if it had been freed --
+//     FreeResource(GetLoadedResource(.., 0, 0)) must reach a live copy;
+//   * an allocation that finds no room gives kept blocks back, oldest first,
+//     before refusing anyone (Allocate_New_Block): nothing that fit can fail;
+//   * the compaction does NOT move it (like a locked block): with a cart the
+//     margin is ~1 MB, and moving it at every change would cost more than the
+//     reads it saves. Only live blocks move, as before;
+//   * resource ids repeat across levels, so the kept set belongs to one .LVL
+//     and goes as soon as another one is open; the pressure valves that drop
+//     the S7 pins (Tethys_ReleaseStickyResources) drop it too.
+// Only Anim, Palt and Font chunks of BAN/BND/FNT files: the .CAM stream
+// fabricates its chunks without asking whether they are resident, so keeping
+// those would only breed duplicates. At most kTethysKeptMax blocks: the node
+// pool (375) is a hard cap, and row 1 `bl` reads ~100 in play.
+static const s16 kTethysFileChunk = 0x2000; // header flag: came out of a resource file
+static const s16 kTethysKept = 0x4000;      // header flag: released by everyone, kept
+static const s32 kTethysKeptMax = 64;
+static s32 sTethysKeptN = 0;
+static u32 sTethysKeptBytes = 0;
+static u32 sTethysKeptSeq = 0;     // release order, 10 bits, kept in flag bits 3-12
+static s32 sTethysKeptLvl = -1;    // sLvlArchive_4FFD60.field_4_cd_pos of the kept set
+static u16 sTethysKeptRevived = 0; // since T0 (row 20 `v`)
+static u16 sTethysKeptEvicted = 0; // since T0 (row 20 `e`)
+extern "C" void Tethys_DbufScratchForget(); // 427.ao.5: AliveLibAO/Animation.cpp
+
+// SATURN 446.ao.13: bit 14 alone does not make a kept block. Split_block and
+// Reclaim_Memory write Free headers without touching field_6_flags, and
+// LoadingLoop's Pend block keeps the Free header's flags until its read lands:
+// there the bit is whatever bytes were in the heap. 446.ao.12's walks trusted
+// it, and the hardware read `KP n2 k4194298` after c4>c5: free blocks
+// "evicted" (the counters went below zero), and a Pend block could have been
+// handed out while its read was still landing. A kept block always carries one
+// of the three types Tethys_KeepOnRelease accepts; Free and Pend never do.
+static bool Tethys_IsKept(const ResourceManager::Header* pHdr)
+{
+    const u32 type = pHdr->field_8_type;
+    return (pHdr->field_6_flags & kTethysKept)
+        && (type == ResourceManager::Resource_Animation || type == ResourceManager::Resource_Palt
+            || type == ResourceManager::Resource_Font);
+}
+
+static void Tethys_KeptEvict(ResourceManager::Header* pHdr)
+{
+    pHdr->field_8_type = ResourceManager::Resource_Free;
+    pHdr->field_6_flags = 0;
+    sTethysKeptN--;
+    sTethysKeptBytes -= pHdr->field_0_size;
+    sTethysKeptEvicted++;
+}
+
+// Give the oldest kept block back. false = none left.
+static bool Tethys_KeptEvictOldest()
+{
+    // 446.ao.13: no early out on sTethysKeptN. A counter that drifted low would
+    // strand kept bytes and fail an allocation that fit; the walk costs ~0.1 ms
+    // and runs only when an allocation has already failed.
+    ResourceManager::Header* pOldest = nullptr;
+    u32 oldestAge = 0;
+    for (ResourceManager::ResourceHeapItem* p = sFirstLinkedListItem_50EE2C; p; p = p->field_4_pNext)
+    {
+        ResourceManager::Header* pHdr = ResourceManager::Get_Header_455620(&p->field_0_ptr);
+        if (Tethys_IsKept(pHdr))
+        {
+            const u32 stamp = (static_cast<u32>(static_cast<u16>(pHdr->field_6_flags)) >> 3) & 0x3FFu;
+            const u32 age = (sTethysKeptSeq - stamp) & 0x3FFu;
+            if (!pOldest || age > oldestAge)
+            {
+                pOldest = pHdr;
+                oldestAge = age;
+            }
+        }
+    }
+    if (!pOldest)
+    {
+        sTethysKeptN = 0; // freed behind our back (Free_Resource_Of_Type keeps count)
+        sTethysKeptBytes = 0;
+        return false;
+    }
+    Tethys_DbufScratchForget(); // its address may now be handed to another resource
+    Tethys_KeptEvict(pOldest);
+    return true;
+}
+
+static void Tethys_KeptEvictAll()
+{
+    // 446.ao.13: walks whatever the counter says (level change, pressure valve).
+    Tethys_DbufScratchForget();
+    for (ResourceManager::ResourceHeapItem* p = sFirstLinkedListItem_50EE2C; p; p = p->field_4_pNext)
+    {
+        ResourceManager::Header* pHdr = ResourceManager::Get_Header_455620(&p->field_0_ptr);
+        if (Tethys_IsKept(pHdr))
+        {
+            Tethys_KeptEvict(pHdr);
+        }
+    }
+    sTethysKeptN = 0;
+    sTethysKeptBytes = 0;
+    sTethysKeptLvl = -1; // 446.ao.13: no kept set, so no level to compare against
+}
+
+// FreeResource_Impl, at the last reference: keep the block? true = kept.
+static bool Tethys_KeepOnRelease(ResourceManager::Header* pHdr)
+{
+    const u32 type = pHdr->field_8_type;
+    if (!(pHdr->field_6_flags & kTethysFileChunk) || (pHdr->field_6_flags & 7)
+        || (type != ResourceManager::Resource_Animation && type != ResourceManager::Resource_Palt
+            && type != ResourceManager::Resource_Font))
+    {
+        return false; // locked / header-only / never-free, or not a file chunk
+    }
+    const s32 lvl = sLvlArchive_4FFD60.field_4_cd_pos;
+    if (sTethysKeptLvl != lvl)
+    {
+        Tethys_KeptEvictAll();
+        sTethysKeptLvl = lvl;
+    }
+    if (sTethysKeptN >= kTethysKeptMax)
+    {
+        Tethys_KeptEvictOldest();
+    }
+    sTethysKeptSeq = (sTethysKeptSeq + 1u) & 0x3FFu;
+    pHdr->field_6_flags = static_cast<s16>(kTethysFileChunk | kTethysKept | (sTethysKeptSeq << 3));
+    sManagedMemoryUsedSize_9F0E48 -= pHdr->field_0_size; // lent to the cache, counted free
+    sTethysKeptN++;
+    sTethysKeptBytes += pHdr->field_0_size;
+    return true;
+}
+
+// GetLoadedResource took a reference on a kept block: it is live again.
+static void Tethys_KeptRevive(ResourceManager::Header* pHdr)
+{
+    pHdr->field_6_flags = kTethysFileChunk;
+    sManagedMemoryUsedSize_9F0E48 += pHdr->field_0_size;
+    if (sManagedMemoryUsedSize_9F0E48 > sPeakedManagedMemUsage_9F0E4C)
+    {
+        sPeakedManagedMemUsage_9F0E4C = sManagedMemoryUsedSize_9F0E48;
+    }
+    sTethysKeptN--;
+    sTethysKeptBytes -= pHdr->field_0_size;
+    sTethysKeptRevived++;
+}
+
 void Tethys_ForgetAbsentResources(); // SATURN bt990: defined below
 
 // SATURN (397.ao.1): how many pins are held right now -- the runtime soft-fail
@@ -352,6 +507,9 @@ void Tethys_ReleaseStickyResources()
     }
     sTethysStickyHeldCount = 0;
     sTethysStickyPendingCount = 0;
+    // SATURN 446.ao.12: and the kept resources. Every caller wants memory back
+    // (the pressure valves) or opens a level whose ids name other bytes.
+    Tethys_KeptEvictAll();
     // SATURN (bt1053): Tethys_ForgetAbsentResources() USED TO BE CALLED HERE AND
     // IT COULD KILL THE GAME. This function has TWO callers: Map.cpp's level
     // change, where forgetting the absent-name memo is right because the names
@@ -625,6 +783,46 @@ EXPORT void CC Tethys_MovieReleaseHeap(u8** ppBlock)
     sPeakedManagedMemUsage_9F0E4C = sTethysMovieBorrowPeakSnap;
 }
 
+// SATURN 446.ao.12 -- THE SAVE LIBRARY'S TWO BUFFERS (16 + 8 KB), LENT FOR ONE
+// SAVE OPERATION ON THE NO-CART PATH (src/save_saturn.cxx BupOpen). Since
+// ao261.20 they held 24 KB of the HWRAM ao_new pool for the whole session,
+// written against a ~136 KB pool that is 32.5 KB now: the 446.ao.11 save page
+// read hw3424 and "ECHEC". The resource heap is LWRAM here, where the BIOS
+// library may run (Powerslave keeps it in LWRAM). Locked and last-fit like the
+// movie's block, but NO compaction: the game is paused, not torn down. The menu
+// pins go back only if the plain ask fails. nullptr = no room: that one save or
+// load fails and says so, and nothing is held.
+static u32 sTethysBupPeakSnap = 0;
+static const u32 kTethysBupResId = 0x45564153; // 'SAVE', readable in a heap top-8
+EXPORT u8** CC Tethys_BupBorrowHeap(u32 bytes)
+{
+    sTethysBupPeakSnap = sPeakedManagedMemUsage_9F0E4C;
+    u8** ppBlock = ResourceManager::Alloc_New_Resource_ImplEx(
+        ResourceManager::Resource_DecompressionBuffer, kTethysBupResId,
+        bytes, true, ResourceManager::eLastMatching,
+        false /*bReclaimOnFail*/, false /*bFatalOnFail*/);
+    if (!ppBlock && Tethys_MenuPinsRelease())
+    {
+        ppBlock = ResourceManager::Alloc_New_Resource_ImplEx(
+            ResourceManager::Resource_DecompressionBuffer, kTethysBupResId,
+            bytes, true, ResourceManager::eLastMatching, false, false);
+    }
+    if (!ppBlock)
+    {
+        sPeakedManagedMemUsage_9F0E4C = sTethysBupPeakSnap;
+    }
+    return ppBlock;
+}
+
+EXPORT void CC Tethys_BupReleaseHeap(u8** ppBlock)
+{
+    if (ppBlock)
+    {
+        ResourceManager::FreeResource_455550(ppBlock);
+    }
+    sPeakedManagedMemUsage_9F0E4C = sTethysBupPeakSnap; // a loan, never a tenant
+}
+
 // SATURN (bt990): NAMES THIS LEVEL'S LVL GENUINELY DOES NOT CONTAIN.
 // R1.LVL ships 209 file records and DOGBLOW.BAN is not one of them -- there are
 // no Slogs in RuptureFarms, so the PSX data never shipped the Slog gib
@@ -784,6 +982,22 @@ static u32 sFlipTopBytes = 0;
 static u32 sFlipTopSector = 0;
 static u32 sFlipRecBytes = 0;
 
+// SATURN 446.ao.10 -- ROW 23 `RD`: WHICH RECORDS A SCREEN CHANGE READS, AND
+// WHICH OF THEM ARE RE-READS. Romain (2026-10-11): going from a Slig screen to
+// another, do we throw the Slig's banks away to read them again? AO keeps its
+// characters across a camera change inside a path (VScreenChanged kills on a
+// path or level change) and S7 pinned the Slig set, yet q1 still costs ~110-
+// 140 ms per record read. The census now also keeps the first four records'
+// start sectors (named offline from the LVL directory, as bt1061 intended) and
+// flags a record ALREADY READ ONCE IN THIS .LVL: freed in between, read again.
+static u16 sFlipSec[4] = {0, 0, 0, 0};
+static u8 sFlipRecN = 0;     // records since T0, capped at 255
+static u8 sFlipReMask = 0;   // bit i: sFlipSec[i] is a re-read
+static u32 sFlipReBytes = 0; // bytes of re-reads since T0
+static u16 sLvlSeen[64];     // start sectors read once in this .LVL
+static u8 sLvlSeenN = 0;
+static s32 sLvlSeenPos = -1; // the .LVL they belong to (its CD position)
+
 // bt1065: `lz` -- the SH-2 cost of bt1064's LZ4 decode, over the same T0 window
 // as lc/lk/ck. Shipped because the number I quoted for it was an ESTIMATE and I
 // said so: ~22-27 ms per screen change, derived from the real streams (55.7%
@@ -825,6 +1039,42 @@ static void Tethys_NoteFlipRecord(const char_type* pName, u32 bytes, u32 startSe
         sFlipTopBytes = bytes;
         sFlipTopSector = startSector;
     }
+    // 446.ao.10: row 23 `RD`.
+    if (sLvlSeenPos != sLvlArchive_4FFD60.field_4_cd_pos)
+    {
+        sLvlSeenPos = sLvlArchive_4FFD60.field_4_cd_pos;
+        sLvlSeenN = 0;
+    }
+    const u16 sec = static_cast<u16>(startSector);
+    bool again = false;
+    for (u32 i = 0; i < sLvlSeenN; i++)
+    {
+        if (sLvlSeen[i] == sec)
+        {
+            again = true;
+            break;
+        }
+    }
+    if (!again && sLvlSeenN < 64u)
+    {
+        sLvlSeen[sLvlSeenN++] = sec;
+    }
+    if (again)
+    {
+        sFlipReBytes += bytes;
+    }
+    if (sFlipRecN < 4u)
+    {
+        sFlipSec[sFlipRecN] = sec;
+        if (again)
+        {
+            sFlipReMask |= static_cast<u8>(1u << sFlipRecN);
+        }
+    }
+    if (sFlipRecN < 255u)
+    {
+        sFlipRecN++;
+    }
 }
 
 // Reset at T0 (Tethys_OnScreenChange), like every other flip gauge. bt1045's
@@ -835,6 +1085,90 @@ extern "C" void Tethys_FlipRecordReset()
     sFlipTopBytes = 0;
     sFlipTopSector = 0;
     sFlipRecBytes = 0;
+    sFlipRecN = 0; // 446.ao.10: row 23 `RD`, same window
+    sFlipReMask = 0;
+    sFlipReBytes = 0;
+    sTethysKeptRevived = 0; // 446.ao.12: row 20 `KP`, same window
+    sTethysKeptEvicted = 0;
+}
+
+// 446.ao.10: row 23, composed here without printf (SRL's snprintfEx promises
+// no %s width). "RD<n> r<KB re-read> c<ms compaction> <sec> <*sec>..." where
+// c is the time moving heap blocks since T0, lf AND lo (row 20 `b` is lf only).
+extern "C" u32 Tethys_gReclaimRaw; // stdlib_saturn.cxx
+static char* Tethys_PutU(char* p, u32 v)
+{
+    char tmp[10];
+    s32 n = 0;
+    do
+    {
+        tmp[n++] = static_cast<char>('0' + v % 10u);
+        v /= 10u;
+    } while (v && n < 10);
+    while (n)
+    {
+        *p++ = tmp[--n];
+    }
+    return p;
+}
+
+extern "C" void Tethys_FlipRecRow(char* pOut) // pOut[40]
+{
+    char* p = pOut;
+    *p++ = 'R';
+    *p++ = 'D';
+    p = Tethys_PutU(p, sFlipRecN);
+    *p++ = ' ';
+    *p++ = 'r';
+    p = Tethys_PutU(p, (sFlipReBytes >> 10) > 999u ? 999u : (sFlipReBytes >> 10));
+    *p++ = ' ';
+    *p++ = 'c';
+    const u32 cMs = Tethys_gReclaimRaw / 208u;
+    p = Tethys_PutU(p, cMs > 999u ? 999u : cMs);
+    for (u32 i = 0; i < 4u && i < sFlipRecN; i++)
+    {
+        if (p + 7 > pOut + 39)
+        {
+            break;
+        }
+        *p++ = ' ';
+        if (sFlipReMask & (1u << i))
+        {
+            *p++ = '*';
+        }
+        p = Tethys_PutU(p, sFlipSec[i]);
+    }
+    while (p < pOut + 39)
+    {
+        *p++ = ' ';
+    }
+    *p = 0;
+}
+
+// 446.ao.12: row 20 `KP n k v e` -- the kept resources (Tethys_KeepOnRelease):
+// n blocks kept now, k their KB, v revived and e given back since T0.
+extern "C" void Tethys_KeptRow(char* pOut) // pOut[40]
+{
+    char* p = pOut;
+    *p++ = 'K';
+    *p++ = 'P';
+    *p++ = ' ';
+    *p++ = 'n';
+    p = Tethys_PutU(p, sTethysKeptN > 0 ? static_cast<u32>(sTethysKeptN) : 0u);
+    *p++ = ' ';
+    *p++ = 'k';
+    p = Tethys_PutU(p, sTethysKeptBytes >> 10);
+    *p++ = ' ';
+    *p++ = 'v';
+    p = Tethys_PutU(p, sTethysKeptRevived);
+    *p++ = ' ';
+    *p++ = 'e';
+    p = Tethys_PutU(p, sTethysKeptEvicted);
+    while (p < pOut + 39)
+    {
+        *p++ = ' ';
+    }
+    *p = 0;
 }
 
 extern "C" u32 Tethys_FlipTopSector()
@@ -2172,8 +2506,54 @@ extern "C" u32 Tethys_Lz4Decode(const u8* src, u32 srcLen, u8* dst, u32 dstCap);
 extern "C" const u32 Tethys_kLz4Block;
 extern "C" u8* Tethys_CamStreamZOut();
 extern "C" u8* Tethys_CamStreamZIn();
+// SATURN 446.ao.4: the whole record in ONE CD read into VDP2 B1, decoded while
+// it lands (src/cd_saturn.cxx Tethys_CdStream*, src/renderer_saturn.cxx for the
+// buffer).
+extern "C" u8* Tethys_CamStreamVram(u32* pSectors);
+extern "C" s32 Tethys_CdStreamStart(s32 numSectors, void* pDst);
+extern "C" s32 Tethys_CdStreamPoll(u32* pBytes);
+extern "C" void Tethys_CdStreamStop();
+extern "C" u32 Tethys_RawTicks();
+extern "C" u32 Tethys_gCamStreamed;
+// SATURN 446.ao.7: row 20 `LF h w d r` (renderer_saturn.cxx): head mark, and raw
+// ticks spent in the fills, the LZ4 decoder and the B1 read-back.
+extern "C" void Tethys_FlipStreamMark();
+extern "C" u32 Tethys_gFlipSplitRaw[3];
+// SATURN 446.ao.8: the .CAM read the screen change starts at T0, adopted by the
+// reader when the record matches (Tethys_PrefetchCamFile, CamSectorReader).
+extern "C" s32 Tethys_CdStreamBusy();
+extern "C" s32 Tethys_CamCacheHasSlab();
+extern "C" u32 Tethys_gCamPrefetched;
+static s32 sCamPrefetchPos = -1; // start sector of that read, -1 = none
+static s32 sCamPrefetchSec = 0;
+// SATURN 446.ao.9: the heap compaction's move, by longwords (stdlib_saturn.cxx).
+extern "C" void Tethys_MoveDown(void* pDst, const void* pSrc, u32 n);
 
 namespace {
+// SATURN 446.ao.4: a CPU read of VDP2 VRAM costs ~2 us whatever its width
+// ([HW, Mimas 2026-09-21], 2 MB/s during display), so the B1 stream buffer is
+// only ever read as aligned longwords, split into bytes here (big-endian: b[0]
+// is the lowest address).
+static void CopyFromVram(u8* dst, const u8* src, u32 n)
+{
+    const u32* p = reinterpret_cast<const u32*>(reinterpret_cast<u32>(src) & ~3u);
+    u32 k = reinterpret_cast<u32>(src) & 3u;
+    while (n)
+    {
+        union
+        {
+            u32 w;
+            u8 b[4];
+        } t;
+        t.w = *p++;
+        for (; k < 4u && n; k++, n--)
+        {
+            *dst++ = t.b[k];
+        }
+        k = 0;
+    }
+}
+
 // Forward, chunk-at-a-time reader over one CD file record. Re-seeks before
 // every read (the seam cursor is a single global -- LvlArchive.cpp precedent)
 // and treats only a FileIOWait of -1 as a hard error (the Saturn seam returns
@@ -2216,6 +2596,10 @@ struct CamSectorReader
     u32  zRemain;   // uncompressed bytes still owed by the header
     bool z;
 
+    // ================= 446.ao.4 one-read stream =============================
+    u8*  vram;      // the B1 buffer the whole record is landing in, else null
+    u32  vLanded;   // bytes of it already handed to the raw layer
+
     bool bad;
 
     void Init(u8* pBounce, s32 base, s32 count, s32 cap)
@@ -2237,14 +2621,30 @@ struct CamSectorReader
         zIn = nullptr;
         zRemain = 0;
         z = false;
+        vram = nullptr;
+        vLanded = 0;
         bad = false;
     }
 
     // Pull the next raw buffer: the whole remainder on a cache hit (it is RAM,
     // so slicing it would buy nothing), else one CD round trip of up to secCap
     // sectors.
+    // SATURN 446.ao.7: every raw fill timed for row 20 `w` (CD waits, or a hit).
     bool RawFill()
     {
+        const u32 t0 = Tethys_RawTicks();
+        const bool ok = RawFillInner();
+        Tethys_gFlipSplitRaw[0] += Tethys_RawTicks() - t0;
+        return ok;
+    }
+
+    bool RawFillInner()
+    {
+        // SATURN 446.ao.4: a record in flight hands out what has landed since.
+        if (vram)
+        {
+            return StreamFill();
+        }
         if (nextSec >= numSec)
         {
             bad = true;
@@ -2261,6 +2661,13 @@ struct CamSectorReader
             rLen = static_cast<u32>(numSec - nextSec) << 11;
             nextSec = numSec;
             return true;
+        }
+        // SATURN 446.ao.4: ONE read for the whole record when it fits the B1
+        // buffer. Not on a cart cache fill (mirror), which copies whole reads
+        // into its slot: that one keeps the bounce.
+        if (nextSec == 0 && !mirror && StreamStart())
+        {
+            return StreamFill();
         }
         s32 want = numSec - nextSec;
         if (want > secCap)
@@ -2310,6 +2717,84 @@ struct CamSectorReader
         return false;
     }
 
+    // SATURN 446.ao.4 ================= the one-read stream ===================
+    bool StreamStart()
+    {
+        u32 cap = 0;
+        u8* v = Tethys_CamStreamVram(&cap);
+        if (!v || static_cast<u32>(numSec) > cap)
+        {
+            return false;
+        }
+        // SATURN 446.ao.8: the screen change may have started this very read at
+        // T0; adopt it while it is still in flight. Any other read in between
+        // stopped it, and a different record is restarted here as before.
+        const bool adopt = sCamPrefetchPos == basePos && sCamPrefetchSec == numSec
+                           && Tethys_CdStreamBusy();
+        sCamPrefetchPos = -1;
+        if (adopt)
+        {
+            Tethys_gCamPrefetched++;
+        }
+        else
+        {
+            CdlLOC loc;
+            PSX_Pos_To_CdLoc_49B340(basePos, &loc);
+            if (!PSX_CD_File_Seek_49B670(2, &loc) || !Tethys_CdStreamStart(numSec, v))
+            {
+                return false; // nothing consumed yet: the bounce path takes over
+            }
+        }
+        vram = v;
+        vLanded = 0;
+        nextSec = numSec;
+        Tethys_gCamStreamed++;
+        return true;
+    }
+
+    // Wait until a sector more than was handed out has landed (or the read has
+    // ended), then expose it as the next raw window. A read that stops moving
+    // for 5 s is torn, and the caller already names the file.
+    bool StreamFill()
+    {
+        const u32 t0 = Tethys_RawTicks();
+        for (;;)
+        {
+            u32 bytes = 0;
+            const s32 st = Tethys_CdStreamPoll(&bytes);
+            bytes &= ~3u;
+            if (bytes >= vLanded + 2048u || (st == 0 && bytes > vLanded))
+            {
+                rsec = vram + vLanded;
+                rOff = 0;
+                rLen = bytes - vLanded;
+                vLanded = bytes;
+                return true;
+            }
+            if (st <= 0 || Tethys_RawTicks() - t0 > 5u * 208000u)
+            {
+                Tethys_CdStreamStop();
+                bad = true;
+                return false;
+            }
+        }
+    }
+
+    // After the walk: let GFS report the read complete, else stop it, so no
+    // read is left writing into B1.
+    void StreamClose()
+    {
+        if (vram)
+        {
+            u32 bytes = 0;
+            for (u32 k = 0; k < 64u && Tethys_CdStreamPoll(&bytes) > 0; k++)
+            {
+            }
+            Tethys_CdStreamStop();
+            vram = nullptr;
+        }
+    }
+
     // Copy n RAW bytes forward, spanning refills. Used only by the container
     // path (block lengths and compressed blocks); pass-through never calls it.
     void RawRead(u8* dst, u32 n)
@@ -2327,7 +2812,14 @@ struct CamSectorReader
             }
             const u8* pSrc = &rsec[rOff];
             u32 i = 0;
-            if (((reinterpret_cast<u32>(dst) | reinterpret_cast<u32>(pSrc)) & 3u) == 0)
+            if (vram)
+            {
+                const u32 tR = Tethys_RawTicks(); // 446.ao.7: row 20 `r`
+                CopyFromVram(dst, pSrc, take); // 446.ao.4: longword reads only
+                Tethys_gFlipSplitRaw[2] += Tethys_RawTicks() - tR;
+                i = take;
+            }
+            else if (((reinterpret_cast<u32>(dst) | reinterpret_cast<u32>(pSrc)) & 3u) == 0)
             {
                 u32* pD = reinterpret_cast<u32*>(dst);
                 const u32* pS = reinterpret_cast<const u32*>(pSrc);
@@ -2419,7 +2911,10 @@ struct CamSectorReader
         // SATURN: bt1126 -- lz retired WITH its bracket. Measured 49-92 ms
         // against ~216 ms of CD bought; the 8:1 trade holds and the question
         // is closed, so the two FRT reads per block go with the column.
+        // SATURN 446.ao.7: a bracket again, for one diagnostic build (row 20 `d`).
+        const u32 tD = Tethys_RawTicks();
         const u32 got = Tethys_Lz4Decode(zIn, clen, zOut, want);
+        Tethys_gFlipSplitRaw[1] += Tethys_RawTicks() - tD;
 
         if (got != want) // short or long is corruption; malformed input returns 0
         {
@@ -2617,9 +3112,48 @@ extern "C" void Tethys_CamPathPreload(const void* pCamNames, s32 count)
 }
 #endif
 
+// SATURN 446.ao.8 -- THE NEW SCREEN'S .CAM READ STARTS AT T0. Row 20 of 446.ao.7
+// measured the one-read stream waiting 100-137 ms for its CD command (w) AFTER
+// a head of 166-248 ms (h: the teardown, the heap compaction, GoTo_Camera) in
+// which the drive sits idle (lc - w <= q1 on all nine flips of the capture).
+// Map::ScreenChange_4444D0 now issues that same single command at T0, so its
+// latency runs under the head; StreamStart adopts it when the record matches,
+// and any other read in between stops it exactly as it stopped a stream before.
+// Not the predictive prefetch retired at bt1069 (cam_cache.cxx): one command a
+// flip, for the screen already chosen, never during play. B1 is the same buffer.
+void CC ResourceManager::Tethys_PrefetchCamFile(const char_type* pName)
+{
+    sCamPrefetchPos = -1;
+    if (Tethys_CamCacheHasSlab())
+    {
+        return; // a cart mirrors the miss through the bounce: no stream to start
+    }
+    LvlFileRecord* pRec = sLvlArchive_4FFD60.Find_File_Record_41BED0(pName);
+    u32 cap = 0;
+    u8* v = Tethys_CamStreamVram(&cap);
+    if (!pRec || !v)
+    {
+        return;
+    }
+    const s32 numSec = static_cast<s32>(pRec->field_10_num_sectors);
+    if (numSec <= 0 || static_cast<u32>(numSec) > cap)
+    {
+        return;
+    }
+    const s32 pos = sLvlArchive_4FFD60.field_4_cd_pos + pRec->field_C_start_sector;
+    CdlLOC loc;
+    PSX_Pos_To_CdLoc_49B340(pos, &loc);
+    if (PSX_CD_File_Seek_49B670(2, &loc) && Tethys_CdStreamStart(numSec, v))
+    {
+        sCamPrefetchPos = pos;
+        sCamPrefetchSec = numSec;
+    }
+}
+
 void CC ResourceManager::Tethys_StreamCamFile(Camera* pCamera, bool bitsOnly)
 {
     Tethys_NoteCamLoad(pCamera->field_1E_fileName); // bt993: name the screen for the wedge fatal
+    Tethys_FlipStreamMark(); // SATURN 446.ao.7: row 20 `h` ends here
     LvlFileRecord* pRec = sLvlArchive_4FFD60.Find_File_Record_41BED0(pCamera->field_1E_fileName);
     if (!pRec)
     {
@@ -2729,6 +3263,13 @@ void CC ResourceManager::Tethys_StreamCamFile(Camera* pCamera, bool bitsOnly)
     // SATURN 442.ao.1: BUSY only when this stream reads from the menu pins or
     // fills one -- then nothing may hand their block back until the stream
     // ends. Any other page leaves the allocator free to take it back mid-stream.
+    // SATURN 446.ao.8: served from RAM or mirrored through the bounce, the
+    // record needs no stream: stop the one the screen change started.
+    if ((rd.mem || rd.mirror) && sCamPrefetchPos >= 0)
+    {
+        Tethys_CdStreamStop();
+        sCamPrefetchPos = -1;
+    }
     sTethysPinsBusy = Tethys_MenuPinsHold(rd.mem) || Tethys_MenuPinsHold(rd.mirror);
 
     // SATURN (bt1064): decide raw-or-container before the walk. This MUST come
@@ -2844,6 +3385,7 @@ void CC ResourceManager::Tethys_StreamCamFile(Camera* pCamera, bool bitsOnly)
         }
     }
 
+    rd.StreamClose(); // SATURN 446.ao.4
     Tethys_CamStreamEnd();
 
     if (!sawEnd)
@@ -3053,6 +3595,9 @@ u8** CC ResourceManager::Allocate_New_Locked_Resource_454F80(u32 type, u32 id, u
 
 EXPORT u8** CC ResourceManager::Allocate_New_Block_454FE0(u32 sizeBytes, BlockAllocMethod allocMethod)
 {
+#ifdef TETHYS_SATURN
+Tethys_KeptRetry: // 446.ao.12: back here after giving a kept block back
+#endif
     ResourceHeapItem* pListItem = sFirstLinkedListItem_50EE2C;
     ResourceHeapItem* pHeapMem = nullptr;
     const u32 size = (sizeBytes + 3) & ~3u; // Rounding ??
@@ -3113,6 +3658,14 @@ EXPORT u8** CC ResourceManager::Allocate_New_Block_454FE0(u32 sizeBytes, BlockAl
 
     if (!pHeapMem)
     {
+#ifdef TETHYS_SATURN
+        // 446.ao.12: kept blocks are free space lent to the cache. Give it back,
+        // oldest first, before refusing anyone: nothing that fit before can fail.
+        if (Tethys_KeptEvictOldest())
+        {
+            goto Tethys_KeptRetry;
+        }
+#endif
         // Allocation failure
         sAllocationFailed_9F0E50 = 1;
         return nullptr;
@@ -3235,6 +3788,9 @@ s16 CC ResourceManager::Move_Resources_To_DArray_455430(u8** ppRes, DynamicArray
                 pArray->Push_Back((u8**) pItemToAdd);
                 pHeader->field_4_ref_count++;
             }
+#ifdef TETHYS_SATURN
+            pHeader->field_6_flags |= kTethysFileChunk; // 446.ao.12: may be kept after its last release
+#endif
 
             pHeader = (Header*) ((s8*) pHeader + pHeader->field_0_size);
 
@@ -3292,14 +3848,33 @@ s16 CC ResourceManager::Move_Resources_To_DArray_455430(u8** ppRes, DynamicArray
 
 u8** CC ResourceManager::GetLoadedResource_4554F0(u32 type, u32 resourceId, s16 addUseCount, s16 bLock)
 {
+#ifdef TETHYS_SATURN
+    // SATURN 446.ao.12: kept blocks belong to the .LVL that was open when they
+    // were released; another level's ids may name other bytes.
+    if (sTethysKeptLvl >= 0 && sTethysKeptLvl != sLvlArchive_4FFD60.field_4_cd_pos)
+    {
+        Tethys_KeptEvictAll(); // 446.ao.13: keyed on the level, once per change
+    }
+#endif
     // Iterate all list items
     ResourceHeapItem* pListIter = sFirstLinkedListItem_50EE2C;
     while (pListIter)
     {
         // Find something that matches the type and resource ID
         Header* pResHeader = Get_Header_455620(&pListIter->field_0_ptr);
-        if (pResHeader->field_8_type == type && pResHeader->field_C_id == resourceId)
+        if (pResHeader->field_8_type == type && pResHeader->field_C_id == resourceId
+#ifdef TETHYS_SATURN
+            // 446.ao.12: a peek never sees a kept block -- it would have been freed
+            && (addUseCount || !(pResHeader->field_6_flags & kTethysKept))
+#endif
+            )
         {
+#ifdef TETHYS_SATURN
+            if (pResHeader->field_6_flags & kTethysKept)
+            {
+                Tethys_KeptRevive(pResHeader); // the reference below makes it 1
+            }
+#endif
             if (addUseCount)
             {
                 pResHeader->field_4_ref_count++;
@@ -3437,6 +4012,13 @@ s16 CC ResourceManager::FreeResource_Impl_4555B0(u8* handle)
                 return 0;
             }
 #ifdef TETHYS_SATURN
+            // SATURN 446.ao.12: kept in place while the heap has room (see
+            // Tethys_KeepOnRelease). Same answer as a free: callers loop on it
+            // until the block is gone (Abe.cpp:1510).
+            if (Tethys_KeepOnRelease(pHeader))
+            {
+                return 1;
+            }
             // SATURN 427.ao.5: the cel cache keys on the cel's ADDRESS inside a
             // resource block. A freed block's address can be handed to a
             // different resource, and a cel of that new tenant could land at the
@@ -3558,7 +4140,11 @@ void CC ResourceManager::Reclaim_Memory_455660(u32 sizeToReclaim)
                     sizeToMove = pNextHeader->field_0_size;
                 }
 
-                if (pNextHeader->field_6_flags & ResourceHeaderFlags::eLocked || sizeToMove > sizeToReclaim)
+                if (pNextHeader->field_6_flags & ResourceHeaderFlags::eLocked || sizeToMove > sizeToReclaim
+#ifdef TETHYS_SATURN
+                    || (pNextHeader->field_6_flags & kTethysKept) // 446.ao.12: kept blocks never move
+#endif
+                    )
                 {
                     // Locked or trying to move more than requested, skip to next
                     pToUpdate = pListItem;
@@ -3572,7 +4158,8 @@ void CC ResourceManager::Reclaim_Memory_455660(u32 sizeToReclaim)
                     if (sizeToMove > 0)
                     {
                         const size_t offset = (s8*) pCurrentHeader - (s8*) pNextHeader;
-                        memmove(pDataStart + offset, pDataStart, sizeToMove);
+                        // SATURN 446.ao.9: was memmove, newlib's byte loop (row 20 `b`).
+                        Tethys_MoveDown(pDataStart + offset, pDataStart, sizeToMove);
                     }
 
                     // Get resource header after the current one
@@ -3641,10 +4228,22 @@ void CC ResourceManager::Free_Resource_Of_Type_455810(u32 type)
         Header* pHeader = Get_Header_455620(&pListItem->field_0_ptr);
         if (pHeader->field_8_type == type && !(pHeader->field_6_flags & ResourceHeaderFlags::eNeverFree))
         {
+#ifdef TETHYS_SATURN
+            // SATURN 446.ao.12: a kept block was already counted free at its release.
+            const bool bKept = (pHeader->field_6_flags & kTethysKept) != 0;
+#endif
             pHeader->field_8_type = Resource_Free;
             pHeader->field_6_flags = 0;
             pHeader->field_4_ref_count = 0;
 
+#ifdef TETHYS_SATURN
+            if (bKept)
+            {
+                sTethysKeptN--;
+                sTethysKeptBytes -= pHeader->field_0_size;
+            }
+            else
+#endif
             sManagedMemoryUsedSize_9F0E48 -= pHeader->field_0_size;
         }
         pListItem = pListItem->field_4_pNext;

@@ -1615,8 +1615,13 @@ void Slog::Motion_16_Sleeping_4752E0()
         }
     }
 
-    auto pSnoozeParticle = ao_new<SnoozeParticle>();
-    if (pSnoozeParticle && bSpawnParticle)
+    // SATURN 446.ao.12: allocate only when the particle is really built. The
+    // decomp ran ao_new on EVERY frame of the sleep and built the particle only
+    // when bSpawnParticle (2 frames in 60, on camera): 536 B orphaned per frame
+    // per sleeping Slog, the ~32 KB HWRAM pool gone in 1-2 s (the bt831 Abe
+    // death pattern). Slig.cpp:3486 allocates inside its own gate.
+    auto pSnoozeParticle = bSpawnParticle ? ao_new<SnoozeParticle>() : nullptr;
+    if (pSnoozeParticle)
     {
         pSnoozeParticle->ctor_464320(
             field_A8_xpos

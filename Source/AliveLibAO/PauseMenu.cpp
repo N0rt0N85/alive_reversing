@@ -295,6 +295,8 @@ extern "C" s32 Tethys_SaveSlotCount(void);
 extern "C" s32 Tethys_SaveSlotTitle(s32 slot, char* out, s32 outMax);
 extern "C" const char* Tethys_SaveDeviceName(s32 device);
 extern "C" s32 Tethys_SaveDeviceGet(void);
+extern "C" s32 Tethys_SaveBatchBegin(void); // 446.ao.12: one library start, pair with End
+extern "C" void Tethys_SaveBatchEnd(void);
 static s16 sTethysSlot = 0;
 
 // SNAPSHOT, not a live read. Tethys_SaveSlotMask/Title each go to the device
@@ -308,6 +310,7 @@ static char_type sTethysSlotTitle[4][24] = {};
 
 static void Tethys_SnapshotSlots()
 {
+    Tethys_SaveBatchBegin(); // 446.ao.12: one BIOS library start for the five reads
     sTethysSlotN = Tethys_SaveSlotCount();
     if (sTethysSlotN > 4)
     {
@@ -323,6 +326,7 @@ static void Tethys_SnapshotSlots()
                                  static_cast<s32>(sizeof(sTethysSlotTitle[i])));
         }
     }
+    Tethys_SaveBatchEnd();
 }
 #endif
 
