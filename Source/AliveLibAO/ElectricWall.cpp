@@ -91,7 +91,22 @@ void ElectricWall::VScreenChanged()
 
 void ElectricWall::VScreenChanged_410220()
 {
+#ifdef TETHYS_SATURN
+    // SATURN 448.ao.3: a wall still dies on a screen change unless it stands on
+    // the screen being left, as it did before the neighbour screens came back
+    // (Map::Get_Camera_World_Rect_444C30). AO let a wall next door live one
+    // change longer. After that change it is off screen and, unless a door
+    // skipped over its screen, out of earshot, but its 9,760 B animation (the
+    // ELECWALL chunk of its .CAM) would stay on the heap through the next
+    // screen's load. Walking back re-creates it from its TLV and that .CAM.
+    //   448.ao.7: AO's rule in an attract demo. A wall that lives draws a random
+    // pitch for each zap it plays, and a replay of recorded input needs the
+    // random numbers where the recording had them.
+    const CameraPos tethysDir = gMap_507BA8.GetDirection(field_B2_lvl_number, field_B0_path_number, field_A8_xpos, field_AC_ypos);
+    if (gMap_507BA8.field_0_current_level != gMap_507BA8.field_A_level || gMap_507BA8.field_2_current_path != gMap_507BA8.field_C_path || (gAttract_507698 ? tethysDir == CameraPos::eCamInvalid_m1 : tethysDir != CameraPos::eCamCurrent_0))
+#else
     if (gMap_507BA8.field_0_current_level != gMap_507BA8.field_A_level || gMap_507BA8.field_2_current_path != gMap_507BA8.field_C_path || gMap_507BA8.GetDirection(field_B2_lvl_number, field_B0_path_number, field_A8_xpos, field_AC_ypos) == CameraPos::eCamInvalid_m1)
+#endif
     {
         field_6_flags.Set(BaseGameObject::eDead_Bit3);
     }

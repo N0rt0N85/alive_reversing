@@ -91,6 +91,12 @@ public:
     s32 field_DA4_update_chase_timer;
     PathLine* field_DA8_pLine;
     FP field_DAC_line_follow_speed;
+#ifdef TETHYS_SATURN
+    // SATURN 448.ao.7: the swarm drawn in one renderer call (Tethys_PrimBurst),
+    // its index list running on into the tail: 4 + 24 entries for 25 bees.
+    Tethys_PrimBurst field_tethys_burst;
+    u8 field_tethys_burst_tail[24];
+#endif
 };
 ALIVE_ASSERT_SIZEOF(BeeSwarm, 0xDB0);
 

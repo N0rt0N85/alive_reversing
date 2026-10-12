@@ -17,6 +17,15 @@
 #include "GasCountDown.hpp"
 #include "PathDataExtensions.hpp"
 
+#ifdef TETHYS_SATURN
+// SATURN 448.ao.8: the ending boards say "(B) QUITTER" now (the converter
+// repaints the PSX cross), so B leaves them even after a remap.
+extern "C" s32 Tethys_PadBHeld(void); // src/sys_saturn.cxx
+#define TETHYS_BOARD_EXIT() (Input().IsAnyHeld(sInputKey_FartRoll_4C65B0) || Tethys_PadBHeld())
+#else
+#define TETHYS_BOARD_EXIT() Input().IsAnyHeld(sInputKey_FartRoll_4C65B0)
+#endif
+
 void GameEnderController_ForceLink()
 { }
 
@@ -216,7 +225,7 @@ void GameEnderController::VUpdate_41C860()
             break;
 
         case GameEnderController_States::eBadEnding_3:
-            if (Input().IsAnyHeld(sInputKey_FartRoll_4C65B0))
+            if (TETHYS_BOARD_EXIT()) // SATURN 448.ao.8: physical B too, see the top
             {
                 gMap_507BA8.SetActiveCam_444660(LevelIds::eRuptureFarmsReturn_13, 19, 3, CameraSwapEffects::eInstantChange_0, 0, 0);
                 field_14_state = GameEnderController_States::eFinish_2;
@@ -224,7 +233,7 @@ void GameEnderController::VUpdate_41C860()
             break;
 
         case GameEnderController_States::ePerfectEnding_4:
-            if (Input().IsAnyHeld(sInputKey_FartRoll_4C65B0))
+            if (TETHYS_BOARD_EXIT()) // SATURN 448.ao.8: physical B too, see the top
             {
                 gMap_507BA8.SetActiveCam_444660(LevelIds::eMenu_0, 1, CameraIds::Menu::eFmvSelect_30, CameraSwapEffects::eInstantChange_0, 0, 0);
                 gMap_507BA8.field_DC_free_all_anim_and_palts = 1;

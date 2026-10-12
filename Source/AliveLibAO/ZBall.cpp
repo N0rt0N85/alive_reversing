@@ -6,6 +6,9 @@
 #include "Events.hpp"
 #include "Sfx.hpp"
 #include "BaseAliveGameObject.hpp"
+#ifdef TETHYS_SATURN
+#include "Game.hpp" // gAttract_507698 (448.ao.7)
+#endif
 
 namespace AO {
 
@@ -143,7 +146,9 @@ ZBall* ZBall::ctor_478590(Path_ZBall* pTlv, s32 tlvInfo)
         // balls' frame numbers to each other, so no behaviour keys on their being
         // in phase -- and being in phase is not something AO arranged, it is a
         // side effect of all three constructing on the same tick.
-        if (pTlv->field_18_start_pos == Path_ZBall::StartPos::eCenter_0)
+        //   448.ao.7: not in an attract demo, where the centre ball's smacker
+        // rect (what hurts Abe) must fall on the recording's ticks.
+        if (pTlv->field_18_start_pos == Path_ZBall::StartPos::eCenter_0 && !gAttract_507698)
         {
             field_10_anim.field_E_frame_change_counter = 1;
         }

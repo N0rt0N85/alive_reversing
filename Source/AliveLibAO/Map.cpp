@@ -1434,7 +1434,41 @@ s16 Map::Get_Camera_World_Rect_444C30(CameraPos camIdx, PSX_RECT* pRect)
     }
 
     Camera* pCamera = field_34_camera_array[static_cast<s32>(camIdx)];
-    if (!pCamera)
+    s32 camX = 0;
+    s32 camY = 0;
+    if (pCamera)
+    {
+        camX = pCamera->field_14_cam_x;
+        camY = pCamera->field_16_cam_y;
+    }
+#ifdef TETHYS_SATURN
+    // SATURN 448.ao.3 -- THE NEIGHBOUR SCREENS ARE HEARD AGAIN. The four
+    // neighbour Camera objects are never built on this target (memory, see
+    // GoTo_Camera), so everything that asks where an object stands relative to
+    // the screen came through here and got "nowhere" for anything off screen:
+    // the ambience of a Slig, Slog, Paramite, Scrab or meat saw next door
+    // (Start_Sounds_For_Objects_In_Near_Cameras), the sounds of everything that
+    // walked off screen (GetDirection, then the silent default of
+    // SFX_Play_43AED0), the chase music of a creature next door, the gibs of a
+    // sleeping Slig blown up next door. The cell is tested on the grid, as
+    // Create_Camera_445BE0 would have, and the rectangle below is built from
+    // the cell indices, which are what a neighbour Camera's field_14/16 held.
+    // One consumer keeps its old answer on purpose: ElectricWall's survival
+    // across a screen change (ElectricWall.cpp).
+    else if (camIdx != CameraPos::eCamCurrent_0)
+    {
+        static const s8 kDx[5] = {0, 0, 0, -1, 1}; // CameraPos: current, top, bottom, left, right
+        static const s8 kDy[5] = {0, -1, 1, 0, 0};
+        const s32 i = static_cast<s32>(camIdx);
+        if (!Tethys_GridHasCamera(this, kDx[i], kDy[i]))
+        {
+            return 0;
+        }
+        camX = field_20_camX_idx + kDx[i];
+        camY = field_22_camY_idx + kDy[i];
+    }
+#endif
+    else
     {
         return 0;
     }
@@ -1444,10 +1478,10 @@ s16 Map::Get_Camera_World_Rect_444C30(CameraPos camIdx, PSX_RECT* pRect)
         return 1;
     }
 
-    s16 cam_x_pos = field_D4_pPathData->field_C_grid_width * pCamera->field_14_cam_x;
+    s16 cam_x_pos = field_D4_pPathData->field_C_grid_width * camX;
     cam_x_pos += 120;
 
-    const s16 cam_y_pos = field_D4_pPathData->field_E_grid_height * pCamera->field_16_cam_y;
+    const s16 cam_y_pos = field_D4_pPathData->field_E_grid_height * camY;
 
     pRect->x = cam_x_pos;
     pRect->y = cam_y_pos + 120;
@@ -2100,8 +2134,13 @@ void Map::GoTo_Camera_445050()
     // Boot and quit-to-menu share a DESTINATION and differ only in origin, so
     // the origin is what separates them: Init_443EE0 leaves field_0_current_level
     // at eNone (:418), and nothing else ever arrives at the menu from eNone.
+    //   448.ao.7: and none when an attract demo leaves the menu, AO's own rule
+    // (it never showed the icon leaving the menu): the icon is an object, and
+    // one more object in the list moves the order the recording's actors are
+    // updated in.
     if (field_A_level != LevelIds::eCredits_10
-        && !(field_A_level == LevelIds::eMenu_0 && field_0_current_level == LevelIds::eNone))
+        && !(field_A_level == LevelIds::eMenu_0 && field_0_current_level == LevelIds::eNone)
+        && !(gAttract_507698 && field_0_current_level == LevelIds::eMenu_0))
     {
         if (field_A_level != field_0_current_level || (field_C_path != field_2_current_path && field_10_screenChangeEffect == CameraSwapEffects::ePlay1FMV_5))
         {

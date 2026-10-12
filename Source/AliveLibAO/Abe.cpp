@@ -63,6 +63,10 @@
 
 #include "TestAnimation.hpp"
 
+#ifdef TETHYS_SATURN
+extern "C" s32 Tethys_PadBHeld(void); // SATURN 448.ao.8: src/sys_saturn.cxx
+#endif
+
 namespace AO {
 
 ALIVE_VAR(1, 0x5076E4, s16, gAbeInvulnerableCheat_5076E4, 0);
@@ -8703,7 +8707,13 @@ void Abe::Motion_88_HandstoneBegin_430590()
         {
             if (field_158_pDeathFadeout->field_6E_bDone)
             {
+#ifdef TETHYS_SATURN
+                // SATURN 448.ao.8: the stone says "(B) QUITTER" now (the converter
+                // repaints the PSX cross), so B closes it even after a remap.
+                if (Input().IsAnyHeld(0xF0) || Tethys_PadBHeld())
+#else
                 if (Input().IsAnyHeld(0xF0))
+#endif
                 {
                     field_158_pDeathFadeout->Init_419E40(Layer::eLayer_FadeFlash_40, 1, 0, 8);
                     field_110_state.stone = StoneStates::eSetActiveCamToAbeOrWaitForInput_7;

@@ -2490,6 +2490,14 @@ void AnimationUnknown::VRender2_403FD0(s32 xpos, s32 ypos, PrimHeader** ppOt)
         SetXY3(pPoly, static_cast<s16>(w), static_cast<s16>(h));
 
         SetPrimExtraPointerHack(pPoly, nullptr);
+#ifdef TETHYS_SATURN
+        // SATURN (448.ao.7): no table = compute the poly, queue nothing. A burst
+        // lists its items for the renderer instead (Tethys_PrimBurst).
+        if (!ppOt)
+        {
+            return;
+        }
+#endif
         OrderingTable_Add_498A80(OtLayer(ppOt, field_C_layer), &pPoly->mBase.header);
     }
 }

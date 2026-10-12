@@ -11,6 +11,7 @@
 #include "Elum.hpp"
 #include "Math.hpp"
 #include "Sparks.hpp"
+#include "Game.hpp" // SATURN (448.ao.7): gAttract_507698
 
 namespace AO {
 
@@ -132,7 +133,22 @@ void Bullet::VUpdate_408E30()
                     // as bt829's ParticleBurst cap: one argument, cosmetic,
                     // reversible.  It also relieves the walled R1P15 heap that
                     // the SecurityClaw beam dies on.
-                    New_Smoke_Particles_419A80(hitX, hitY, field_2C_scale, 1, 0);
+                    //   448.ao.7: each puff draws three random numbers
+                    // (Particle.cpp), so the two left out are drawn here and what
+                    // comes next gets the numbers it gets on the PSX. An attract
+                    // demo, a replay of recorded input, spawns all three.
+                    if (gAttract_507698)
+                    {
+                        New_Smoke_Particles_419A80(hitX, hitY, field_2C_scale, 3, 0);
+                    }
+                    else
+                    {
+                        New_Smoke_Particles_419A80(hitX, hitY, field_2C_scale, 1, 0);
+                        for (s32 burn = 0; burn < 6; burn++)
+                        {
+                            Math_NextRandom();
+                        }
+                    }
 #else
                     New_Smoke_Particles_419A80(hitX, hitY, field_2C_scale, 3, 0);
 #endif
@@ -224,7 +240,19 @@ void Bullet::VUpdate_408E30()
                     pSpark->ctor_477B70(hitX, hitY, FP_FromInteger(1), 9u, -31, 159);
                 }
 #ifdef TETHYS_SATURN
-                New_Smoke_Particles_419A80(hitX, hitY, FP_FromInteger(1), 1, 0); // SATURN (383.ao.1), see above
+                // SATURN (383.ao.1, 448.ao.7): one puff and the two others' draws, see above
+                if (gAttract_507698)
+                {
+                    New_Smoke_Particles_419A80(hitX, hitY, FP_FromInteger(1), 3, 0);
+                }
+                else
+                {
+                    New_Smoke_Particles_419A80(hitX, hitY, FP_FromInteger(1), 1, 0);
+                    for (s32 burn = 0; burn < 6; burn++)
+                    {
+                        Math_NextRandom();
+                    }
+                }
 #else
                 New_Smoke_Particles_419A80(hitX, hitY, FP_FromInteger(1), 3, 0);
 #endif

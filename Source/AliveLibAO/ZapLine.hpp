@@ -65,7 +65,12 @@ public:
 
     EXPORT void CalculateSpritePositionsInner_479400(s32 idx1, s32 idx2, s32 idx3, s16 idx4);
 
+#ifdef TETHYS_SATURN
+    Tethys_PrimSwarm field_D4_tethys_spray; // SATURN 448.ao.8: AO's unused 16 bytes
+    s32 field_E0_pad;
+#else
     s32 field_D4[4];
+#endif
 
     enum class ZapLineState : s16
     {

@@ -78,6 +78,9 @@ public:
     s16 field_120_idx;
     s16 field_122_target_count;
     s32 field_124_tlvInfo;
+#ifdef TETHYS_SATURN
+    Tethys_PrimSwarm field_128_swarm; // SATURN 448.ao.4: see VRender_42BAD0
+#endif
 };
 ALIVE_ASSERT_SIZEOF(HintFly, 0x128);
 

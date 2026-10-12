@@ -43,7 +43,12 @@ public:
 
     EXPORT void VRender_407810(PrimHeader** ppOt);
 
+#ifdef TETHYS_SATURN
+    Tethys_PrimSwarm field_D4_tethys_spray; // SATURN 448.ao.8: AO's unused 16 bytes
+    s32 field_E0_pad;
+#else
     s32 field_D4_not_used[4];
+#endif
     u8** field_E4_ppResBuf;
     BloodParticle* field_E8_pResBuf;
     Prim_SetTPage field_EC_tPages[2];

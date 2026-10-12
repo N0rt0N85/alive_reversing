@@ -2045,7 +2045,14 @@ void HintFly::VRender_42BAD0(PrimHeader** ppOt)
 
         SetXY0(pSprt, flyX, flyY);
 
+#ifdef TETHYS_SATURN
+        // SATURN 448.ao.4: only the first particle goes in, below; it stands for
+        // all of them. Every particle's position is still set, because that is
+        // what the renderer reads.
+        pSprt->mBase.header.hackPtr = nullptr;
+#else
         OrderingTable_Add_498A80(OtLayer(ppOt, Layer::eLayer_Above_FG1_39), &pSprt->mBase.header);
+#endif
 
         if (flyX < rect.x)
         {
@@ -2067,6 +2074,28 @@ void HintFly::VRender_42BAD0(PrimHeader** ppOt)
             rect.h = flyY;
         }
     }
+
+#ifdef TETHYS_SATURN
+    // SATURN 448.ao.4 -- THE SWARM IS ONE SPRITE. A word of hint flies is up to
+    // 175 particles (PERDUES is 164), one Prim_Sprt each. The renderer drew at
+    // most 96 of them (the cap it gives Blood) in a frame of 128 sprites, and as
+    // 4bpp cels it could not add them to the background the way the PSX does
+    // (eBlend_1, B + F): on a tester's capture the word lost letters and read
+    // dim. One prim now carries the whole swarm and the renderer composes every
+    // particle into one texture drawn with VDP2 colour addition
+    // (src/renderer_saturn.cxx, DrawFlySwarm). Added before the tpage, as the
+    // particles were, so the walk still meets the tpage first.
+    if (field_118_counter > 0)
+    {
+        Prim_Sprt* pLead = &field_E8_pRes[0].field_24_sprt[gPsxDisplay_504C78.field_A_buffer_index];
+        field_128_swarm.mMagic = kTethysSwarmMagic;
+        field_128_swarm.mpFirst = reinterpret_cast<const u8*>(pLead);
+        field_128_swarm.mCount = static_cast<u16>(field_118_counter);
+        field_128_swarm.mStride = static_cast<u16>(sizeof(HintFlyParticle));
+        pLead->mBase.header.hackPtr = &field_128_swarm;
+        OrderingTable_Add_498A80(OtLayer(ppOt, Layer::eLayer_Above_FG1_39), &pLead->mBase.header);
+    }
+#endif
 
     s16 tPageY = 256;
     if (!field_10_anim.field_4_flags.Get(AnimFlags::eBit10_alternating_flag) && field_10_anim.field_84_vram_rect.y < 256u)

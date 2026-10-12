@@ -8,6 +8,9 @@
 #include "Psx.hpp"
 #include "ScreenClipper.hpp"
 #include "MusicController.hpp"
+#ifdef TETHYS_SATURN
+#include "Game.hpp" // gAttract_507698 (448.ao.7)
+#endif
 #include "BackgroundMusic.hpp"
 #include "ScreenManager.hpp"
 #include "PsxDisplay.hpp"
@@ -215,7 +218,12 @@ void CameraSwapper::Init_48C830(u8** ppCamRes, CameraSwapEffects changeEffect)
     //     reap needs eDead_Bit3 && refCount == 0, so the earliest is the NEXT
     //     tick.  Net: 9-21 frozen ticks become exactly ONE, the same one an
     //     instant change already costs.
-    switch (field_28_changeEffect)
+    //   448.ao.7: NOT IN AN ATTRACT DEMO. The frozen ticks still render, and
+    // the status boards and gas counters draw a random colour per letter every
+    // time they do (Font.cpp), so a replay of recorded input needs all of them
+    // to keep the random numbers where the recording had them. A demo waits
+    // through its wipes as the PSX did (the screen simply holds).
+    switch (gAttract_507698 ? CameraSwapEffects::eInstantChange_0 : field_28_changeEffect)
     {
         case CameraSwapEffects::eLeftToRight_1:
         case CameraSwapEffects::eRightToLeft_2:

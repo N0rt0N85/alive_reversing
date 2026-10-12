@@ -19,6 +19,15 @@
 void SlingMud_ForceLink()
 { }
 
+#ifdef TETHYS_SATURN
+// SATURN 448.ao.8: field_18_frame_table_offset holds the TRANSLATED offset
+// (Animation.cpp, bt982 and 388.ao.1), and the converter compacts MUDSLING.BAN
+// (its tables slide from 22,636 to 17,444), so the compiled 22744 and 22700
+// below never matched: the native never fired, never left Speak, never
+// answered a code. Abe walked past him (Romain, L1, 2026-10-12).
+extern "C" s32 Tethys_TranslateFrameTable(u8** ppBlock, s32 compiledOff); // Animation.cpp
+#endif
+
 namespace AO {
 
 using TSlingMudStateFunction = decltype(&SlingMudokon::Motion_0_Idle_46FCB0);
@@ -305,7 +314,11 @@ void SlingMudokon::Motion_2_Speak_46FD70()
 {
     if (field_10_anim.field_4_flags.Get(AnimFlags::eBit18_IsLastFrame))
     {
+#ifdef TETHYS_SATURN
+        if (field_10_anim.field_18_frame_table_offset == Tethys_TranslateFrameTable(field_10_anim.field_20_ppBlock, 22744))
+#else
         if (field_10_anim.field_18_frame_table_offset == 22744)
+#endif
         {
             field_FC_current_motion = eSlingMudMotions::Motion_0_Idle_46FCB0;
         }
@@ -321,7 +334,11 @@ void SlingMudokon::Motion_3_ShootStart_46FD90()
 
     if (field_10_anim.field_4_flags.Get(AnimFlags::eBit18_IsLastFrame))
     {
+#ifdef TETHYS_SATURN
+        if (field_10_anim.field_18_frame_table_offset == Tethys_TranslateFrameTable(field_10_anim.field_20_ppBlock, 22700))
+#else
         if (field_10_anim.field_18_frame_table_offset == 22700)
+#endif
         {
             const FP frame_x = FP_FromInteger(field_10_anim.Get_FrameHeader_403A00(-1)->field_8_data.points[2].x);
             FP bulletXPos = {};

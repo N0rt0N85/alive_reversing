@@ -13,6 +13,10 @@
 #include "Function.hpp"
 #include "Shadow.hpp"
 
+#ifdef TETHYS_SATURN
+extern "C" s32 Tethys_TranslateFrameTable(u8** ppBlock, s32 compiledOff); // Animation.cpp
+#endif
+
 namespace AO {
 
 void RockSack::VUpdate()
@@ -155,7 +159,18 @@ RockSack* RockSack::ctor_4573F0(Path_RockSack* pTlv, s32 tlvInfo)
     u8** ppRes = ResourceManager::GetLoadedResource_4554F0(ResourceManager::Resource_Animation, rec.mResourceId, 1, 0);
 
     //  Set RockSack idle anim speed
+#ifdef TETHYS_SATURN
+    // SATURN 448.ao.4: 6878 is a HALFWORD index. Twice it is 13,756, the idle
+    // table of rec (the PC records say so), and that table's fps is 4: the
+    // original stills the sack until it is hit. Read as bytes, the write lands
+    // inside the cels -- on our converted chunk, in the compressed soft-hit
+    // frames -- and the sack sways. The converter moves the table (9,072 or 9,112
+    // depending on the cels), so the engine's own translation finds it.
+    auto pAnimationHeader = reinterpret_cast<AnimationHeader*>(
+        *ppRes + Tethys_TranslateFrameTable(ppRes, rec.mFrameTableOffset));
+#else
     auto pAnimationHeader = reinterpret_cast<AnimationHeader*>(*ppRes + 6878); // TODO: frametableoffset
+#endif
     pAnimationHeader->field_0_fps = 0;
 
     Animation_Init_417FD0(rec.mFrameTableOffset, rec.mMaxW, rec.mMaxH, ppRes, 1);

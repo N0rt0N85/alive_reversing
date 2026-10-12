@@ -611,6 +611,16 @@ void BeeSwarm::VRender_480AC0(PrimHeader** ppOt)
     PSX_Point xy = {32767, 32767};
     PSX_Point wh = {-32767, -32767};
 
+#ifdef TETHYS_SATURN
+    // SATURN 448.ao.7 ONE RENDERER CALL FOR THE WHOLE SWARM, as ParticleBurst
+    // does (see there): the bees are computed as before, listed instead of
+    // queued, and the lead's poly carries the list.
+    const s32 buf = gPsxDisplay_504C78.field_A_buffer_index;
+    u8* pIdx = field_tethys_burst.mIdx;
+    s32 nListed = 0;
+    Poly_FT4* pLeadPoly = nullptr;
+    PrimHeader** ppBeeOt = (field_10_anim.field_4_flags.Get(AnimFlags::eBit3_Render) && field_10_anim.field_20_ppBlock) ? nullptr : ppOt;
+#endif
     Bool32 bDontClear = 1;
     for (s32 next = 0; next < field_D66_bee_count; next++)
     {
@@ -626,15 +636,29 @@ void BeeSwarm::VRender_480AC0(PrimHeader** ppOt)
                     ppOt,
                     0,
                     0);
+#ifdef TETHYS_SATURN
+                pLeadPoly = &field_10_anim.field_2C_ot_data[buf];
+#endif
                 bDontClear = 0;
                 field_10_anim.Get_Frame_Rect_402B50(&out);
             }
             else
             {
+#ifdef TETHYS_SATURN
+                bee->field_10_anim.VRender2(
+                    FP_GetExponent(PsxToPCX((bee->field_0_xpos - campos_x_delta), FP_FromInteger(11))),
+                    FP_GetExponent(bee->field_4_ypos - campos_y_delta),
+                    ppBeeOt);
+                if (!ppBeeOt && bee->field_10_anim.field_4_flags.Get(AnimFlags::eBit3_Render) && nListed < 28)
+                {
+                    pIdx[nListed++] = static_cast<u8>(next);
+                }
+#else
                 bee->field_10_anim.VRender2(
                     FP_GetExponent(PsxToPCX((bee->field_0_xpos - campos_x_delta), FP_FromInteger(11))),
                     FP_GetExponent(bee->field_4_ypos - campos_y_delta),
                     ppOt);
+#endif
                 bee->field_10_anim.GetRenderedSize_404220(&out);
             }
 
@@ -654,6 +678,17 @@ void BeeSwarm::VRender_480AC0(PrimHeader** ppOt)
                 pScreenManager_4FF7C8->field_2E_idx);
         }
     }
+#ifdef TETHYS_SATURN
+    if (pLeadPoly && nListed != 0)
+    {
+        field_tethys_burst.mMagic = kTethysBurstMagic;
+        field_tethys_burst.mSelf = &field_tethys_burst;
+        field_tethys_burst.mpFirst = reinterpret_cast<const u8*>(&field_E4_bees.bees[0].field_10_anim.field_10_polys[buf]);
+        field_tethys_burst.mStride = static_cast<u16>(sizeof(BeeSwarmParticle));
+        field_tethys_burst.mCount = static_cast<u16>(nListed);
+        pLeadPoly->mBase.header.hackPtr = &field_tethys_burst;
+    }
+#endif
 }
 
 } // namespace AO

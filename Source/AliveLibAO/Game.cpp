@@ -720,7 +720,9 @@ EXPORT void CC Game_Loop_437630()
         // spawn motions are excluded outright: neither is a moment at which
         // Abe's position means anything, and Motion_61 covers the respawn and
         // the TETHYS_START_CAM debug boot as well.
-        if (!Tethys_gSaveBufferSeeded && sActiveHero_507678
+        // 448.ao.7: never from an attract demo, whose Abe is the recording's:
+        // a new game that died before its first checkpoint would respawn there.
+        if (!Tethys_gSaveBufferSeeded && sActiveHero_507678 && !gAttract_507698
             && gMap_507BA8.field_0_current_level != LevelIds::eMenu_0
             && sActiveHero_507678->field_FC_current_motion
                    != eAbeMotions::Motion_62_LoadedSaveSpawn_45ADD0
@@ -980,6 +982,10 @@ EXPORT void CC DDCheat_Allocate_409560()
     }
 }
 
+#ifdef TETHYS_SATURN
+extern "C" void Tethys_ConfigLoad(void); // src/sys_saturn.cxx (448.ao.7)
+#endif
+
 EXPORT void Game_Run_4373D0()
 {
     SYS_EventsPump_44FF90();
@@ -1012,6 +1018,14 @@ EXPORT void Game_Run_4373D0()
     Input_Init_44EB60();
 
     Init_Sound_DynamicArrays_And_Others_41CD20();
+
+#ifdef TETHYS_SATURN
+    // SATURN (448.ao.7): the player's options (pad remap, mono) from their
+    // backup record. Here rather than in Input_Init above, where the PC reads
+    // its ini: without a cartridge the BUP library borrows its 24 KB from the
+    // resource heap, which the call just above has only now created.
+    Tethys_ConfigLoad();
+#endif
 
 #ifdef TETHYS_SATURN
     // SATURN: no Pxtd extension chunks on the converted disc, and the retail

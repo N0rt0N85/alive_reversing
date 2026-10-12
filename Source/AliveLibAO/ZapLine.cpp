@@ -292,12 +292,35 @@ void ZapLine::VRender_479840(PrimHeader** ppOt)
             for (s32 j = 0; j < field_120_number_of_pieces_per_segment; j++)
             {
                 Prim_Sprt* pSprt = &field_124_pSprts->field_0_sprts[j + (i * field_120_number_of_pieces_per_segment)];
-                OrderingTable_Add_498A80(OtLayer(ppOt, field_10_anim.field_C_layer), &pSprt[bufferIdx].mBase.header);
 #ifdef TETHYS_SATURN
+                pSprt[bufferIdx].mBase.header.hackPtr = nullptr; // 448.ao.8: queued once, below
                 Tethys_gZapLink++;
+#else
+                OrderingTable_Add_498A80(OtLayer(ppOt, field_10_anim.field_C_layer), &pSprt[bufferIdx].mBase.header);
 #endif
             }
         }
+
+#ifdef TETHYS_SATURN
+        // SATURN 448.ao.8 -- ONE RENDERER CALL FOR THE BEAM. The 84 dots share
+        // one cel, palette, size and colour and only their places move; each was
+        // a full renderer call, every tick of a security claw's or orb's shot.
+        // The first dot is the only one queued and stands for all of them, in the
+        // order they would have been walked (src/renderer_saturn.cxx,
+        // DrawSprtBurst), before the tpage as they were. The loop above reads the
+        // Sprts as one flat array, a Sprt apart (AO's own indexing, kept).
+        const s32 tethysDots = field_11E_number_of_segments * field_120_number_of_pieces_per_segment;
+        if (tethysDots > 0)
+        {
+            Prim_Sprt* pLead = &field_124_pSprts->field_0_sprts[bufferIdx];
+            field_D4_tethys_spray.mMagic = kTethysSprayMagic;
+            field_D4_tethys_spray.mpFirst = reinterpret_cast<const u8*>(pLead);
+            field_D4_tethys_spray.mCount = static_cast<u16>(tethysDots);
+            field_D4_tethys_spray.mStride = static_cast<u16>(sizeof(Prim_Sprt));
+            pLead->mBase.header.hackPtr = &field_D4_tethys_spray;
+            OrderingTable_Add_498A80(OtLayer(ppOt, field_10_anim.field_C_layer), &pLead->mBase.header);
+        }
+#endif
 
         const s32 calcTPage = PSX_getTPage_4965D0(
             field_114_tPageMode,

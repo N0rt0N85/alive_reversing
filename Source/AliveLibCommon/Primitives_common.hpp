@@ -234,6 +234,48 @@ struct Prim_Sprt final
 };
 ALIVE_ASSERT_SIZEOF(Prim_Sprt, 0x18);
 
+#ifdef TETHYS_SATURN
+// SATURN 448.ao.4: ONE Prim_Sprt STANDS FOR A WHOLE HINTFLY SWARM. HintFly puts
+// only its first particle in the ordering table, with mBase.header.hackPtr
+// pointing here (SetCode clears hackPtr on every other prim), and the renderer
+// composes every particle into one sprite (src/renderer_saturn.cxx,
+// DrawFlySwarm). Written by HintFly::VRender, read during the walk that follows.
+struct Tethys_PrimSwarm final
+{
+    u32 mMagic;        // kTethysSwarmMagic: checked before anything else is read
+    const u8* mpFirst; // the first particle's Prim_Sprt in the buffer being drawn
+    u16 mCount;        // particles
+    u16 mStride;       // bytes from one particle's Prim_Sprt to the next
+};
+static constexpr u32 kTethysSwarmMagic = 0x48464C59u; // 'HFLY'
+
+// SATURN 448.ao.8: the same descriptor, another magic, for a SPRAY (Blood's
+// clusters, ZapLine's dots): one Prim_Sprt per item, every one with the same
+// cel, palette, size and colour, only the place moving. The first item is the
+// only one queued, mpFirst points at it, and the renderer resolves the cel once
+// and lays a copy of that sprite on each item, in the order the table would have
+// walked them (src/renderer_saturn.cxx, DrawSprtBurst).
+static constexpr u32 kTethysSprayMagic = 0x53505259u; // 'SPRY'
+
+// SATURN 448.ao.7: ONE Poly_FT4 STANDS FOR A WHOLE BURST (ParticleBurst,
+// BeeSwarm). The parent animation's own poly is the only one in the ordering
+// table, with mBase.header.hackPtr pointing here; the other items' polys are
+// computed exactly as before but not queued, and listed in the order they would
+// have been. The renderer resolves the texture and palette once and lays down
+// one sprite per item (src/renderer_saturn.cxx, DrawBurst). FG1 puts a hackPtr
+// of its own on a Poly_FT4, hence the magic AND the self pointer.
+struct Tethys_PrimBurst final
+{
+    u32 mMagic;        // kTethysBurstMagic
+    const void* mSelf; // this, or it is not a burst
+    const u8* mpFirst; // item 0's Poly_FT4 in the buffer being drawn
+    u16 mStride;       // bytes from one item's Poly_FT4 to the next
+    u16 mCount;        // entries in mIdx
+    u8 mIdx[4];        // item indices in queueing order; the owner sizes the tail
+};
+static constexpr u32 kTethysBurstMagic = 0x50425354u; // 'PBST'
+#endif
+
 struct Prim_Sprt_16 final
 {
     Poly_Base mBase;

@@ -97,6 +97,9 @@ ALIVE_VAR(1, 0x507690, s16, sSoundMono_507690, 0);
 // (src/sound_saturn.cxx, MixWordFromPans) so the page does what it says.
 // Declared here rather than in a header: one symbol, one caller.
 extern "C" void Tethys_SndSetMono(s32 mono);
+// SATURN (448.ao.7): and the pick is kept across power cycles, in the options
+// record the controls page writes too (src/sys_saturn.cxx).
+extern "C" void Tethys_ConfigSave(void);
 // SATURN (397.ao.1): set when Tethys_SpeakRes lands a NEW phrase file, consumed
 // by Menu::VRender_47AC00 once field_10_anim points into that file. See the
 // note at the consumer.
@@ -110,6 +113,7 @@ EXPORT void SND_Set_Mono_477020()
     sSoundMono_507690 = 1;
 #ifdef TETHYS_SATURN
     Tethys_SndSetMono(1);
+    Tethys_ConfigSave();
 #endif
 }
 
@@ -120,6 +124,7 @@ EXPORT void SND_Set_Stereo_477030()
     sSoundMono_507690 = 0;
 #ifdef TETHYS_SATURN
     Tethys_SndSetMono(0);
+    Tethys_ConfigSave();
 #endif
 }
 
@@ -1810,6 +1815,51 @@ void Menu::MainScreen_Render_47BED0(PrimHeader** ppOt)
 
 #ifdef TETHYS_SATURN
 extern "C" s32 Tethys_CheatButtonHeld(); // src/sys_saturn.cxx: R down on pad 1 (446.ao.3)
+
+// SATURN (448.ao.7): demos the rotation passes over, bit N = PLAYBK<N>.JOY. A
+// demo replays recorded input open loop, so one that drifts from its recording
+// on this port (a Saturn-only shortcut drawing the random numbers differently)
+// can be taken out here without touching the rest. None yet.
+static const u32 kTethysDemoSkip = 0u;
+
+// SATURN (448.ao.7): the demo record for sJoyResId_50769C, fetched while the
+// main page runs. true once its 'Plbk' resource is in; false while it loads.
+// A record the disc does not hold, or one still not in after ten looks (about
+// five seconds), passes the turn to the next demo.
+static bool Tethys_AttractRecordReady()
+{
+    static s32 sAsked = -1; // the record requested, -1 = none
+    static s32 sLooks = 0;
+    for (s32 turn = 0; turn < 30; turn++)
+    {
+        if (!((kTethysDemoSkip >> sJoyResId_50769C) & 1u))
+        {
+            if (ResourceManager::GetLoadedResource_4554F0(ResourceManager::Resource_Plbk, sJoyResId_50769C, 0, 0))
+            {
+                sAsked = -1;
+                return true;
+            }
+            if (sAsked != sJoyResId_50769C)
+            {
+                char_type fileNameBuf[20] = {};
+                sprintf(fileNameBuf, "PLAYBK%02d.JOY", sJoyResId_50769C);
+                sAsked = sJoyResId_50769C;
+                sLooks = 10;
+                if (ResourceManager::LoadResourceFile_4551E0(fileNameBuf, 0, 0, 0))
+                {
+                    return false;
+                }
+            }
+            else if (--sLooks > 0)
+            {
+                return false;
+            }
+        }
+        sAsked = -1;
+        sJoyResId_50769C = static_cast<u8>((sJoyResId_50769C + 1) % 30);
+    }
+    return false;
+}
 #endif
 
 EXPORT void Menu::MainScreen_Update_47AF60()
@@ -1924,44 +1974,34 @@ EXPORT void Menu::MainScreen_Update_47AF60()
             }
         }
         else
-        {
 #ifdef TETHYS_SATURN
-            // SATURN (302.ao.1): THE ATTRACT DEMO CANNOT RUN HERE, AND WAITING
-            // FOR IT IS A SOFT-LOCK. Field report: "when idle, after a while Abe says
-            // bye and throws something, which freezes the game" -- the
-            // menu parks on the Loading camera, loop and music still running, pad dead.
-            //
-            // The mechanism, read at source. This branch arms gAttract_507698 and asks
-            // for PLAYBK%02d.JOY; Loading_Update_47B870 then gates on
-            // `!gAttract_507698 || GetLoadedResource(Resource_Plbk, ...)` (:2151). That
-            // resource can NEVER appear: the .JOY records ship byte-for-byte
-            // little-endian, so the chunk fourcc reads back REVERSED on a big-endian
-            // SH-2 and no Plbk chunk is ever registered. The gate is false for ever and
-            // field_1CC_fn_update is never reassigned -- the same shape as the Quit
-            // case below.
-            //
-            // WHY NOT FIX IT IN THE CONVERTER. Swapping the Plbk header only moves the
-            // failure downstream: DemoPlayback::ctor then reads a whole little-endian
-            // PlaybackData/SaveData and a u32 input stream, which turns a freeze into a
-            // wild SetActiveCam -- a worse defect wearing a better disguise. The demo is
-            // a P7 item; the menu must not soft-lock in the meantime.
-            //
-            // So the idle timeout RE-ARMS and arms nothing else. gDemoPlay and gAttract
-            // stay defined and at 0, the value Factory.cpp and Abe.cpp already exercise
-            // on every normal boot.
-            field_1DC_idle_input_counter = 0;
-        }
-        if (false)
+        // SATURN (448.ao.7): THE ATTRACT DEMOS ARE BACK. 302.ao.1 fenced this
+        // branch off because the .JOY records shipped little-endian: the Loading
+        // page (Loading_Update_47B870) waits for a 'Plbk' resource that could
+        // never register, and the menu soft-locked there ("when idle, Abe says bye
+        // and throws something, which freezes the game"). The converter now writes
+        // them big-endian, chunk, SaveData and input stream (tools/converter).
+        //   And the record is fetched FIRST, here, while the main page keeps
+        // running: the menu leaves for the Loading camera only once the resource
+        // is in, so a record that cannot load costs one skipped demo instead of
+        // that soft-lock (Tethys_AttractRecordReady).
+        if (!Tethys_AttractRecordReady())
         {
+            field_1DC_idle_input_counter = idleMax - 15; // look again in half a second
+        }
+        else
 #endif
+        {
             // Play a demo
             gDemoPlay_507694 = 1;
             field_1E0_selected_index.mainmenu = MainMenuOptions::eBegin_1;
             gAttract_507698 = 1;
 
+#ifndef TETHYS_SATURN // the record is already in (see above)
             char_type fileNameBuf[20] = {};
             sprintf(fileNameBuf, "PLAYBK%02d.JOY", sJoyResId_50769C);
             ResourceManager::LoadResourceFile_4551E0(fileNameBuf, 0, 0, 0);
+#endif
 
             if (field_1E8_pMenuTrans)
             {

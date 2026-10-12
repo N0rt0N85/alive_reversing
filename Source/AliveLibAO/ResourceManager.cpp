@@ -982,21 +982,9 @@ static u32 sFlipTopBytes = 0;
 static u32 sFlipTopSector = 0;
 static u32 sFlipRecBytes = 0;
 
-// SATURN 446.ao.10 -- ROW 23 `RD`: WHICH RECORDS A SCREEN CHANGE READS, AND
-// WHICH OF THEM ARE RE-READS. Romain (2026-10-11): going from a Slig screen to
-// another, do we throw the Slig's banks away to read them again? AO keeps its
-// characters across a camera change inside a path (VScreenChanged kills on a
-// path or level change) and S7 pinned the Slig set, yet q1 still costs ~110-
-// 140 ms per record read. The census now also keeps the first four records'
-// start sectors (named offline from the LVL directory, as bt1061 intended) and
-// flags a record ALREADY READ ONCE IN THIS .LVL: freed in between, read again.
-static u16 sFlipSec[4] = {0, 0, 0, 0};
-static u8 sFlipRecN = 0;     // records since T0, capped at 255
-static u8 sFlipReMask = 0;   // bit i: sFlipSec[i] is a re-read
-static u32 sFlipReBytes = 0; // bytes of re-reads since T0
-static u16 sLvlSeen[64];     // start sectors read once in this .LVL
-static u8 sLvlSeenN = 0;
-static s32 sLvlSeenPos = -1; // the .LVL they belong to (its CD position)
+// SATURN 448.ao.1: row 23 `RD` (446.ao.10) retired with its answer, written in
+// docs/HW_RESULTS.md: 446.ao.11 cut the re-reads 514 -> 156 KB, 446.ao.12 the
+// files read 28 -> 18 over the reference route. The re-read tracking went with it.
 
 // bt1065: `lz` -- the SH-2 cost of bt1064's LZ4 decode, over the same T0 window
 // as lc/lk/ck. Shipped because the number I quoted for it was an ESTIMATE and I
@@ -1039,42 +1027,6 @@ static void Tethys_NoteFlipRecord(const char_type* pName, u32 bytes, u32 startSe
         sFlipTopBytes = bytes;
         sFlipTopSector = startSector;
     }
-    // 446.ao.10: row 23 `RD`.
-    if (sLvlSeenPos != sLvlArchive_4FFD60.field_4_cd_pos)
-    {
-        sLvlSeenPos = sLvlArchive_4FFD60.field_4_cd_pos;
-        sLvlSeenN = 0;
-    }
-    const u16 sec = static_cast<u16>(startSector);
-    bool again = false;
-    for (u32 i = 0; i < sLvlSeenN; i++)
-    {
-        if (sLvlSeen[i] == sec)
-        {
-            again = true;
-            break;
-        }
-    }
-    if (!again && sLvlSeenN < 64u)
-    {
-        sLvlSeen[sLvlSeenN++] = sec;
-    }
-    if (again)
-    {
-        sFlipReBytes += bytes;
-    }
-    if (sFlipRecN < 4u)
-    {
-        sFlipSec[sFlipRecN] = sec;
-        if (again)
-        {
-            sFlipReMask |= static_cast<u8>(1u << sFlipRecN);
-        }
-    }
-    if (sFlipRecN < 255u)
-    {
-        sFlipRecN++;
-    }
 }
 
 // Reset at T0 (Tethys_OnScreenChange), like every other flip gauge. bt1045's
@@ -1085,17 +1037,11 @@ extern "C" void Tethys_FlipRecordReset()
     sFlipTopBytes = 0;
     sFlipTopSector = 0;
     sFlipRecBytes = 0;
-    sFlipRecN = 0; // 446.ao.10: row 23 `RD`, same window
-    sFlipReMask = 0;
-    sFlipReBytes = 0;
     sTethysKeptRevived = 0; // 446.ao.12: row 20 `KP`, same window
     sTethysKeptEvicted = 0;
 }
 
-// 446.ao.10: row 23, composed here without printf (SRL's snprintfEx promises
-// no %s width). "RD<n> r<KB re-read> c<ms compaction> <sec> <*sec>..." where
-// c is the time moving heap blocks since T0, lf AND lo (row 20 `b` is lf only).
-extern "C" u32 Tethys_gReclaimRaw; // stdlib_saturn.cxx
+// Digits without printf (SRL's snprintfEx), for row 20 `KP` below.
 static char* Tethys_PutU(char* p, u32 v)
 {
     char tmp[10];
@@ -1110,39 +1056,6 @@ static char* Tethys_PutU(char* p, u32 v)
         *p++ = tmp[--n];
     }
     return p;
-}
-
-extern "C" void Tethys_FlipRecRow(char* pOut) // pOut[40]
-{
-    char* p = pOut;
-    *p++ = 'R';
-    *p++ = 'D';
-    p = Tethys_PutU(p, sFlipRecN);
-    *p++ = ' ';
-    *p++ = 'r';
-    p = Tethys_PutU(p, (sFlipReBytes >> 10) > 999u ? 999u : (sFlipReBytes >> 10));
-    *p++ = ' ';
-    *p++ = 'c';
-    const u32 cMs = Tethys_gReclaimRaw / 208u;
-    p = Tethys_PutU(p, cMs > 999u ? 999u : cMs);
-    for (u32 i = 0; i < 4u && i < sFlipRecN; i++)
-    {
-        if (p + 7 > pOut + 39)
-        {
-            break;
-        }
-        *p++ = ' ';
-        if (sFlipReMask & (1u << i))
-        {
-            *p++ = '*';
-        }
-        p = Tethys_PutU(p, sFlipSec[i]);
-    }
-    while (p < pOut + 39)
-    {
-        *p++ = ' ';
-    }
-    *p = 0;
 }
 
 // 446.ao.12: row 20 `KP n k v e` -- the kept resources (Tethys_KeepOnRelease):
@@ -1857,6 +1770,37 @@ void Tethys_LoadingProbe(s32* pCount, s32* pState, s32* pSizeSectors)
             }
         }
     }
+}
+
+// SATURN 448.ao.4: the reads still waiting their turn, for the CD seam's merge
+// (src/cd_saturn.cxx, Tethys_CdMergeSpan): the file-relative first sector and
+// the length of every LoadingFile in state 0, i.e. created by this screen's
+// requests and not yet given a buffer. A screen queues all of its files before
+// LoadingLoop reads the first one (LoadResourceFile_4551E0 builds the
+// LoadingFile at the request), so the seam sees the whole list from the start.
+extern "C" s32 Tethys_PendingReads(s32* pPos, s32* pSec, s32 max)
+{
+    s32 k = 0;
+    if (!gLoadingFiles || !Tethys_PtrSane(gLoadingFiles))
+    {
+        return 0;
+    }
+    for (s32 i = 0; i < gLoadingFiles->Size() && k < max; i++)
+    {
+        LoadingFile* pFile = static_cast<LoadingFile*>(gLoadingFiles->ItemAt(i));
+        if (!pFile)
+        {
+            break;
+        }
+        if (pFile->field_28_state != 0 || pFile->field_6_flags.Get(BaseGameObject::eDead_Bit3))
+        {
+            continue;
+        }
+        pPos[k] = PSX_CdLoc_To_Pos_49B3B0(&pFile->field_2A_cdLoc);
+        pSec[k] = pFile->field_10_size;
+        k++;
+    }
+    return k;
 }
 #endif
 

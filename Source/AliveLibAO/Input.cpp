@@ -9,6 +9,10 @@
 
 namespace AO {
 
+#ifdef TETHYS_SATURN
+extern "C" s32 Tethys_PadAnyHeld(void); // src/sys_saturn.cxx (448.ao.7)
+#endif
+
 ALIVE_VAR(1, 0x5009E8, InputObject, sInputObject_5009E8, {});
 ALIVE_VAR(1, 0x5076B8, u16, sCurrentControllerIndex_5076B8, 0);
 ALIVE_VAR(1, 0x508A60, s32, sJoystickEnabled_508A60, 0);
@@ -285,6 +289,15 @@ void InputObject::Update(BaseGameAutoPlayer& gameAutoPlayer)
         field_0_pads[i].field_B = field_0_pads[i].field_3;
         field_0_pads[i].field_4_previously_pressed = field_0_pads[i].field_0_pressed;
     }
+#ifdef TETHYS_SATURN
+    // SATURN (448.ao.7): the word pad 0 sent LAST tick, which during a demo is the
+    // recording's. The live conversion below overwrites previously_pressed with
+    // the PAD's previous word (0 while nobody touches it), so the demo branch
+    // computed "just pressed" against it and every recorded button was pressed
+    // anew on every tick: a held jump jumped again and again. The original
+    // (commented out below) kept the AO word, as this restores.
+    const u16 aoPrevious0 = field_0_pads[0].field_4_previously_pressed;
+#endif
 
     // Do AE input reading
     ::Input().Update(gameAutoPlayer);
@@ -302,12 +315,22 @@ void InputObject::Update(BaseGameAutoPlayer& gameAutoPlayer)
     // Handle demo input (AO impl)
     if (field_20_demo_playing & 1)
     {
+#ifdef TETHYS_SATURN
+        // SATURN (448.ao.7): any button stops a demo, as on the PSX, START and a
+        // lone shoulder included: neither reaches the AO word on press here
+        // (START pauses on release, L and R are GameSpeak bank enablers).
+        if (field_0_pads[sCurrentControllerIndex_5076B8].field_0_pressed || Tethys_PadAnyHeld())
+#else
         // Stop if any button on any pad is pressed
         if (field_0_pads[sCurrentControllerIndex_5076B8].field_0_pressed)
+#endif
         {
             field_20_demo_playing &= ~1u;
             return;
         }
+#ifdef TETHYS_SATURN
+        field_0_pads[0].field_4_previously_pressed = aoPrevious0;
+#endif
 
         if (static_cast<s32>(gnFrameCount_507670) >= field_28_command_duration)
         {
@@ -542,6 +565,17 @@ u16 InputObject::Released() const
 
 Bool32 CC Input_IsChanting_4334C0()
 {
+#ifdef TETHYS_SATURN
+    // SATURN (448.ao.7): during a demo the chant is in the RECORDED word, which
+    // the live reader below never sees. Any two of the four shoulders, the PSX
+    // pad's rule (AE/Input.cpp:2067) and the one our live pad follows
+    // (src/sys_saturn.cxx): the recordings hold L1+L2 and L1+R1 to chant.
+    if (sInputObject_5009E8.field_20_demo_playing & 1)
+    {
+        const u32 sh = sInputObject_5009E8.field_0_pads[0].field_0_pressed & 0xFu;
+        return (sh & (sh - 1u)) != 0u;
+    }
+#endif
     return Input_IsChanting_45F260();
 }
 

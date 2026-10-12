@@ -333,7 +333,11 @@ void Blood::VRender_407810(PrimHeader** ppOt)
                 SetRGB0(pSprt, field_10_anim.field_8_r, field_10_anim.field_9_g, field_10_anim.field_A_b);
             }
 
+#ifdef TETHYS_SATURN
+            pSprt->mBase.header.hackPtr = nullptr; // 448.ao.8: queued once, below
+#else
             OrderingTable_Add_498A80(OtLayer(ppOt, field_11C_render_layer), &pSprt->mBase.header);
+#endif
 
             xy.field_0_x = std::min(x0, xy.field_0_x);
             xy.field_2_y = std::min(y0, xy.field_2_y);
@@ -341,6 +345,26 @@ void Blood::VRender_407810(PrimHeader** ppOt)
             wh.field_0_x = std::max(x0, wh.field_0_x);
             wh.field_2_y = std::max(y0, wh.field_2_y);
         }
+
+#ifdef TETHYS_SATURN
+        // SATURN 448.ao.8 -- ONE RENDERER CALL FOR THE SPRAY. Every cluster has
+        // the same cel, palette, size and colour, only its place moves, and a
+        // meat-saw kill is three sprays: 39 full renderer calls a tick. The first
+        // cluster is the only one queued and stands for all of them, in the order
+        // they would have been walked (src/renderer_saturn.cxx, DrawSprtBurst),
+        // before the tpage as they were.
+        const s32 tethysGroups = TETHYS_BLOOD_GROUPS(field_112_to_render_count);
+        if (tethysGroups > 0)
+        {
+            Prim_Sprt* pLead = &field_E8_pResBuf[0].field_10_prims[bufferIdx];
+            field_D4_tethys_spray.mMagic = kTethysSprayMagic;
+            field_D4_tethys_spray.mpFirst = reinterpret_cast<const u8*>(pLead);
+            field_D4_tethys_spray.mCount = static_cast<u16>(tethysGroups);
+            field_D4_tethys_spray.mStride = static_cast<u16>(sizeof(BloodParticle));
+            pLead->mBase.header.hackPtr = &field_D4_tethys_spray;
+            OrderingTable_Add_498A80(OtLayer(ppOt, field_11C_render_layer), &pLead->mBase.header);
+        }
+#endif
 
         s16 tpageY = 256;
         if (!field_10_anim.field_4_flags.Get(AnimFlags::eBit10_alternating_flag)

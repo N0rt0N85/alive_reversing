@@ -93,7 +93,17 @@ void BaseBomb::VUpdate_417580()
                     field_A8_xpos,
                     field_AC_ypos,
                     20,
+#ifdef TETHYS_SATURN
+                    // SATURN (448.ao.7): AO's own 2.75, not the pre-shrink
+                    // correction above, which is for the blast cel: a spark's
+                    // speed and size scale with this, and 3.325 made them fly
+                    // 21 % faster (bouncing earlier, drawing the random numbers
+                    // on other ticks) and draw 21 % bigger. Same FP multiply as
+                    // AO's field_BC_sprite_scale, so bit-identical.
+                    field_E4_scale * FP_FromDouble(2.75),
+#else
                     field_BC_sprite_scale,
+#endif
                     BurstType::eBigRedSparks_3);
             }
 
@@ -131,7 +141,11 @@ void BaseBomb::VUpdate_417580()
                     field_A8_xpos,
                     field_AC_ypos,
                     20,
+#ifdef TETHYS_SATURN
+                    field_E4_scale * FP_FromDouble(2.75), // SATURN (448.ao.7): see case 3
+#else
                     field_BC_sprite_scale,
+#endif
                     BurstType::eBigRedSparks_3);
             }
 

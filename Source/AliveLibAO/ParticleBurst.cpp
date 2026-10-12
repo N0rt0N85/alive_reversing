@@ -63,11 +63,46 @@ static void TethysDebrisRoll()
         sTethysDrawnTick = now;
     }
 }
+
+// SATURN 448.ao.7: the burst's batch descriptor (Tethys_PrimBurst) rides at the
+// end of the items' own block, in the resource heap rather than the HWRAM pool:
+// the header, then one index byte per item.
+static u32 TethysBurstTail(s32 count)
+{
+    return (static_cast<u32>(sizeof(Tethys_PrimBurst)) - 4u + static_cast<u32>(count) + 3u) & ~3u;
+}
+
+// SATURN 448.ao.7 THE ITEMS THE CAP LEAVES OUT ARE STILL SIMULATED. Each item
+// draws three random numbers at birth and up to three more at every bounce
+// (VUpdate), so a burst of 12 where AO made 25 shifted every number drawn after
+// it, and with them every random choice of the game, an attract demo's first.
+// The cap is about VDP1 commands, not about physics: the items left out become
+// GHOSTS, the 24 bytes of position and speed (ParticleBurst_Item's own first
+// fields, same layout), born, moved, bounced and heard exactly as AO's, never
+// drawn. They sit between the items and the descriptor in the same block, and
+// field_EE_padding holds the count AO asked for.
+struct TethysBurstPhys final // the names too, so VUpdate's body serves both
+{
+    FP field_0_x;
+    FP field_4_y;
+    FP field_8_z;
+    FP field_C_x_speed;
+    FP field_10_y_speed;
+    FP field_14_z_speed;
+};
+
+static TethysBurstPhys* TethysBurstGhosts(ParticleBurst_Item* pItems, s32 drawn)
+{
+    return reinterpret_cast<TethysBurstPhys*>(reinterpret_cast<u8*>(pItems) + sizeof(ParticleBurst_Item) * drawn);
+}
 #endif
 
 ParticleBurst* ParticleBurst::ctor_40D0F0(FP xpos, FP ypos, s16 particleCount, FP scale, BurstType type)
 {
     ctor_417C10();
+#ifdef TETHYS_SATURN
+    field_EE_padding = 0; // 448.ao.7: no ghosts until the block holds them
+#endif
 #ifdef TETHYS_SATURN
     // SATURN (bt829): CONFIRMED ROOT of the death-on-mine crash. The mine's
     // falling-rocks burst emits ~35 sprites; on top of Abe + the scene they
@@ -106,6 +141,8 @@ ParticleBurst* ParticleBurst::ctor_40D0F0(FP xpos, FP ypos, s16 particleCount, F
     // the most any burst can get (every site's whole shower except the boulder:
     // 5,440 B of heap instead of 20,400) and 12 the least.
     #define TETHYS_MAX_BURST_PARTICLES 40
+    // 448.ao.7: what AO asked for; the cap below only decides how many are DRAWN.
+    const s16 tethysAsked = particleCount;
     {
         TethysDebrisRoll();
         const s32 scene = static_cast<s32>(Tethys_gSubmit) - sTethysDrawnLast;
@@ -127,13 +164,14 @@ ParticleBurst* ParticleBurst::ctor_40D0F0(FP xpos, FP ypos, s16 particleCount, F
     // death-on-mine crash: bt825/826 traced it here, workflow pinned the
     // compaction). If it doesn't fit in free space, ppRes is null and the else
     // branch marks the burst dead -- the rocks just don't spawn, no compaction.
-    field_E4_ppRes = ResourceManager::Alloc_New_Resource_Impl(ResourceManager::ResourceType::Resource_3DGibs, 0, sizeof(ParticleBurst_Item) * particleCount, true, ResourceManager::BlockAllocMethod::eLastMatching, false);
+    // 448.ao.7: + 24 B per ghost (the boulder's 110 left out: 2,640 B).
+    field_E4_ppRes = ResourceManager::Alloc_New_Resource_Impl(ResourceManager::ResourceType::Resource_3DGibs, 0, sizeof(ParticleBurst_Item) * particleCount + sizeof(TethysBurstPhys) * (tethysAsked - particleCount) + TethysBurstTail(particleCount), true, ResourceManager::BlockAllocMethod::eLastMatching, false);
     // 445.ao.2: a burst too big for the free space falls back to the old 12
     // (1,632 B) rather than to nothing, so a full heap is never worse than before.
     if (!field_E4_ppRes && particleCount > kTethysDebrisFloor)
     {
         particleCount = kTethysDebrisFloor;
-        field_E4_ppRes = ResourceManager::Alloc_New_Resource_Impl(ResourceManager::ResourceType::Resource_3DGibs, 0, sizeof(ParticleBurst_Item) * particleCount, true, ResourceManager::BlockAllocMethod::eLastMatching, false);
+        field_E4_ppRes = ResourceManager::Alloc_New_Resource_Impl(ResourceManager::ResourceType::Resource_3DGibs, 0, sizeof(ParticleBurst_Item) * particleCount + sizeof(TethysBurstPhys) * (tethysAsked - particleCount) + TethysBurstTail(particleCount), true, ResourceManager::BlockAllocMethod::eLastMatching, false);
     }
 #else
     field_E4_ppRes = ResourceManager::Allocate_New_Locked_Resource_454F80(ResourceManager::ResourceType::Resource_3DGibs, 0, sizeof(ParticleBurst_Item) * particleCount);
@@ -270,6 +308,21 @@ ParticleBurst* ParticleBurst::ctor_40D0F0(FP xpos, FP ypos, s16 particleCount, F
                 field_E8_pRes[i].field_10_y_speed = -Random_Speed(scale);
                 field_E8_pRes[i].field_14_z_speed = -FP_Abs(Random_Speed(scale));
             }
+#ifdef TETHYS_SATURN
+            // 448.ao.7: the ghosts are AO's items particleCount..tethysAsked-1,
+            // born in that order with the same three draws.
+            TethysBurstPhys* pGhost = TethysBurstGhosts(field_E8_pRes, particleCount);
+            for (s32 i = particleCount; i < tethysAsked; i++, pGhost++)
+            {
+                pGhost->field_0_x = xpos;
+                pGhost->field_4_y = ypos;
+                pGhost->field_8_z = FP_FromInteger(0);
+                pGhost->field_C_x_speed = Random_Speed(scale);
+                pGhost->field_10_y_speed = -Random_Speed(scale);
+                pGhost->field_14_z_speed = -FP_Abs(Random_Speed(scale));
+            }
+            field_EE_padding = tethysAsked;
+#endif
 
             if (gMap_507BA8.field_0_current_level == LevelIds::eStockYards_5 || gMap_507BA8.field_0_current_level == LevelIds::eStockYardsReturn_6)
             {
@@ -326,9 +379,20 @@ void ParticleBurst::VUpdate()
 
 void ParticleBurst::VUpdate_40D600()
 {
+#ifdef TETHYS_SATURN
+    // 448.ao.7: every item AO made, in AO's order: the drawn ones, then the
+    // ghosts (see TethysBurstPhys).
+    const s32 total = (field_EE_padding > field_EC_count) ? field_EE_padding : field_EC_count;
+    for (s32 i = 0; i < total; i++)
+    {
+        TethysBurstPhys* pItem = (i < field_EC_count)
+            ? reinterpret_cast<TethysBurstPhys*>(&field_E8_pRes[i])
+            : TethysBurstGhosts(field_E8_pRes, field_EC_count) + (i - field_EC_count);
+#else
     for (s32 i = 0; i < field_EC_count; i++)
     {
         ParticleBurst_Item* pItem = &field_E8_pRes[i];
+#endif
 
         pItem->field_0_x += pItem->field_C_x_speed;
         pItem->field_4_y += pItem->field_10_y_speed;
@@ -413,6 +477,22 @@ void ParticleBurst::VRender_40D7F0(PrimHeader** ppOt)
     const FP screen_top = pCamPos->field_4_y + FP_FromInteger(pScreenManager_4FF7C8->field_16_ypos);
     const FP screen_bottom = pCamPos->field_4_y - FP_FromInteger(pScreenManager_4FF7C8->field_16_ypos);
 
+#ifdef TETHYS_SATURN
+    // SATURN 448.ao.7 ONE RENDERER CALL FOR THE WHOLE BURST. Every item is the
+    // lead's quad moved and scaled (VRender2 copies the lead's poly), so the
+    // items are computed exactly as before but listed instead of queued, and
+    // only the lead goes in the table, carrying the list (Tethys_PrimBurst). The
+    // renderer draws them in the order the table would have: last queued first,
+    // the lead last. Only when the lead really queues (it renders and has its
+    // cels): otherwise every item goes in the table as before.
+    const s32 buf = gPsxDisplay_504C78.field_A_buffer_index;
+    const s32 nGhosts = (field_EE_padding > field_EC_count) ? field_EE_padding - field_EC_count : 0;
+    Tethys_PrimBurst* pBurst = reinterpret_cast<Tethys_PrimBurst*>(TethysBurstGhosts(field_E8_pRes, field_EC_count) + nGhosts);
+    u8* pIdx = pBurst->mIdx;
+    s32 nListed = 0;
+    Poly_FT4* pLeadPoly = nullptr;
+    PrimHeader** ppItemOt = (field_10_anim.field_4_flags.Get(AnimFlags::eBit3_Render) && field_10_anim.field_20_ppBlock) ? nullptr : ppOt;
+#endif
     bool bFirst = true;
     for (s32 i = 0; i < field_EC_count; i++)
     {
@@ -429,22 +509,49 @@ void ParticleBurst::VRender_40D7F0(PrimHeader** ppOt)
                 if (bFirst)
                 {
                     field_10_anim.field_14_scale = FP_FromInteger(100) / (pItem->field_8_z + FP_FromInteger(300));
+#ifdef TETHYS_SATURN
+                    // SATURN 448.ao.7: x in PSX space, as every other caller of
+                    // VRender_403AE0 passes it (Gibs.cpp, BeeSwarm.cpp): the PC
+                    // code converted it here AND again in VRender_403AE0, so the
+                    // lead debris landed at 3.02x its distance from the screen's
+                    // left edge instead of 1.74x, often off screen. The PSX has
+                    // no conversion at all.
+                    field_10_anim.VRender_403AE0(
+                        FP_GetExponent(pItem->field_0_x - screen_left),
+                        FP_GetExponent(pItem->field_4_y - screen_bottom),
+                        ppOt,
+                        0,
+                        0);
+                    pLeadPoly = &field_10_anim.field_2C_ot_data[buf];
+#else
                     field_10_anim.VRender_403AE0(
                         FP_GetExponent(PsxToPCX(pItem->field_0_x - screen_left, FP_FromInteger(11))),
                         FP_GetExponent(pItem->field_4_y - screen_bottom),
                         ppOt,
                         0,
                         0);
+#endif
                     field_10_anim.Get_Frame_Rect_402B50(&rect);
                     bFirst = false;
                 }
                 else
                 {
                     pItem->field_18_anim.field_6C_scale = FP_FromInteger(100) / (pItem->field_8_z + FP_FromInteger(300));
+#ifdef TETHYS_SATURN
+                    pItem->field_18_anim.VRender2(
+                        FP_GetExponent(PsxToPCX(pItem->field_0_x - screen_left, FP_FromInteger(11))),
+                        FP_GetExponent(pItem->field_4_y - screen_bottom),
+                        ppItemOt);
+                    if (!ppItemOt && pItem->field_18_anim.field_4_flags.Get(AnimFlags::eBit3_Render))
+                    {
+                        pIdx[nListed++] = static_cast<u8>(i);
+                    }
+#else
                     pItem->field_18_anim.VRender2(
                         FP_GetExponent(PsxToPCX(pItem->field_0_x - screen_left, FP_FromInteger(11))),
                         FP_GetExponent(pItem->field_4_y - screen_bottom),
                         ppOt);
+#endif
                     pItem->field_18_anim.GetRenderedSize_404220(&rect);
                 }
 
@@ -457,6 +564,17 @@ void ParticleBurst::VRender_40D7F0(PrimHeader** ppOt)
             }
         }
     }
+#ifdef TETHYS_SATURN
+    if (pLeadPoly && nListed != 0)
+    {
+        pBurst->mMagic = kTethysBurstMagic;
+        pBurst->mSelf = pBurst;
+        pBurst->mpFirst = reinterpret_cast<const u8*>(&field_E8_pRes[0].field_18_anim.field_10_polys[buf]);
+        pBurst->mStride = static_cast<u16>(sizeof(ParticleBurst_Item));
+        pBurst->mCount = static_cast<u16>(nListed);
+        pLeadPoly->mBase.header.hackPtr = pBurst;
+    }
+#endif
 }
 
 } // namespace AO
