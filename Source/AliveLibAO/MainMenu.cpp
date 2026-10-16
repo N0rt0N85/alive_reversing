@@ -4925,6 +4925,14 @@ u8** Menu::Tethys_SpeakRes(const AnimRecord& rec)
     Tethys_ReleaseGlow();
     if (field_E4_res_array[0])
     {
+        // 449.ao.1: ChantEnd is asked for while Chant still plays, so Abe may
+        // still point into this block. If the read below fails the callers skip
+        // their Set_Animation_Data, and he would decode a freed block: idle him
+        // on STARTANM first (same tick, never drawn when the read succeeds).
+        if (field_10_anim.field_20_ppBlock == field_E4_res_array[0] && field_E4_res_array[1])
+        {
+            field_10_anim.Set_Animation_Data_402A40(AO::AnimRec(AnimId::MenuAbeSpeak_Idle).mFrameTableOffset, field_E4_res_array[1]);
+        }
         ResourceManager::FreeResource_455550(field_E4_res_array[0]);
         field_E4_res_array[0] = nullptr;
     }

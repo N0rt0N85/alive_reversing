@@ -171,9 +171,55 @@ void SaveGame::LoadFromMemory_459970(SaveData* pData, s32 bKillObjects)
 // SATURN (bt816): see SaveGame.hpp. Captures the live map (current level/path/
 // camera) + Abe into gSaveBuffer_505668 so the death->respawn LoadFromMemory
 // reloads THIS (resident) screen instead of the zeroed SetActiveCam(0,0,0).
+//   SATURN 449.ao.6: AND THE SEED IS A CHECKPOINT ON THE SPOT. The pause
+// menu's SAVE ships this buffer as AO's does (SaveToFile below), so a game
+// saved before its first ContinuePoint ships the seed, and the seed carried
+// Abe's restart fields as his ctor leaves them: saved path and camera -1, zone
+// corner (0,0). LoadFromFile copies saved_* into current_*, and the next death
+// would have asked for path -1. The seed now names its own screen and a zone
+// corner from which Motion_61_Respawn drops Abe where he stood (top + 30 *
+// scale), as a ContinuePoint taken on that spot would. The case is AO's own
+// "no checkpoint yet" test (Motion_60: saved camera above 300, i.e. -1); a
+// buffer written by a real checkpoint is never touched. 449.ao.7: LoadFromFile
+// runs the same repair on every slot it reads.
+static void Tethys_RestartAtSpot(SaveData& d)
+{
+    if (d.field_216_saved_camera >= 0 && d.field_216_saved_camera <= 300)
+    {
+        return; // a real checkpoint wrote it: AO's, untouched
+    }
+    d.field_212_saved_level = d.field_234_current_level;
+    d.field_214_saved_path = static_cast<s16>(d.field_236_current_path);
+    d.field_216_saved_camera = d.field_238_current_camera;
+    d.field_218_saved_sprite_scale = d.field_230_ah_sprite_scale;
+    d.field_20A_zone_top_left.field_0_x = static_cast<s16>(d.field_224_xpos);
+    d.field_20A_zone_top_left.field_2_y = static_cast<s16>(FP_GetExponent(
+        FP_FromInteger(static_cast<s32>(d.field_228_ypos)) - d.field_230_ah_sprite_scale * FP_FromInteger(30)));
+    d.field_200_hashValue = SaveGame::Hash(&d);
+}
+
 void CC SaveGame::Tethys_SeedSaveBuffer()
 {
     SaveToMemory_459490(&gSaveBuffer_505668);
+    Tethys_RestartAtSpot(gSaveBuffer_505668);
+}
+
+// SATURN 449.ao.6: the seed's condition, moved here from Game_Loop (Game.cpp
+// keeps its history) so the pause menu's SAVE page asks for it as well: a SAVE
+// opened on a game's very first tick (START replayed from the load) would
+// otherwise ship the LAST game's checkpoint, or a zeroed buffer after a boot.
+void CC SaveGame::Tethys_SeedIfNeeded()
+{
+    if (!Tethys_gSaveBufferSeeded && sActiveHero_507678 && !gAttract_507698
+        && gMap_507BA8.field_0_current_level != LevelIds::eMenu_0
+        && sActiveHero_507678->field_FC_current_motion
+               != eAbeMotions::Motion_62_LoadedSaveSpawn_45ADD0
+        && sActiveHero_507678->field_FC_current_motion
+               != eAbeMotions::Motion_61_Respawn_42CD20)
+    {
+        Tethys_gSaveBufferSeeded = 1;
+        Tethys_SeedSaveBuffer();
+    }
 }
 #endif
 
@@ -547,6 +593,14 @@ s16 CC SaveGame::LoadFromFile_459D30(const char_type* name)
     if (hashVal == gSaveBuffer_500A18.field_200_hashValue)
     {
         gSaveBuffer_505668 = gSaveBuffer_500A18;
+#ifdef TETHYS_SATURN
+        // SATURN 449.ao.7: the slots ao261.23 to 449.ao.5 wrote before their
+        // game's first checkpoint (the live moment, after a level select
+        // typically) carry saved path and camera -1, which the three stores
+        // below copy into the restart screen: the next death asked for path -1.
+        // The seed's repair, before LoadFromMemory hands the fields to Abe.
+        Tethys_RestartAtSpot(gSaveBuffer_505668);
+#endif
         LoadFromMemory_459970(&gSaveBuffer_505668, 1);
         gSaveBuffer_505668.field_238_current_camera = gSaveBuffer_505668.field_216_saved_camera;
         Input().SetCurrentController(InputObject::PadIndex::First);
@@ -602,34 +656,36 @@ Bool32 CC SaveGame::SaveToFile_45A110(const char_type* name)
     // identical ones.  The backend picks the slot (first free, else oldest).
     (void) buffer;
     {
-        // SATURN (ao261.23): CAPTURE WHERE THE PLAYER ACTUALLY IS, NOT THE LAST
-        // CHECKPOINT.  This is the "it didn't bring me back to the right place"
-        // defect, and the cause is that nothing refreshes gSaveBuffer_505668
-        // before we ship it: its only writers are the ContinuePoint TLV
-        // (Abe.cpp:3240), Tethys_SeedSaveBuffer once at boot, and LoadFromFile.
-        // The pause menu never calls SaveToMemory.  Measured on R1: EIGHT
-        // ContinuePoints across 105 camera cells, so "SAVE" could hand back a
-        // position a whole path behind the player -- while the slot's title is
-        // built from the LIVE path (PauseMenu.cpp:368), so the entry read
-        // "RuptureFarms p16" and restored p15.  The label and the payload now
-        // agree because both describe the same instant.
-        //   A DELIBERATE DIVERGENCE FROM THE ORIGINAL, stated plainly: AO is a
-        // checkpoint game and its memory-card save is the checkpoint.  On a
-        // console where the player explicitly chose SAVE at a moment of their
-        // choosing, restoring some earlier moment reads as a bug, and the
-        // machinery to restore an arbitrary position is already proven --
-        // LoadFromMemory sets Motion_62_LoadedSaveSpawn, which raycasts +-60 for
-        // a collision line and calls MapFollowMe_401D30(TRUE) (the bt1017 path).
-        //   SaveToMemory also re-measures Tethys_gSaveBlobLen and recomputes
-        // field_200_hashValue, which is what keeps the truncated write below
-        // self-consistent.  It dereferences sActiveHero_507678 unguarded
-        // (SaveGame.cpp:370 onward), hence the null test.
-        if (sActiveHero_507678)
-        {
-            SaveToMemory_459490(&gSaveBuffer_505668);
-        }
-        const s32 len = 176 + static_cast<s32>(Tethys_gSaveBlobLen);
+        // SATURN 449.ao.6: AO'S SAVE AGAIN -- THE LAST CHECKPOINT, VERBATIM
+        // (Romain, 2026-10-15: "la sauvegarde ne devrait pas simplement
+        // enregistrer le dernier point de controle passe ? ca simplifierait
+        // tout"). It is what the original writes (the #else below ships
+        // gSaveBuffer_505668, the PSX memory-card image): AO is a checkpoint
+        // game and its save is the checkpoint.
+        //   ao261.23 shipped the live moment instead, after "it didn't bring me
+        // back to the right place": the title named the live path, the payload
+        // the checkpoint's. Every fix since only mended what that divergence
+        // broke: 449.ao.3 (a SAVE rewrote the restart screen and not its
+        // coordinates, "Abe apparait parfois en dehors de l'ecran"; a possessed
+        // Slig's camera), 449.ao.5 (a death after a load went to the slot's
+        // checkpoint, not to the moment loaded). With the checkpoint saved, the
+        // moment loaded IS the restart point and none of it is needed. The title
+        // names the checkpoint now (PauseMenu.cpp), so label and payload agree,
+        // which was ao261.23's whole point. The price is AO's: a SAVE keeps
+        // nothing done since the last checkpoint.
+        //   THE LENGTH COMES FROM THE BUFFER, not from Tethys_gSaveBlobLen, which
+        // holds whatever the LAST SaveToMemory measured: nothing measures this
+        // buffer at a load (0 after a cold boot), so 449.ao.3's possessed-Slig
+        // branch could ship 176 bytes of a ~2 KB slot whose hash then failed, a
+        // slot that never loads again. Every byte past the last non-zero one
+        // reads back as zero (LoadFromFile clears the struct first), so the
+        // struct and its hash come back identical.
         const u8* pDev = reinterpret_cast<const u8*>(&gSaveBuffer_505668) + 0x200;
+        s32 len = static_cast<s32>(sizeof(SaveData)) - 0x200;
+        while (len > 176 && pDev[len - 1] == 0)
+        {
+            len--;
+        }
         return Tethys_SaveWrite(pDev, len, name) ? 1 : 0;
     }
 #else

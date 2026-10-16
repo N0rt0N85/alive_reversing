@@ -1066,6 +1066,13 @@ EXPORT void CC SsVabTransBody_49D3E0(VabBodyRecord* pVabBody, s16 vabId)
     }
 }
 
+#ifdef TETHYS_SATURN
+// SATURN 449.ao.6: the streamed reader below serves the level load too.
+static u8** CC Tethys_VbWindowAlloc(s32 firstAsk, s32* pWinBytes);
+static bool CC Tethys_TransBody_Streamed(const LvlFileRecord* pRec, s16 vabId, u8* pWin, s32 winBytes);
+extern "C" u32 Tethys_gSnd[10];
+#endif
+
 EXPORT s16 CC SND_VAB_Load_476CB0(SoundBlockInfo* pSoundBlockInfo, s16 vabId)
 {
     // Fail if no file name
@@ -1087,7 +1094,16 @@ EXPORT s16 CC SND_VAB_Load_476CB0(SoundBlockInfo* pSoundBlockInfo, s16 vabId)
 
     s32 headerSize = pVabHeaderFile->field_10_num_sectors << 11;
 
+#ifdef TETHYS_SATURN
+    // SATURN 449.ao.6: Allocate_New_Locked_Resource_454F80 is fatal on refusal,
+    // so the guard below could never run (the garde-inatteignable class). Same
+    // block, same place (locked, last fit, compaction first), refused softly.
+    u8** ppVabHeader = ResourceManager::Alloc_New_Resource_ImplEx(ResourceManager::Resource_VabHeader, vabId, headerSize,
+                                                                  true, ResourceManager::BlockAllocMethod::eLastMatching,
+                                                                  true /*reclaim*/, false /*never fatal*/);
+#else
     u8** ppVabHeader = ResourceManager::Allocate_New_Locked_Resource_454F80(ResourceManager::Resource_VabHeader, vabId, headerSize);
+#endif
 
     // SATURN: unchecked Allocate_New_Locked null = *null reads the BIOS
     // vector then Read_File writes ~2-4 KB through a wild pointer (same S4
@@ -1110,6 +1126,47 @@ EXPORT s16 CC SND_VAB_Load_476CB0(SoundBlockInfo* pSoundBlockInfo, s16 vabId)
 
     s32 vabBodySize = pVabBodyFile->field_10_num_sectors << 11;
 
+#ifdef TETHYS_SATURN
+    // SATURN 449.ao.6: THE LEVEL'S BANK STREAMS LIKE THE MOVIE-EXIT RELOAD, AND
+    // THE LAST FATAL OF A LEVEL LOAD GOES (Romain, 2026-10-15: what we keep must
+    // give way when the room is needed). The bank used to arrive whole, in ONE
+    // contiguous block (R1: 481,280 B in a 920 KB heap without a cart), through
+    // Alloc_New_Resource_454F20, fatal on refusal -- so AO's own answer below
+    // (free Abe's banks, compact, try again) could never run; the 442.ao.2 field
+    // fatal was this block. SsVabTransBody only walks forward, so the window of
+    // Tethys_TransBody_Streamed is enough (373.ao.1, proven at every movie exit
+    // since). It asks for the whole bank first when the heap can hold it: one CD
+    // read, as before. Otherwise 128, 64, 32 KB, a few reads more. With not even
+    // 32 KB this bank, and the ones after it, play mute (AO's `return 0`, the
+    // soft refusal counted on the rn row), instead of ending the run.
+    //   The window comes BEFORE SsVabOpenHead, as the bank did: a refusal leaves
+    // no open head without its samples.
+    {
+        s32 winBytes = 0;
+        u8** ppWin = Tethys_VbWindowAlloc(vabBodySize > 32768 ? vabBodySize : 32768, &winBytes);
+        if (!ppWin)
+        {
+            return 0;
+        }
+        pSoundBlockInfo->field_8_vab_id = SsVabOpenHead_49CFB0(reinterpret_cast<VabHeader*>(pSoundBlockInfo->field_C_pVabHeader));
+        if (pSoundBlockInfo->field_8_vab_id < 0 || pSoundBlockInfo->field_8_vab_id >= kMaxVabs)
+        {
+            ResourceManager::FreeResource_455550(ppWin);
+            return 0; // the VDP1-tail overrun guard below, same policy
+        }
+        if (Tethys_TransBody_Streamed(pVabBodyFile, static_cast<s16>(pSoundBlockInfo->field_8_vab_id), *ppWin, winBytes))
+        {
+            Tethys_gSnd[8]++;
+        }
+        else
+        {
+            Tethys_gSnd[9]++; // a short read: those samples are silent, the rest plays
+        }
+        ResourceManager::FreeResource_455550(ppWin);
+        SsVabTransCompleted_4FE060(SS_WAIT_COMPLETED);
+        return 1;
+    }
+#else
     // Load the VB file data
     u8** ppVabBody = ResourceManager::Alloc_New_Resource_454F20(ResourceManager::Resource_VabBody, vabId, vabBodySize);
     if (!ppVabBody)
@@ -1155,6 +1212,7 @@ EXPORT s16 CC SND_VAB_Load_476CB0(SoundBlockInfo* pSoundBlockInfo, s16 vabId)
     // Now the sound samples are loaded we don't need the VB data anymore
     ResourceManager::FreeResource_455550(ppVabBody);
     return 1;
+#endif
 }
 
 EXPORT void CC SND_Load_VABS_477040(SoundBlockInfo* pSoundBlockInfo, s32 reverb)
@@ -1457,6 +1515,37 @@ static void CC Tethys_Reload_One_Vab(SoundBlockInfo* pInfo, u8* pWin, s32 winByt
 // mode raises it, Tethys_SetResHeapSize).
 u32 Tethys_ResHeapSize();
 
+// SATURN 449.ao.6: the window ladder of the reload below, shared with the level
+// load (SND_VAB_Load_476CB0). Rungs: firstAsk, then 128, 64 and 32 KB; every rung
+// but the 32 KB floor is skipped by arithmetic when the heap cannot hold it (the
+// reason is in the reload's comment). The reload asks 128 KB first, as it always
+// has; the level load asks for its whole bank.
+static u8** CC Tethys_VbWindowAlloc(s32 firstAsk, s32* pWinBytes)
+{
+    s32 winBytes = firstAsk;
+    while (true)
+    {
+        const u32 cap = Tethys_ResHeapSize();
+        const u32 used = sManagedMemoryUsedSize_9F0E48;
+        const bool affordable =
+            cap >= used && (cap - used) >= static_cast<u32>(winBytes) + 16u;
+        u8** ppWin = nullptr;
+        if (affordable || winBytes <= 32768)
+        {
+            ppWin = ResourceManager::Alloc_New_Resource_ImplEx(
+                ResourceManager::Resource_VabBody, 127, winBytes,
+                false, ResourceManager::BlockAllocMethod::eFirstMatching,
+                /*bReclaimOnFail*/ true, /*bFatalOnFail*/ false);
+        }
+        if (ppWin || winBytes <= 32768)
+        {
+            *pWinBytes = winBytes;
+            return ppWin;
+        }
+        winBytes = winBytes > 131072 ? 131072 : (winBytes > 65536 ? 65536 : 32768);
+    }
+}
+
 EXPORT void CC Tethys_SND_VAB_Reload_Saturn()
 {
     // ONE window for the whole chain.  32 KB = 16 sectors: ~15 CD reads for a
@@ -1487,28 +1576,9 @@ EXPORT void CC Tethys_SND_VAB_Reload_Saturn()
     //
     // The 32 KB floor stays an UNCONDITIONAL attempt: it is the size this
     // function has always asked for, and its soft-null path is already the
-    // shipped behaviour.
-    s32 winBytes = 131072;
-    u8** ppWin = nullptr;
-    while (true)
-    {
-        const u32 cap = Tethys_ResHeapSize();
-        const u32 used = sManagedMemoryUsedSize_9F0E48;
-        const bool affordable =
-            cap >= used && (cap - used) >= static_cast<u32>(winBytes) + 16u;
-        if (affordable || winBytes <= 32768)
-        {
-            ppWin = ResourceManager::Alloc_New_Resource_ImplEx(
-                ResourceManager::Resource_VabBody, 127, winBytes,
-                false, ResourceManager::BlockAllocMethod::eFirstMatching,
-                /*bReclaimOnFail*/ true, /*bFatalOnFail*/ false);
-        }
-        if (ppWin || winBytes <= 32768)
-        {
-            break;
-        }
-        winBytes >>= 1;
-    }
+    // shipped behaviour. (449.ao.6: the loop moved into Tethys_VbWindowAlloc.)
+    s32 winBytes = 0;
+    u8** ppWin = Tethys_VbWindowAlloc(131072, &winBytes);
     if (!ppWin)
     {
         return; // counted on the rn row; the level stays mute, as in 368.ao.5
