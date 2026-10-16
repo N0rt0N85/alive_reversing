@@ -205,16 +205,13 @@ public:
     }
 };
 
-#if defined(TETHYS_SATURN) && !TETHYS_AE_TABLES
-// SATURN 450.ao.1: NO EXODDUS DEFAULT, for the reason given at spMidiVars in
-// Midi.cpp: AO installs its own vars in SND_Init_476E40 before any sound call.
-// The default instance kept Exoddus' sMidiSeqSongs (3,200 B), sMidi_Channels
-// (1,056 B) and s512_byte (512 B) alive in HWRAM. TETHYS_AE_TABLES=1 restores it.
-static IPsxSpuApiVars* gSpuVars = nullptr;
-#else
+// SATURN 453.ao.2: THE EXODDUS DEFAULT STAYS, ON EVERY BUILD (see spMidiVars in
+// Midi.cpp). SsSeqCalledTbyT_4FDC80 below runs from the first vsync of the
+// boot, before SND_Init_476E40, and reads this pointer first thing: 450.ao.1's
+// null start crashed the boot. Its 4,914 B (sMidiSeqSongs, sMidi_Channels,
+// s512_byte and the MIDI vars) are the price of the boot order.
 static AEPsxSpuApiVars gAeSpuVars;
 static IPsxSpuApiVars* gSpuVars = &gAeSpuVars; // Default to AE vars
-#endif
 
 
 EXPORT void SetSpuApiVars(IPsxSpuApiVars* pVars)

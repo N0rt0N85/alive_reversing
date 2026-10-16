@@ -129,17 +129,15 @@ public:
     }
 };
 
-#if defined(TETHYS_SATURN) && !TETHYS_AE_TABLES
-// SATURN 450.ao.1: NO EXODDUS DEFAULT. AO replaces this pointer with its own
-// vars in SND_Init_476E40, the first sound call of the boot
-// (Init_Sound_DynamicArrays_And_Others_41CD20), and never puts it back. The
-// default instance only kept Exoddus' sequencer state alive in HWRAM.
-// TETHYS_AE_TABLES=1 restores it.
-static IMidiVars* spMidiVars = nullptr;
-#else
+// SATURN 453.ao.2: THE EXODDUS DEFAULT STAYS, ON EVERY BUILD. 450.ao.1 started
+// this pointer (and gSpuVars, PsxSpuApi.cpp) at null, on the belief that
+// SND_Init_476E40 installing AO's vars is the first sound call of the boot. It
+// is not: PSX_VSync_4F6170 (sys_saturn.cxx) ticks SsSeqCalledTbyT_4FDC80 from
+// the first frame, and its first virtual call read a vtable at address 0 and
+// jumped into the BIOS (453.ao.1, boot crash on Ymir, pc e0ff600c). Until AO
+// installs its own, the AE instance is what every early caller reads.
 static AEMidiVars sAEMidiVars;
 static IMidiVars* spMidiVars = &sAEMidiVars; // Default to AE vars
-#endif
 
 EXPORT IMidiVars* GetMidiVars()
 {
