@@ -25,6 +25,10 @@
 
 namespace AO {
 
+#ifdef TETHYS_SATURN
+ALIVE_VAR_EXTERN(SaveData, gSaveBuffer_505668); // SATURN 449.ao.6: the SAVE title names the checkpoint
+#endif
+
 // SATURN: 425.ao.2 -- THE MENU SPEAKS ITS DISC'S LANGUAGE.
 //
 // The tester: "the menu is not localized".  The main menu's own labels never
@@ -542,11 +546,24 @@ void PauseMenu::VUpdate_44DFB0()
                                 }
 #endif
                                 SFX_Play_43AD70(SoundEffect::IngameTransition_107, 90, 0);
-                                s32 tmp = static_cast<s32>(gMap_507BA8.field_0_current_level);
-                                if (gMap_507BA8.field_0_current_level == LevelIds::eRuptureFarmsReturn_13)
+#ifdef TETHYS_SATURN
+                                // SATURN 449.ao.6: the slot holds the last checkpoint
+                                // (SaveGame.cpp SaveToFile), so its title names the
+                                // checkpoint's level and path, where a load puts Abe,
+                                // not the ones he stands in. Seeded first: on a game's
+                                // first tick the buffer can still be the last game's.
+                                SaveGame::Tethys_SeedIfNeeded();
+                                const LevelIds titleLevel = gSaveBuffer_505668.field_234_current_level;
+                                const s16 titlePath = static_cast<s16>(gSaveBuffer_505668.field_236_current_path);
+#else
+                                const LevelIds titleLevel = gMap_507BA8.field_0_current_level;
+                                const s16 titlePath = gMap_507BA8.field_2_current_path;
+#endif
+                                s32 tmp = static_cast<s32>(titleLevel);
+                                if (titleLevel == LevelIds::eRuptureFarmsReturn_13)
                                 {
                                     s16 row = 0;
-                                    auto pathId = SaveGame::GetPathId(gMap_507BA8.field_2_current_path, &row);
+                                    auto pathId = SaveGame::GetPathId(titlePath, &row);
 
                                     if (pathId != -1)
                                     {
@@ -554,7 +571,7 @@ void PauseMenu::VUpdate_44DFB0()
                                     }
                                 }
 
-                                auto curPathId = gMap_507BA8.field_2_current_path;
+                                auto curPathId = titlePath;
                                 char_type curPathIdNumBuf[12] = {};
 
                                 strncpy(&saveNameBuffer_5080C6.characters[2], gLevelNames_4CE1D4[tmp], 19);

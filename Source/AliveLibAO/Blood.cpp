@@ -115,7 +115,22 @@ Blood* Blood::ctor_4072B0(FP xpos, FP ypos, FP xOff, FP yOff, FP scale, s16 coun
     field_116_total_count = count;
     field_112_to_render_count = count;
 
+#ifdef TETHYS_SATURN
+    // SATURN 449.ao.4: THE `else` BELOW COULD NEVER RUN, the AbilityRing story
+    // (383.ao.1) again. AO wrote the recovery -- no buffer, the spray dies -- but
+    // Allocate_New_Locked_Resource_454F80 fatals first, so a shot or a death on
+    // a full no-cart heap was a RES NULL where AO drops one blood spray. Found
+    // by the 449.ao.4 sweep of the allocations that still die on refusal.
+    // Keep the compaction retry and the pin valve, drop the fatal; a dead
+    // object is neither updated nor drawn (Game.cpp:590, :843) and the dtor
+    // tests the handle.
+    field_E4_ppResBuf = ResourceManager::Alloc_New_Resource_ImplEx(
+        ResourceManager::Resource_Blood, 0, count * sizeof(BloodParticle),
+        true /*locked*/, ResourceManager::BlockAllocMethod::eLastMatching,
+        true /*reclaim*/, false /*never fatal -- the else below handles it*/);
+#else
     field_E4_ppResBuf = ResourceManager::Allocate_New_Locked_Resource_454F80(ResourceManager::Resource_Blood, 0, count * sizeof(BloodParticle));
+#endif
     if (field_E4_ppResBuf)
     {
         field_E8_pResBuf = reinterpret_cast<BloodParticle*>(*field_E4_ppResBuf);

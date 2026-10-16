@@ -111,6 +111,9 @@ public:
     // (0x20000200) = the death-on-mine crash (upstream even warns of it at
     // Abe.cpp Motion_61_Respawn). Seed once so death reloads the CURRENT screen.
     static void CC Tethys_SeedSaveBuffer();
+    // SATURN 449.ao.6: the seed's once-per-game condition, for Game_Loop and for
+    // the pause menu's SAVE page (which ships this buffer).
+    static void CC Tethys_SeedIfNeeded();
 #endif
 };
 

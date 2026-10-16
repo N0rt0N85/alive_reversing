@@ -722,16 +722,10 @@ EXPORT void CC Game_Loop_437630()
         // the TETHYS_START_CAM debug boot as well.
         // 448.ao.7: never from an attract demo, whose Abe is the recording's:
         // a new game that died before its first checkpoint would respawn there.
-        if (!Tethys_gSaveBufferSeeded && sActiveHero_507678 && !gAttract_507698
-            && gMap_507BA8.field_0_current_level != LevelIds::eMenu_0
-            && sActiveHero_507678->field_FC_current_motion
-                   != eAbeMotions::Motion_62_LoadedSaveSpawn_45ADD0
-            && sActiveHero_507678->field_FC_current_motion
-                   != eAbeMotions::Motion_61_Respawn_42CD20)
-        {
-            Tethys_gSaveBufferSeeded = 1;
-            SaveGame::Tethys_SeedSaveBuffer();
-        }
+        // 449.ao.6: once per GAME, not per boot (Map.cpp clears the latch on the
+        // way back to the menu), and the condition lives in SaveGame.cpp, where
+        // the pause menu's SAVE page asks for it too.
+        SaveGame::Tethys_SeedIfNeeded();
 #if defined(TETHYS_START_CAM) && TETHYS_START_CAM > 0
         // SATURN (bt1017): DEBUG BOOT SPAWN, through the game's OWN respawn.
         // Not a camera jump -- bt1014 tried that and the map chased an

@@ -1547,7 +1547,17 @@ HintFly* HintFly::ctor_42A820(Path_HintFly* pTlv, s32 tlvInfo)
         field_11A_msg_len = longestWordLen;
         field_11A_msg_len += 12;
 
+#ifdef TETHYS_SATURN
+        // SATURN 449.ao.4: soft, as Blood.cpp's spray: AO's own `else` marks the
+        // swarm dead when there is no buffer, and the fatal allocator never let
+        // it run. A full heap now costs this hint, not the game.
+        field_E4_ppRes = ResourceManager::Alloc_New_Resource_ImplEx(
+            ResourceManager::Resource_HintFly, 0, sizeof(HintFlyParticle) * field_11A_msg_len,
+            true /*locked*/, ResourceManager::BlockAllocMethod::eLastMatching,
+            true /*reclaim*/, false /*never fatal -- the else below handles it*/);
+#else
         field_E4_ppRes = ResourceManager::Allocate_New_Locked_Resource_454F80(ResourceManager::Resource_HintFly, 0, sizeof(HintFlyParticle) * field_11A_msg_len);
+#endif
         if (field_E4_ppRes)
         {
             field_E8_pRes = reinterpret_cast<HintFlyParticle*>(*field_E4_ppRes);

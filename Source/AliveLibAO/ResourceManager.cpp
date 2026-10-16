@@ -325,160 +325,31 @@ static void Tethys_StickyMaterialize(u32 type, u32 id)
     }
 }
 
-// SATURN 446.ao.12 -- A RELEASED RESOURCE STAYS WHERE IT IS WHILE THE HEAP HAS
-// ROOM. Romain, 2026-10-11: "on ne devrait pas TOUT garder en memoire sans
-// raison (sauf si on a de la marge)", and the cartridge should keep resources,
-// not only backgrounds. 446.ao.11 stopped the re-reads between ADJACENT
-// screens; row 23 of its capture still showed 156 KB re-read from screens
-// visited EARLIER (ABEHOIST + LCDFONT on c3, R1SWITCH + ABEPULL on c7, 84 KB on
-// the return to c4), each file ~110-150 ms.
-//   A chunk that came out of a resource file (Move_Resources marks it) and whose
-// last reference goes is KEPT instead of freed: same address, same bytes, type
-// and id intact. The accounting treats it as free (sManagedMemoryUsedSize drops
-// as before, so `us` and `pk` keep meaning the live set), and:
-//   * a request that takes a reference (GetLoadedResource with addUseCount, as
-//     LoadResource does) finds it and revives it: no file read;
-//   * a PEEK (addUseCount 0) never sees it, exactly as if it had been freed --
-//     FreeResource(GetLoadedResource(.., 0, 0)) must reach a live copy;
-//   * an allocation that finds no room gives kept blocks back, oldest first,
-//     before refusing anyone (Allocate_New_Block): nothing that fit can fail;
-//   * the compaction does NOT move it (like a locked block): with a cart the
-//     margin is ~1 MB, and moving it at every change would cost more than the
-//     reads it saves. Only live blocks move, as before;
-//   * resource ids repeat across levels, so the kept set belongs to one .LVL
-//     and goes as soon as another one is open; the pressure valves that drop
-//     the S7 pins (Tethys_ReleaseStickyResources) drop it too.
-// Only Anim, Palt and Font chunks of BAN/BND/FNT files: the .CAM stream
-// fabricates its chunks without asking whether they are resident, so keeping
-// those would only breed duplicates. At most kTethysKeptMax blocks: the node
-// pool (375) is a hard cap, and row 1 `bl` reads ~100 in play.
-static const s16 kTethysFileChunk = 0x2000; // header flag: came out of a resource file
-static const s16 kTethysKept = 0x4000;      // header flag: released by everyone, kept
-static const s32 kTethysKeptMax = 64;
-static s32 sTethysKeptN = 0;
-static u32 sTethysKeptBytes = 0;
-static u32 sTethysKeptSeq = 0;     // release order, 10 bits, kept in flag bits 3-12
-static s32 sTethysKeptLvl = -1;    // sLvlArchive_4FFD60.field_4_cd_pos of the kept set
-static u16 sTethysKeptRevived = 0; // since T0 (row 20 `v`)
-static u16 sTethysKeptEvicted = 0; // since T0 (row 20 `e`)
-extern "C" void Tethys_DbufScratchForget(); // 427.ao.5: AliveLibAO/Animation.cpp
-
-// SATURN 446.ao.13: bit 14 alone does not make a kept block. Split_block and
-// Reclaim_Memory write Free headers without touching field_6_flags, and
-// LoadingLoop's Pend block keeps the Free header's flags until its read lands:
-// there the bit is whatever bytes were in the heap. 446.ao.12's walks trusted
-// it, and the hardware read `KP n2 k4194298` after c4>c5: free blocks
-// "evicted" (the counters went below zero), and a Pend block could have been
-// handed out while its read was still landing. A kept block always carries one
-// of the three types Tethys_KeepOnRelease accepts; Free and Pend never do.
-static bool Tethys_IsKept(const ResourceManager::Header* pHdr)
-{
-    const u32 type = pHdr->field_8_type;
-    return (pHdr->field_6_flags & kTethysKept)
-        && (type == ResourceManager::Resource_Animation || type == ResourceManager::Resource_Palt
-            || type == ResourceManager::Resource_Font);
-}
-
-static void Tethys_KeptEvict(ResourceManager::Header* pHdr)
-{
-    pHdr->field_8_type = ResourceManager::Resource_Free;
-    pHdr->field_6_flags = 0;
-    sTethysKeptN--;
-    sTethysKeptBytes -= pHdr->field_0_size;
-    sTethysKeptEvicted++;
-}
-
-// Give the oldest kept block back. false = none left.
-static bool Tethys_KeptEvictOldest()
-{
-    // 446.ao.13: no early out on sTethysKeptN. A counter that drifted low would
-    // strand kept bytes and fail an allocation that fit; the walk costs ~0.1 ms
-    // and runs only when an allocation has already failed.
-    ResourceManager::Header* pOldest = nullptr;
-    u32 oldestAge = 0;
-    for (ResourceManager::ResourceHeapItem* p = sFirstLinkedListItem_50EE2C; p; p = p->field_4_pNext)
-    {
-        ResourceManager::Header* pHdr = ResourceManager::Get_Header_455620(&p->field_0_ptr);
-        if (Tethys_IsKept(pHdr))
-        {
-            const u32 stamp = (static_cast<u32>(static_cast<u16>(pHdr->field_6_flags)) >> 3) & 0x3FFu;
-            const u32 age = (sTethysKeptSeq - stamp) & 0x3FFu;
-            if (!pOldest || age > oldestAge)
-            {
-                pOldest = pHdr;
-                oldestAge = age;
-            }
-        }
-    }
-    if (!pOldest)
-    {
-        sTethysKeptN = 0; // freed behind our back (Free_Resource_Of_Type keeps count)
-        sTethysKeptBytes = 0;
-        return false;
-    }
-    Tethys_DbufScratchForget(); // its address may now be handed to another resource
-    Tethys_KeptEvict(pOldest);
-    return true;
-}
-
-static void Tethys_KeptEvictAll()
-{
-    // 446.ao.13: walks whatever the counter says (level change, pressure valve).
-    Tethys_DbufScratchForget();
-    for (ResourceManager::ResourceHeapItem* p = sFirstLinkedListItem_50EE2C; p; p = p->field_4_pNext)
-    {
-        ResourceManager::Header* pHdr = ResourceManager::Get_Header_455620(&p->field_0_ptr);
-        if (Tethys_IsKept(pHdr))
-        {
-            Tethys_KeptEvict(pHdr);
-        }
-    }
-    sTethysKeptN = 0;
-    sTethysKeptBytes = 0;
-    sTethysKeptLvl = -1; // 446.ao.13: no kept set, so no level to compare against
-}
-
-// FreeResource_Impl, at the last reference: keep the block? true = kept.
-static bool Tethys_KeepOnRelease(ResourceManager::Header* pHdr)
-{
-    const u32 type = pHdr->field_8_type;
-    if (!(pHdr->field_6_flags & kTethysFileChunk) || (pHdr->field_6_flags & 7)
-        || (type != ResourceManager::Resource_Animation && type != ResourceManager::Resource_Palt
-            && type != ResourceManager::Resource_Font))
-    {
-        return false; // locked / header-only / never-free, or not a file chunk
-    }
-    const s32 lvl = sLvlArchive_4FFD60.field_4_cd_pos;
-    if (sTethysKeptLvl != lvl)
-    {
-        Tethys_KeptEvictAll();
-        sTethysKeptLvl = lvl;
-    }
-    if (sTethysKeptN >= kTethysKeptMax)
-    {
-        Tethys_KeptEvictOldest();
-    }
-    sTethysKeptSeq = (sTethysKeptSeq + 1u) & 0x3FFu;
-    pHdr->field_6_flags = static_cast<s16>(kTethysFileChunk | kTethysKept | (sTethysKeptSeq << 3));
-    sManagedMemoryUsedSize_9F0E48 -= pHdr->field_0_size; // lent to the cache, counted free
-    sTethysKeptN++;
-    sTethysKeptBytes += pHdr->field_0_size;
-    return true;
-}
-
-// GetLoadedResource took a reference on a kept block: it is live again.
-static void Tethys_KeptRevive(ResourceManager::Header* pHdr)
-{
-    pHdr->field_6_flags = kTethysFileChunk;
-    sManagedMemoryUsedSize_9F0E48 += pHdr->field_0_size;
-    if (sManagedMemoryUsedSize_9F0E48 > sPeakedManagedMemUsage_9F0E4C)
-    {
-        sPeakedManagedMemUsage_9F0E4C = sManagedMemoryUsedSize_9F0E48;
-    }
-    sTethysKeptN--;
-    sTethysKeptBytes -= pHdr->field_0_size;
-    sTethysKeptRevived++;
-}
+// SATURN 449.ao.2: 446.ao.12's KEPT RESOURCES ARE RETIRED. DO NOT BRING THEM
+// BACK AS THEY WERE.
+//   A released Anim/Palt/Font chunk of a BAN/BND/FNT file stayed in place,
+// counted free, invisible to a peek (GetLoadedResource with addUseCount 0) and
+// revived by any request taking a reference. That asymmetry is what broke. The
+// engine reads a file again whenever a peek misses, or without asking at all,
+// so a kept copy and a fresh one coexisted and the reference went to the first
+// in address order. When that was the kept one, the fresh chunk stayed at ref
+// 0 until the level ended: an orphan. Three paths did it:
+//   * LoadResourcesFromList peeks before it reads: every BND list a factory
+//     asks for (doors, lifts, bombs...) could orphan a copy on a revisit;
+//   * the unconditional reloads: Abe's Elum mount and dismount (ABEBSIC.BAN,
+//     188 KB, and four more files per cycle), ABESPEAK.BAN per GameSpeak
+//     visit with a cart;
+//   * the GameSpeak phrases without a cart: ABESPK0..9.BAN all hold Anim 130,
+//     so the revived chunk also held the WRONG bytes. Abe vanished or turned
+//     green, B stopped answering, then a Decompress_Type_1 fatal (448.ao.8
+//     field report, 2026-10-14).
+// Evicting kept copies when a file lands would not close it: a kept block
+// revived while its file is still in flight leaves two live copies all the
+// same. Romain, 2026-10-14: lose some ms rather than risk a crash. What the
+// mechanism bought, 446.ao.12 against 446.ao.11 (docs/HW_RESULTS.md): -247 ms
+// over the 7 A/B screen changes, 18 file reads instead of 28 and compaction
+// 629 -> 184 ms over the 9. A cache here must name what it holds by FILE, not
+// by (type, id), and the peek that decides to read must see it.
 
 void Tethys_ForgetAbsentResources(); // SATURN bt990: defined below
 
@@ -507,9 +378,6 @@ void Tethys_ReleaseStickyResources()
     }
     sTethysStickyHeldCount = 0;
     sTethysStickyPendingCount = 0;
-    // SATURN 446.ao.12: and the kept resources. Every caller wants memory back
-    // (the pressure valves) or opens a level whose ids name other bytes.
-    Tethys_KeptEvictAll();
     // SATURN (bt1053): Tethys_ForgetAbsentResources() USED TO BE CALLED HERE AND
     // IT COULD KILL THE GAME. This function has TWO callers: Map.cpp's level
     // change, where forgetting the absent-name memo is right because the names
@@ -1037,51 +905,6 @@ extern "C" void Tethys_FlipRecordReset()
     sFlipTopBytes = 0;
     sFlipTopSector = 0;
     sFlipRecBytes = 0;
-    sTethysKeptRevived = 0; // 446.ao.12: row 20 `KP`, same window
-    sTethysKeptEvicted = 0;
-}
-
-// Digits without printf (SRL's snprintfEx), for row 20 `KP` below.
-static char* Tethys_PutU(char* p, u32 v)
-{
-    char tmp[10];
-    s32 n = 0;
-    do
-    {
-        tmp[n++] = static_cast<char>('0' + v % 10u);
-        v /= 10u;
-    } while (v && n < 10);
-    while (n)
-    {
-        *p++ = tmp[--n];
-    }
-    return p;
-}
-
-// 446.ao.12: row 20 `KP n k v e` -- the kept resources (Tethys_KeepOnRelease):
-// n blocks kept now, k their KB, v revived and e given back since T0.
-extern "C" void Tethys_KeptRow(char* pOut) // pOut[40]
-{
-    char* p = pOut;
-    *p++ = 'K';
-    *p++ = 'P';
-    *p++ = ' ';
-    *p++ = 'n';
-    p = Tethys_PutU(p, sTethysKeptN > 0 ? static_cast<u32>(sTethysKeptN) : 0u);
-    *p++ = ' ';
-    *p++ = 'k';
-    p = Tethys_PutU(p, sTethysKeptBytes >> 10);
-    *p++ = ' ';
-    *p++ = 'v';
-    p = Tethys_PutU(p, sTethysKeptRevived);
-    *p++ = ' ';
-    *p++ = 'e';
-    p = Tethys_PutU(p, sTethysKeptEvicted);
-    while (p < pOut + 39)
-    {
-        *p++ = ' ';
-    }
-    *p = 0;
 }
 
 extern "C" u32 Tethys_FlipTopSector()
@@ -3299,28 +3122,37 @@ void CC ResourceManager::Tethys_StreamCamFile(Camera* pCamera, bool bitsOnly)
             // Fabricate a heap chunk (FG1/Anim) exactly as Move_Resources
             // would: type/id from the on-disk header, ref_count 1, one push
             // into the camera array (Create_FG1s scans it by type; the dtor
-            // frees each entry once -> balanced). Our own alloc-retry stands
-            // in for the LoadingFile state-0 pressure machinery we bypass
-            // (Reclaim runs here -- sResources_Pending_Loading is 0).
-            u8** ppRes = nullptr;
-            for (s32 attempt = 0; attempt < 4 && !ppRes; attempt++)
-            {
-                ppRes = Alloc_New_Resource_454F20(hdr.field_8_type, hdr.field_C_id, payloadLen);
-                if (!ppRes)
-                {
-                    Reclaim_Memory_455660(0);
-                }
-            }
+            // frees each entry once -> balanced).
+            //   SATURN 449.ao.3: the 4-try alloc loop that stood here was dead,
+            // its first refusal was already the RES NULL fatal inside the
+            // allocator, which now spends the sticky pins before refusing. An
+            // FG1 chunk may still be refused, softly: its one consumer is
+            // Map::Create_FG1s_4447D0, and a screen without its foreground
+            // (actors drawn over its barrels and pillars until the next visit)
+            // beats a dead run. Anim chunks stay fatal, factories fetch them by
+            // id. A refused FG1 is read through palBuf, spent once Bits is
+            // loaded, so the stream and the cache mirror stay aligned.
+            const bool bFg1 = hdr.field_8_type == Resource_FG1;
+            u8** ppRes = Alloc_New_Resource_ImplEx(hdr.field_8_type, hdr.field_C_id, payloadLen, false,
+                                                   BlockAllocMethod::eFirstMatching, true, !bFg1);
             if (!ppRes)
             {
-                ALIVE_FATAL("CAM stream: chunk OOM");
+                for (u32 left = payloadLen; left && !rd.bad;)
+                {
+                    const u32 n = left < 512u ? left : 512u;
+                    rd.Read(palBuf, n);
+                    left -= n;
+                }
             }
-            rd.Read(*ppRes, payloadLen); // *ppRes = payload start (after Alloc's 16 B header)
-            if (rd.bad)
+            else
             {
-                break; // truncated payload -- do NOT commit; fatal below
+                rd.Read(*ppRes, payloadLen); // *ppRes = payload start (after Alloc's 16 B header)
+                if (rd.bad)
+                {
+                    break; // truncated payload -- do NOT commit; fatal below
+                }
+                pCamera->field_0_array.Push_Back(ppRes);
             }
-            pCamera->field_0_array.Push_Back(ppRes);
         }
 
         if (rd.bad)
@@ -3443,8 +3275,13 @@ u8** ResourceManager::Alloc_New_Resource_ImplEx(u32 type, u32 id, u32 size, bool
         pHeader->field_6_flags = locked ? ResourceHeaderFlags::eLocked : 0;
     }
 #ifdef TETHYS_SATURN
-    else if (bReclaimOnFail && !bFatalOnFail)
+    else if (bReclaimOnFail)
     {
+        // SATURN 449.ao.3: THE VALVE NOW RUNS BEFORE BOTH REFUSALS. It used to
+        // serve the soft null alone, so a FATAL ask never spent the pins: the
+        // field RES NULL on E1P04C01 (FG1 40102, 35,212 B, a Slog on Abe's heels)
+        // died with the Slig banks of paths 1-3 still pinned, 165-243 KB in a
+        // path with no Slig (pins only go at a level change).
         // SATURN (397.ao.1): BEFORE HANDING BACK THE NULL, SPEND THE STICKY REFS.
         //
         // Field report: reach the BoomMachine / zapline room AFTER possessing
@@ -3486,19 +3323,20 @@ u8** ResourceManager::Alloc_New_Resource_ImplEx(u32 type, u32 id, u32 size, bool
                 return ppNewRes;
             }
         }
-        // SATURN (ao262.2): the caller has a real recovery path -- it skips the
-        // frame or fails its init -- so hand it the null it was written to
-        // expect. Counted, never silent: `rn` on the S4 row.
-        Tethys_gResSoftNull++;
-        if (size > Tethys_gSoftSize) // ao262.10: keep the BIGGEST, not the last
+        if (!bFatalOnFail)
         {
-            Tethys_gSoftType = type;
-            Tethys_gSoftId = id;
-            Tethys_gSoftSize = size;
+            // SATURN (ao262.2): the caller has a real recovery path -- it skips the
+            // frame or fails its init -- so hand it the null it was written to
+            // expect. Counted, never silent: `rn` on the S4 row.
+            Tethys_gResSoftNull++;
+            if (size > Tethys_gSoftSize) // ao262.10: keep the BIGGEST, not the last
+            {
+                Tethys_gSoftType = type;
+                Tethys_gSoftId = id;
+                Tethys_gSoftSize = size;
+            }
+            return ppNewRes;
         }
-    }
-    else if (bReclaimOnFail)
-    {
         // SATURN (bt814): the null-handle bug class. Upstream callers do NOT check
         // this handle for null (PC's 5.12 MB heap never fails); on SH-2 a returned
         // null is *deref'd -> BIOS reset-vector region -> detonates a frame later.
@@ -3539,9 +3377,6 @@ u8** CC ResourceManager::Allocate_New_Locked_Resource_454F80(u32 type, u32 id, u
 
 EXPORT u8** CC ResourceManager::Allocate_New_Block_454FE0(u32 sizeBytes, BlockAllocMethod allocMethod)
 {
-#ifdef TETHYS_SATURN
-Tethys_KeptRetry: // 446.ao.12: back here after giving a kept block back
-#endif
     ResourceHeapItem* pListItem = sFirstLinkedListItem_50EE2C;
     ResourceHeapItem* pHeapMem = nullptr;
     const u32 size = (sizeBytes + 3) & ~3u; // Rounding ??
@@ -3602,14 +3437,6 @@ Tethys_KeptRetry: // 446.ao.12: back here after giving a kept block back
 
     if (!pHeapMem)
     {
-#ifdef TETHYS_SATURN
-        // 446.ao.12: kept blocks are free space lent to the cache. Give it back,
-        // oldest first, before refusing anyone: nothing that fit before can fail.
-        if (Tethys_KeptEvictOldest())
-        {
-            goto Tethys_KeptRetry;
-        }
-#endif
         // Allocation failure
         sAllocationFailed_9F0E50 = 1;
         return nullptr;
@@ -3732,9 +3559,6 @@ s16 CC ResourceManager::Move_Resources_To_DArray_455430(u8** ppRes, DynamicArray
                 pArray->Push_Back((u8**) pItemToAdd);
                 pHeader->field_4_ref_count++;
             }
-#ifdef TETHYS_SATURN
-            pHeader->field_6_flags |= kTethysFileChunk; // 446.ao.12: may be kept after its last release
-#endif
 
             pHeader = (Header*) ((s8*) pHeader + pHeader->field_0_size);
 
@@ -3792,33 +3616,14 @@ s16 CC ResourceManager::Move_Resources_To_DArray_455430(u8** ppRes, DynamicArray
 
 u8** CC ResourceManager::GetLoadedResource_4554F0(u32 type, u32 resourceId, s16 addUseCount, s16 bLock)
 {
-#ifdef TETHYS_SATURN
-    // SATURN 446.ao.12: kept blocks belong to the .LVL that was open when they
-    // were released; another level's ids may name other bytes.
-    if (sTethysKeptLvl >= 0 && sTethysKeptLvl != sLvlArchive_4FFD60.field_4_cd_pos)
-    {
-        Tethys_KeptEvictAll(); // 446.ao.13: keyed on the level, once per change
-    }
-#endif
     // Iterate all list items
     ResourceHeapItem* pListIter = sFirstLinkedListItem_50EE2C;
     while (pListIter)
     {
         // Find something that matches the type and resource ID
         Header* pResHeader = Get_Header_455620(&pListIter->field_0_ptr);
-        if (pResHeader->field_8_type == type && pResHeader->field_C_id == resourceId
-#ifdef TETHYS_SATURN
-            // 446.ao.12: a peek never sees a kept block -- it would have been freed
-            && (addUseCount || !(pResHeader->field_6_flags & kTethysKept))
-#endif
-            )
+        if (pResHeader->field_8_type == type && pResHeader->field_C_id == resourceId)
         {
-#ifdef TETHYS_SATURN
-            if (pResHeader->field_6_flags & kTethysKept)
-            {
-                Tethys_KeptRevive(pResHeader); // the reference below makes it 1
-            }
-#endif
             if (addUseCount)
             {
                 pResHeader->field_4_ref_count++;
@@ -3956,13 +3761,6 @@ s16 CC ResourceManager::FreeResource_Impl_4555B0(u8* handle)
                 return 0;
             }
 #ifdef TETHYS_SATURN
-            // SATURN 446.ao.12: kept in place while the heap has room (see
-            // Tethys_KeepOnRelease). Same answer as a free: callers loop on it
-            // until the block is gone (Abe.cpp:1510).
-            if (Tethys_KeepOnRelease(pHeader))
-            {
-                return 1;
-            }
             // SATURN 427.ao.5: the cel cache keys on the cel's ADDRESS inside a
             // resource block. A freed block's address can be handed to a
             // different resource, and a cel of that new tenant could land at the
@@ -4084,11 +3882,7 @@ void CC ResourceManager::Reclaim_Memory_455660(u32 sizeToReclaim)
                     sizeToMove = pNextHeader->field_0_size;
                 }
 
-                if (pNextHeader->field_6_flags & ResourceHeaderFlags::eLocked || sizeToMove > sizeToReclaim
-#ifdef TETHYS_SATURN
-                    || (pNextHeader->field_6_flags & kTethysKept) // 446.ao.12: kept blocks never move
-#endif
-                    )
+                if (pNextHeader->field_6_flags & ResourceHeaderFlags::eLocked || sizeToMove > sizeToReclaim)
                 {
                     // Locked or trying to move more than requested, skip to next
                     pToUpdate = pListItem;
@@ -4172,22 +3966,10 @@ void CC ResourceManager::Free_Resource_Of_Type_455810(u32 type)
         Header* pHeader = Get_Header_455620(&pListItem->field_0_ptr);
         if (pHeader->field_8_type == type && !(pHeader->field_6_flags & ResourceHeaderFlags::eNeverFree))
         {
-#ifdef TETHYS_SATURN
-            // SATURN 446.ao.12: a kept block was already counted free at its release.
-            const bool bKept = (pHeader->field_6_flags & kTethysKept) != 0;
-#endif
             pHeader->field_8_type = Resource_Free;
             pHeader->field_6_flags = 0;
             pHeader->field_4_ref_count = 0;
 
-#ifdef TETHYS_SATURN
-            if (bKept)
-            {
-                sTethysKeptN--;
-                sTethysKeptBytes -= pHeader->field_0_size;
-            }
-            else
-#endif
             sManagedMemoryUsedSize_9F0E48 -= pHeader->field_0_size;
         }
         pListItem = pListItem->field_4_pNext;

@@ -6,6 +6,13 @@
 #include "PsxDisplay.hpp"
 #include "stdlib.hpp"
 
+#ifdef TETHYS_SATURN
+// SATURN 449.ao.4: the iris seam (renderer_saturn.cxx). SIX arguments on both
+// sides: an extern "C" arity disagreement links silently (memory
+// seam-extern-c-non-verifie); grep Tethys_IrisDraw before changing either.
+extern "C" void Tethys_IrisDraw(s32 x0, s32 y0, s32 x1, s32 y1, s32 flip, s32 fade);
+#endif
+
 namespace AO {
 
 CircularFade* CircularFade::ctor_479E20(FP xpos, FP ypos, FP scale, s16 direction, s8 destroyOnDone)
@@ -120,22 +127,46 @@ void CircularFade::VRender_47A080(PrimHeader** ppOt)
     // a feature to prototype on hardware, not a bug fix.  A clean fade is a
     // correct transition; a stepped black frame around a bright square is not.
     //
-    // The tPage prim still goes in, and AFTER the tile: OrderingTable_Add
-    // PREPENDS, so the walk meets the tPage first and sModalTPage carries
-    // eBlend_2 by the time the tile is drawn.  That ordering is the whole
-    // reason the backend knows this is a subtract.
+    // SATURN 449.ao.4: THE IRIS COMES BACK (Romain, 2026-10-15: "si tu sais
+    // comment faire, oui"), through a line window as foreseen above, but on a
+    // plane of its own rather than on NBG1, so no sprite needs clipping.
+    // The renderer draws a black VDP2 plane above everything, shown outside a
+    // line window cut to this cel's 50 % contour, ADDED to what lies under it
+    // and then offset by -fade: exactly the PSX's B - F around the hole, the
+    // sprites included (renderer_saturn.cxx, IrisApply). What stays lost is the
+    // rim's gradient, about 8 px on the PSX, here a hard edge placed so the hole
+    // holds the cel's light. When the plane cannot be had -- another fade on the
+    // same frame, the pause menu, a film, the bells' wave on NBG0, no CRAM, no
+    // VRAM cycle -- the renderer falls back to 347.ao.1's full-screen fade by
+    // itself, so this branch only says WHERE the cel would be.
+    //   The rect is Animation::VRender_403AE0's, step for step (Animation.cpp
+    // :1493-1620), in PC pixels and lines: the cel is never drawn on Saturn, so
+    // nothing else computes it.
     {
-        const u8 saturnFade = static_cast<u8>(field_1A8_fade_colour);
-        Prim_Tile* pFull = &field_E8[gPsxDisplay_504C78.field_A_buffer_index];
-        Init_Tile(pFull);
-        SetRGB0(pFull, saturnFade, saturnFade, saturnFade);
-        SetXY0(pFull, 0, 0);
-        pFull->field_14_w = 640;
-        pFull->field_16_h = gPsxDisplay_504C78.field_2_height;
-        Poly_Set_SemiTrans_498A40(&pFull->mBase.header, 1);
-        OrderingTable_Add_498A80(OtLayer(ppOt, field_10_anim.field_C_layer), &pFull->mBase.header);
-        OrderingTable_Add_498A80(OtLayer(ppOt, field_10_anim.field_C_layer), &field_188_tPage[gPsxDisplay_504C78.field_A_buffer_index].mBase);
-        pScreenManager_4FF7C8->InvalidateRect_406CC0(0, 0, 640, gPsxDisplay_504C78.field_2_height);
+        const FrameInfoHeader* pFrameInfoHeader = field_10_anim.Get_FrameHeader_403A00(-1);
+        const FrameHeader* pFrameHeader = reinterpret_cast<const FrameHeader*>(
+            &(*field_10_anim.field_20_ppBlock)[pFrameInfoHeader->field_0_frame_header_offset]);
+        FP frameW = FP_FromInteger(PCToPsxX(pFrameHeader->field_4_width, 20));
+        FP frameH = FP_FromInteger(pFrameHeader->field_5_height);
+        FP xOff = FP_FromInteger(pFrameInfoHeader->field_8_data.offsetAndRect.mOffset.x);
+        FP yOff = FP_FromInteger(pFrameInfoHeader->field_8_data.offsetAndRect.mOffset.y);
+        if (field_10_anim.field_14_scale != FP_FromInteger(1))
+        {
+            frameH = frameH * field_10_anim.field_14_scale;
+            frameW = frameW * field_10_anim.field_14_scale;
+            xOff = xOff * field_10_anim.field_14_scale;
+            yOff = (yOff * field_10_anim.field_14_scale) - FP_FromInteger(1);
+        }
+        const s32 xpos = FP_GetExponent(field_A8_xpos + FP_FromInteger(pScreenManager_4FF7C8->field_14_xpos + field_CA_xOffset) - pScreenManager_4FF7C8->field_10_pCamPos->field_0_x);
+        const s32 ypos = FP_GetExponent(field_AC_ypos + FP_FromInteger(pScreenManager_4FF7C8->field_16_ypos + field_C8_yOffset) - pScreenManager_4FF7C8->field_10_pCamPos->field_4_y);
+        const bool bFlip = field_10_anim.field_4_flags.Get(AnimFlags::eBit5_FlipX);
+        const s32 polyX = bFlip ? xpos - FP_GetExponent(xOff + frameW + FP_FromDouble(0.499))
+                                : xpos + FP_GetExponent(xOff + FP_FromDouble(0.499));
+        const s32 polyY = ypos + FP_GetExponent(yOff + FP_FromDouble(0.499));
+        const s32 x0 = PsxToPCX(polyX);
+        const s32 x1 = FP_GetExponent(PsxToPCX(frameW) - FP_FromDouble(0.501)) + x0;
+        const s32 y1 = FP_GetExponent(frameH - FP_FromDouble(0.501)) + polyY;
+        Tethys_IrisDraw(x0, polyY, x1, y1, bFlip ? 1 : 0, field_1A8_fade_colour);
     }
 #else
     field_10_anim.vRender(

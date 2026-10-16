@@ -1169,11 +1169,21 @@ void Map::RestoreBlyData_446A90(const u8* pSaveData)
                             // Loader dedups (no clone); a DESTROYED object is already
                             // CLEARED so it still re-creates (reset); on a freshly
                             // reloaded screen the bits were CLEARED anyway == no-op.
+                            // SATURN 449.ao.3: ONLY Created is kept. bt819 kept
+                            // Destroyed too, on the belief that a destroyed object's
+                            // bits are already clear; they are not. destroyed=1 is
+                            // AO's "do not recreate" mark (Mudokon.cpp:401-403 when a
+                            // Mud leaves or is rescued, Slig.cpp:434-439,
+                            // Mine.cpp:122-124), so every object gone since the
+                            // checkpoint stayed gone after a death while the save
+                            // said it was alive. Field report: the F1P02C01 lift
+                            // Mudokon (the game's only one) never came back to lower
+                            // the lift, a soft-lock; rescues made after a checkpoint
+                            // were lost while the counters went back. Created alone
+                            // still makes Loader skip a resident survivor (no clone).
                             const bool tethysWasCreated = pTlv->field_0_flags.Get(eBit1_Created);
-                            const bool tethysWasDestroyed = pTlv->field_0_flags.Get(eBit2_Destroyed);
                             pTlv->field_0_flags.Raw().all = *pAfterSwitchStates;
                             if (tethysWasCreated) pTlv->field_0_flags.Set(eBit1_Created);
-                            if (tethysWasDestroyed) pTlv->field_0_flags.Set(eBit2_Destroyed);
 #else
                             pTlv->field_0_flags.Raw().all = *pAfterSwitchStates;
 #endif
@@ -2153,6 +2163,23 @@ void Map::GoTo_Camera_445050()
         field_28_cd_or_overlay_num = GetOverlayId();
     }
 
+#ifdef TETHYS_SATURN
+    // SATURN 449.ao.4: THE STICKY PINS ALSO GO AT A PATH CHANGE (Romain:
+    // "ok, relache"). They used to live until the level changed, so a path with
+    // no Slig carried the last path's Slig banks: 165-243 KB on E1 path 4, where
+    // a Slog on Abe's heels then left no room for C01's foreground (the RES NULL
+    // of 2026-10-14). Only the extra refs drop: a live Slig keeps its own, and
+    // what nothing else holds goes back to the heap. The price, accepted: the
+    // first Slig screen of each path stages its set again, about 1 s of CD.
+    // Same release as the valves (ResourceManager.cpp), safe mid-flip for their
+    // reason; the absent-name memo stays, it is per-LVL (bt1053).
+    if (field_A_level == field_0_current_level && field_C_path != field_2_current_path)
+    {
+        extern void Tethys_ReleaseStickyResources();
+        Tethys_ReleaseStickyResources();
+    }
+#endif
+
     if (field_A_level != field_0_current_level)
     {
         ResourceManager::LoadingLoop_41EAD0(bShowLoadingIcon);
@@ -2182,6 +2209,17 @@ void Map::GoTo_Camera_445050()
         // next level needs every byte (ResourceManager.cpp, the pins block).
         extern bool Tethys_MenuPinsRelease();
         Tethys_MenuPinsRelease();
+        // SATURN 449.ao.6: a game left for the menu takes its restart seed with
+        // it. The latch held for the whole boot, so a second New Game kept the
+        // first game's last checkpoint in gSaveBuffer_505668 until its own first
+        // ContinuePoint: a death there went back to the old game, and a SAVE
+        // (which ships that buffer now, as AO's does) wrote it. A load claims the
+        // latch again in LoadFromFile, on the menu, before this level change.
+        if (field_A_level == LevelIds::eMenu_0)
+        {
+            extern u32 Tethys_gSaveBufferSeeded;
+            Tethys_gSaveBufferSeeded = 0;
+        }
 #endif
 
         // Free all cameras
