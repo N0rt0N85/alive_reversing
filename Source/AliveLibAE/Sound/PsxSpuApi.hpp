@@ -64,19 +64,32 @@ struct Converted_Vag final
 };
 ALIVE_ASSERT_SIZEOF(Converted_Vag, 0x12);
 
+#if defined(TETHYS_SATURN) && !TETHYS_AE_TABLES
+// SATURN 450.ao.1: ONE VAB SLOT, BECAUSE AO NEVER FILLS A SECOND ONE.
+// Every VAB AO ships carries VH id 0 (docs/AUDIO_VIDEO_PLAN.md 3.1, all 15
+// banks, MONK included) and each level has one sound block, so slots 1-3 of
+// the two tables below were 110,592 + 27,648 = 138,240 B that nothing writes.
+// Without a cartridge they sit in the VDP1 VRAM tail (src/main.cxx), straight
+// off the texture ceiling of the configuration that sheds sprites in
+// explosions. A VAB with any other id is now refused at SsVabOpenHead, which is
+// what AO's own guard (AliveLibAO/Midi.cpp, SND_VAB_Load_476CB0) already did
+// above kMaxVabs. TETHYS_AE_TABLES=1 restores the PSX's four slots.
+constexpr s32 kMaxVabs = 1;
+#else
 constexpr s32 kMaxVabs = 4;
+#endif
 
 struct ConvertedVagTable final
 {
     Converted_Vag table[kMaxVabs][128][16]; // 16 = max tones, 128 = max progs
 };
-ALIVE_ASSERT_SIZEOF(ConvertedVagTable, 147456);
+ALIVE_ASSERT_SIZEOF(ConvertedVagTable, 36864 * kMaxVabs); // SATURN 450.ao.1: per slot; 147456 at four
 
 struct SoundEntryTable final
 {
     SoundEntry table[kMaxVabs][256];
 };
-ALIVE_ASSERT_SIZEOF(SoundEntryTable, 36864);
+ALIVE_ASSERT_SIZEOF(SoundEntryTable, 9216 * kMaxVabs); // SATURN 450.ao.1: per slot; 36864 at four
 
 struct VabUnknown final
 {

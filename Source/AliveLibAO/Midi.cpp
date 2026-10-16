@@ -460,6 +460,15 @@ EXPORT s32 CC MIDI_Allocate_Channel_49D660(s32 not_used, s32 priority)
 // NOTE: Impl is not the same as AE
 EXPORT s32 CC MIDI_PlayerPlayMidiNote_49D730(s32 vabId, s32 program, s32 note, s32 leftVolume, s32 rightVolume, s32 volume)
 {
+#ifdef TETHYS_SATURN
+    // SATURN 450.ao.1: every table index below derives from these two arguments,
+    // the deepest being table[0][program + (vabId << 7)], which reads the
+    // per-VAB tables as one flat [kMaxVabs * 128] array.
+    if (vabId < 0 || vabId >= kMaxVabs || program < 0 || program + (vabId << 7) >= (kMaxVabs << 7))
+    {
+        return 0;
+    }
+#endif
     auto vabId_ = vabId;
     auto leftVolume_ = leftVolume;
     auto v7 = ((program | (vabId << 8)) >> 8) & 0x1F;
@@ -761,7 +770,14 @@ EXPORT s32 CC MIDI_ParseMidiMessage_49DD30(s32 idx)
                         const u8 program = pCtx->field_32_progVols[data.Channel()].field_0_program;
                         const s32 programShifted = ((s32) program >> 8);
                         const s32 vab_id = (pCtx->field_seq_idx << 8) | (programShifted & 0x1F);
+#ifdef TETHYS_SATURN
+                        // SATURN 450.ao.1: any seq slot but 0 makes this index 256 or more
+                        // in a kMaxVabs-entry array. Dead code with AO's data (no 0x80
+                        // event in any sequence, see TETHYS_SEQ_KEYOFF), bounded anyway.
+                        if (vab_id < kMaxVabs && GetSpuApiVars()->sVagCounts()[vab_id])
+#else
                         if (GetSpuApiVars()->sVagCounts()[vab_id])
+#endif
                         {
                             for (s16 i = 0; i < 24; i++)
                             {
@@ -986,7 +1002,11 @@ static VabBodyRecord* IterateVBRecords(VabBodyRecord* ret, s32 i_3)
 // Loads vab body sample data to memory
 EXPORT void CC SsVabTransBody_49D3E0(VabBodyRecord* pVabBody, s16 vabId)
 {
+#ifdef TETHYS_SATURN
+    if (vabId < 0 || vabId >= kMaxVabs) // SATURN 450.ao.1: the per-VAB arrays hold kMaxVabs
+#else
     if (vabId < 0)
+#endif
     {
         return;
     }
@@ -1143,7 +1163,10 @@ EXPORT s16 CC SND_VAB_Load_476CB0(SoundBlockInfo* pSoundBlockInfo, s16 vabId)
     // SATURN: a VH-declared id outside kMaxVabs would make TransBody index
     // the fixed VAG/entry tables out of bounds -- on Saturn those live in
     // the VDP1 VRAM tail, and the overrun lands in the FRAMEBUFFER with no
-    // crash (S9 review).  Real data uses ids 0..1; reject anything else.
+    // crash (S9 review).  Real data uses id 0 only (all 15 banks, docs/
+    // AUDIO_VIDEO_PLAN.md 3.1; SATURN 450.ao.1 sized kMaxVabs to it), so with
+    // the AO-only tables any other id now stops one call earlier, in
+    // SsVabOpenHead, and arrives here as -1.
     if (pSoundBlockInfo->field_8_vab_id < 0 || pSoundBlockInfo->field_8_vab_id >= kMaxVabs)
     {
         ResourceManager::FreeResource_455550(ppVabBody);
@@ -1461,7 +1484,8 @@ EXPORT void CC Tethys_SND_VAB_Reload_Saturn()
 {
     // ONE window for the whole chain.  32 KB = 16 sectors: ~15 CD reads for a
     // 481 KB bank, all forward, so the pickup never seeks backwards.  Id 127 is
-    // deliberately outside kMaxVabs (= 4) -- this is scratch, not a bank.
+    // deliberately outside kMaxVabs (4, or 1 since 450.ao.1 without
+    // TETHYS_AE_TABLES) -- this is scratch, not a bank.
     // SATURN 420.ao.1: ASK BIG FIRST, DEGRADE TO THE OLD SIZE.
     // This project's CD cost is FIXED PER READ -- 109.6 ms of protocol plus
     // ~304 KiB/s of transfer, measured on hardware -- so the only lever on a

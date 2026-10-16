@@ -205,8 +205,16 @@ public:
     }
 };
 
+#if defined(TETHYS_SATURN) && !TETHYS_AE_TABLES
+// SATURN 450.ao.1: NO EXODDUS DEFAULT, for the reason given at spMidiVars in
+// Midi.cpp: AO installs its own vars in SND_Init_476E40 before any sound call.
+// The default instance kept Exoddus' sMidiSeqSongs (3,200 B), sMidi_Channels
+// (1,056 B) and s512_byte (512 B) alive in HWRAM. TETHYS_AE_TABLES=1 restores it.
+static IPsxSpuApiVars* gSpuVars = nullptr;
+#else
 static AEPsxSpuApiVars gAeSpuVars;
 static IPsxSpuApiVars* gSpuVars = &gAeSpuVars; // Default to AE vars
+#endif
 
 
 EXPORT void SetSpuApiVars(IPsxSpuApiVars* pVars)
@@ -351,6 +359,15 @@ EXPORT s32 CC SND_SoundsDat_Read_4FC4E0(VabHeader* pVabHeader, VabBodyRecord* pV
 EXPORT void CC SsVabClose_4FC5B0(s32 vabId)
 {
     SsUtAllKeyOff_4FDFE0(0); // TODO: Check argument ??
+#ifdef TETHYS_SATURN
+    // SATURN 450.ao.1: SND_Free_All_VABS_4C9EB0 closes every block it ever
+    // tried, including one whose open failed (vab id -1), and the per-VAB arrays
+    // hold kMaxVabs entries: an id outside them closes nothing.
+    if (vabId < 0 || vabId >= kMaxVabs)
+    {
+        return;
+    }
+#endif
 
     if (gSpuVars->sVagCounts()[vabId] - 1 >= 0)
     {
@@ -377,6 +394,15 @@ EXPORT s16 CC SsVabOpenHead_4FC620(VabHeader* pVabHeader)
 
     const s32 vab_id = pVabHeader->field_8_id;
     assert(vab_id < 4);
+#ifdef TETHYS_SATURN
+    // SATURN 450.ao.1: refuse an id outside the tables BEFORE indexing them. The
+    // assert above is compiled out (-DNDEBUG) and AO's caller only checks the id
+    // after this function has written through it; -1 is the failure it handles.
+    if (vab_id < 0 || vab_id >= kMaxVabs)
+    {
+        return -1;
+    }
+#endif
     SsVabClose_4FC5B0(vab_id);
     gSpuVars->spVabHeaders()[vab_id] = pVabHeader;
     if (gSpuVars->sVagCounts()[vab_id] > 0)
@@ -453,7 +479,11 @@ EXPORT s16 CC SsVabOpenHead_4FC620(VabHeader* pVabHeader)
 // Loads sounds dat to memory
 EXPORT void CC SsVabTransBody_4FC840(VabBodyRecord* pVabBody, s16 vabId)
 {
+#ifdef TETHYS_SATURN
+    if (vabId < 0 || vabId >= kMaxVabs) // SATURN 450.ao.1: the per-VAB arrays hold kMaxVabs
+#else
     if (vabId < 0)
+#endif
     {
         return;
     }
@@ -579,6 +609,15 @@ EXPORT s32 CC MIDI_Allocate_Channel_4FCA50(s32 /*not_used*/, s32 priority)
 
 EXPORT s32 CC MIDI_PlayMidiNote_4FCB30(s32 vabId, s32 program, s32 note, s32 leftVolume, s32 rightVolume, s32 volume)
 {
+#ifdef TETHYS_SATURN
+    // SATURN 450.ao.1: vabId and program index the per-VAB tables, the deepest
+    // read being table[vabId][program], i.e. one flat [kMaxVabs * 128] array as
+    // in AO's MIDI_PlayerPlayMidiNote_49D730: refuse what lands outside it.
+    if (vabId < 0 || vabId >= kMaxVabs || program < 0 || program + (vabId << 7) >= (kMaxVabs << 7))
+    {
+        return 0;
+    }
+#endif
     const s32 noteKeyNumber = (note >> 8) & 127;
     s32 leftVol2 = leftVolume;
     s32 rightVol2 = rightVolume;
@@ -800,7 +839,11 @@ EXPORT s32 CC SsVoKeyOn_4FCF10(s32 vabIdAndProgram, s32 pitch, u16 leftVol, u16 
 EXPORT s32 CC MIDI_Stop_Existing_Single_Note_4FCFF0(s32 VabIdAndProgram, s32 note)
 {
     const s32 vabId = (VabIdAndProgram >> 8) & 31;
+#ifdef TETHYS_SATURN
+    if (vabId >= kMaxVabs || !gSpuVars->sVagCounts()[vabId]) // SATURN 450.ao.1: the id can reach 31
+#else
     if (!gSpuVars->sVagCounts()[vabId])
+#endif
     {
         return 0;
     }

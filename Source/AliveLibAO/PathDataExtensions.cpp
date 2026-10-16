@@ -15,6 +15,32 @@ struct MudCounts final
     s32 mBadEnding = 75;
     s32 mGoodEnding = 50;
 };
+#ifdef TETHYS_SATURN
+// SATURN 450.ao.1: THE 19,008 B TABLE ONLY EVER HELD ITS INITIALIZER.
+// sMudExtData[16][99] has exactly one writer, Path_Set_NewData_FromLvls below,
+// which applies Resource_Pxtd chunks; Game.cpp calls it only outside
+// TETHYS_SATURN, and our converted LVLs carry no Pxtd chunk anyway (the
+// argument that already compiled out sPerLvlMessages, LCDScreen.cpp). Every
+// entry therefore reads MudCounts' own defaults, and so do these getters,
+// without the 19,008 B of initialised HWRAM .data the table cost
+// (docs/RAM_AUDIT.md, section 2.4).
+static constexpr MudCounts kTethysMudCounts = {};
+
+s32 Path_GetTotalMuds(LevelIds /*lvlId*/, u32 /*pathNum*/)
+{
+    return kTethysMudCounts.mTotal;
+}
+
+s32 Path_BadEndingMuds(LevelIds /*lvlId*/, u32 /*pathNum*/)
+{
+    return kTethysMudCounts.mBadEnding;
+}
+
+s32 Path_GoodEndingMuds(LevelIds /*lvlId*/, u32 /*pathNum*/)
+{
+    return kTethysMudCounts.mGoodEnding;
+}
+#else
 static MudCounts sMudExtData[static_cast<u32>(LevelIds::eDesertEscape_15) + 1][99];
 
 s32 Path_GetTotalMuds(LevelIds lvlId, u32 pathNum)
@@ -31,6 +57,7 @@ s32 Path_GoodEndingMuds(LevelIds lvlId, u32 pathNum)
 {
     return sMudExtData[static_cast<u32>(lvlId)][pathNum].mGoodEnding;
 }
+#endif
 
 static u8* sPathExtData[static_cast<u32>(LevelIds::eDesertEscape_15) + 1] = {};
 
@@ -141,6 +168,7 @@ void Path_Set_NewData_FromLvls()
                             SetAndLog<u32>("grid width", rColInfo.field_14_grid_width, pExt->mGridWidth);
                             SetAndLog<u32>("grid height", rColInfo.field_18_grid_height, pExt->mGridHeight);
 
+#ifndef TETHYS_SATURN // SATURN 450.ao.1: no sMudExtData on Saturn, see above
                             if (pExt->mTotalMuds != 0)
                             {
                                 SetAndLog("sTotalMuds", sMudExtData[lvlIdx][pExt->mPathId].mTotal, pExt->mTotalMuds);
@@ -155,6 +183,7 @@ void Path_Set_NewData_FromLvls()
                             {
                                 SetAndLog("sGoodEndingMuds", sMudExtData[lvlIdx][pExt->mPathId].mGoodEnding, pExt->mGoodEndingMuds);
                             }
+#endif
                         }
                     }
 

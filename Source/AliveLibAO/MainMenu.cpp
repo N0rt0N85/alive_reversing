@@ -543,7 +543,15 @@ struct SaveName final
     char_type field_0_mName[32];
 };
 
+#ifdef TETHYS_SATURN
+// SATURN 450.ao.1: 16 NAMES, NOT 128. Only two things ever fill this list here:
+// the four backup-RAM slots (save_saturn.cxx kSlotCount) or the fifteen rows of
+// the level select (sLevelList_4D0300, asserted below where it is copied in).
+// The other 112 entries were 3,584 B of HWRAM .bss that no path can reach.
+ALIVE_ARY(1, 0x9F1DD8, SaveName, 16, sSaveNames_9F1DD8, {});
+#else
 ALIVE_ARY(1, 0x9F1DD8, SaveName, 128, sSaveNames_9F1DD8, {}); // Got more than 128 saves? Hard luck mate
+#endif
 
 ALIVE_VAR(1, 0x507694, s16, gDemoPlay_507694, 0);
 ALIVE_VAR(1, 0x50769C, u8, sJoyResId_50769C, 0);
@@ -2429,6 +2437,9 @@ void Menu::To_Load_Update_47D8E0()
             // level page did. Every name fits the 32-char row.
             if (field_226_bToLevelSelect)
             {
+                static_assert(sizeof(sLevelList_4D0300) / sizeof(sLevelList_4D0300[0])
+                                  <= ALIVE_ARY_SIZEOF(sSaveNames_9F1DD8) / sizeof(SaveName),
+                              "SATURN: the level select no longer fits sSaveNames_9F1DD8");
                 sSaveIdx_9F2DD8 = 0;
                 for (const MenuFMV& rec : sLevelList_4D0300)
                 {
@@ -2443,7 +2454,11 @@ void Menu::To_Load_Update_47D8E0()
             sSaveIdx_9F2DD8 = 0;
             IO_EnumerateDirectory("*.sav", [](const char_type* fileName, u32 /*lastWriteTime*/)
                                   {
+#ifdef TETHYS_SATURN
+                                      if (sSaveIdx_9F2DD8 < static_cast<s32>(ALIVE_ARY_SIZEOF(sSaveNames_9F1DD8) / sizeof(SaveName)))
+#else
                                       if (sSaveIdx_9F2DD8 < 128) // TODO: Array len
+#endif
                                       {
                                           size_t saveNameLen = strlen(fileName) - 4;
 

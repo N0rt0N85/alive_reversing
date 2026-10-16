@@ -26,7 +26,9 @@ void Tethys_UploadCamBlob(const u8* pBlob);
 namespace AO {
 
 ALIVE_VAR(1, 0x4FF7C8, ScreenManager*, pScreenManager_4FF7C8, nullptr);
+#ifndef TETHYS_SATURN // SATURN 450.ao.1: written for nobody here, see Init_4068A0
 ALIVE_ARY(1, 0x4FC8A8, SprtTPage, 300, sSpriteTPageBuffer_4FC8A8, {});
+#endif
 
 #ifdef TETHYS_SATURN
 ALIVE_VAR_EXTERN(Map, gMap_507BA8); // defined Map.cpp:330
@@ -241,6 +243,16 @@ void ScreenManager::Init_4068A0(u8** ppBits)
     Vram_alloc_explicit_4507F0(0, 272, 640, 512);
     DecompressCameraToVRam_407110(reinterpret_cast<u16**>(ppBits));
 
+#ifdef TETHYS_SATURN
+    // SATURN 450.ao.1: THE 300 PSX BACKGROUND TILES ARE NOT BUILT ANY MORE.
+    // On PSX the background is redrawn as 300 32x16 sprites out of this buffer;
+    // on Saturn it is the VDP2 bitmap and the one loop that read the buffer, the
+    // dirty-tile recomposition in VRender_406A60, is gated `if (false)` since
+    // ao242.12. Filling it at every construction cost 14,400 B of HWRAM .bss and
+    // a 300-iteration loop for a reader that never runs. Nothing else touches
+    // field_18_screen_sprites (grep: three sites, all in this file).
+    field_18_screen_sprites = nullptr;
+#else
     field_18_screen_sprites = &sSpriteTPageBuffer_4FC8A8[0];
 
     s16 xpos = 0;
@@ -272,6 +284,8 @@ void ScreenManager::Init_4068A0(u8** ppBits)
             ypos += 16;
         }
     }
+
+#endif
 
     for (s32 i = 0; i < 6; i++)
     {
