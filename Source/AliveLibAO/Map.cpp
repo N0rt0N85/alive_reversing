@@ -34,6 +34,7 @@
 // which GoTo_Camera phase and which TLV factory were live at fatal time.
 extern "C" volatile s32 Tethys_gBootPhase;
 extern "C" volatile s32 Tethys_gLastTlvType;
+extern "C" volatile u32 Tethys_gTlvGuard; // 454.ao.1, ResourceManager.cpp
 
 // SATURN (bt1044): `lo` -- THE HALF OF A SCREEN CHANGE THAT NOTHING MEASURES.
 // The flip bracket `l` opens at Tethys_OnScreenChange and CLOSES the moment the
@@ -2033,7 +2034,25 @@ void Map::GetPathResourceBlockPtrs()
     // Get pointer to each PATH
     for (s32 i = 1; i < Path_Get_Num_Paths(field_A_level); ++i)
     {
+#ifdef TETHYS_SATURN
+        // SATURN 454.ao.1: THE PATHS ARE LOCKED. Loader_446590 keeps a raw
+        // Path_TLV* across every factory call, the collision lines keep raw
+        // pointers into the same block (Collisions::ctor_40CF30), and so do the
+        // TLV walkers of this file; a factory whose allocation compacts the heap
+        // (Reclaim_Memory_455660 moves every unlocked block) leaves them on the
+        // old address. Written after 453.ao.2 died on hardware at the menu's
+        // first camera on an odd TLV address (Loader returning into
+        // GoTo_Camera_445050). That death turned out to be the cartridge's: the
+        // boot's backup read damaged its RAM (Tethys 454.ao.2 fixed it), no move
+        // was involved. The hazard stays real wherever the heap compacts, so the
+        // lock stays: `pp` (row 12, without a cartridge) counts the compactions
+        // it refuses. A locked block is never moved and still goes with its
+        // last ref (FreeResource_Impl_4555B0 clears the flag), so the level
+        // change frees it as before.
+        sPathsArrayExtended.field_0_pPathRecs[i] = ResourceManager::GetLoadedResource_4554F0(ResourceManager::Resource_Path, i, TRUE, TRUE);
+#else
         sPathsArrayExtended.field_0_pPathRecs[i] = ResourceManager::GetLoadedResource_4554F0(ResourceManager::Resource_Path, i, TRUE, FALSE);
+#endif
 
         if (i < ALIVE_COUNTOF(field_5C_path_res_array.field_0_pPathRecs))
         {
@@ -2664,6 +2683,20 @@ void Map::GoTo_Camera_445050()
     loading_ticks_5076A4 = 0;
 }
 
+#ifdef TETHYS_SATURN
+// SATURN 454.ao.1: a TLV offset Loader may dereference: 4-aligned (the walk reads
+// field_8 as a long) and wholly inside the object block, which the converter
+// fills exactly up to the index table (tools/converter/path.py walk_tlvs_be).
+// All 14 levels of the FR disc hold to it, so this refuses only a walk gone
+// wrong, counted (`tg`, row 12) instead of the address error of 453.ao.2.
+static bool Tethys_TlvOffsetOk(const PathData* pPathData, s32 tlvOffset)
+{
+    return tlvOffset >= 0 && !(tlvOffset & 3)
+        && pPathData->field_14_object_offset + tlvOffset + static_cast<s32>(sizeof(Path_TLV))
+               <= pPathData->field_18_object_index_table_offset;
+}
+#endif
+
 void Map::Loader_446590(s16 camX, s16 camY, LoadMode loadMode, TlvTypes typeToLoad)
 {
     // Get a pointer to the array of index table offsets
@@ -2677,6 +2710,13 @@ void Map::Loader_446590(s16 camX, s16 camY, LoadMode loadMode, TlvTypes typeToLo
         // -1 means there are no objects for the given camera
         return;
     }
+#ifdef TETHYS_SATURN
+    if (!Tethys_TlvOffsetOk(field_D4_pPathData, objectTableIdx))
+    {
+        Tethys_gTlvGuard++;
+        return;
+    }
+#endif
 
     u8* ptr = pPathRes + objectTableIdx + field_D4_pPathData->field_14_object_offset;
     Path_TLV* pPathTLV = reinterpret_cast<Path_TLV*>(ptr);
@@ -2716,6 +2756,13 @@ void Map::Loader_446590(s16 camX, s16 camY, LoadMode loadMode, TlvTypes typeToLo
             }
 
             objectTableIdx += pPathTLV->field_2_length;
+#ifdef TETHYS_SATURN
+            if (!Tethys_TlvOffsetOk(field_D4_pPathData, objectTableIdx))
+            {
+                Tethys_gTlvGuard++;
+                break;
+            }
+#endif
             pPathTLV = Path_TLV::Next_446460(pPathTLV);
             pPathTLV->RangeCheck();
         }

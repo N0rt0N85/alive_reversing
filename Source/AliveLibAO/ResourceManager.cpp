@@ -722,6 +722,12 @@ extern "C" volatile s32 Tethys_gAbsentRes = 0; // overlay gauge: absent-name ski
 // event that predicts a visibly missing sprite was unreadable inside a
 // number whose own comment says a non-zero reading is expected.
 extern "C" volatile s32 Tethys_gMissingRes = 0;
+// SATURN 454.ao.1: the path lock and the TLV guard (Map.cpp), `pp` and `tg` on
+// overlay row 12, counted since boot. pp = compactions that met a locked path
+// block with room for it right below, i.e. would have moved it; tg = Loader
+// walks stopped on a TLV offset outside the object block.
+extern "C" volatile u32 Tethys_gPathPinned = 0;
+extern "C" volatile u32 Tethys_gTlvGuard = 0;
 // SATURN (ao262.2): allocations that returned null to a caller that can
 // take it, instead of fataling. `rn` on the S4 row -- a rising rn is the
 // no-cart heap running out, degraded but alive.
@@ -3884,6 +3890,16 @@ void CC ResourceManager::Reclaim_Memory_455660(u32 sizeToReclaim)
 
                 if (pNextHeader->field_6_flags & ResourceHeaderFlags::eLocked || sizeToMove > sizeToReclaim)
                 {
+#ifdef TETHYS_SATURN
+                    // SATURN 454.ao.1: free space right below a path block that
+                    // fits the move: without its lock (Map::GetPathResourceBlockPtrs)
+                    // this compaction would have moved it under Loader's raw
+                    // Path_TLV*. `pp` on row 12.
+                    if (pNextHeader->field_8_type == Resource_Path && sizeToMove <= sizeToReclaim)
+                    {
+                        Tethys_gPathPinned++;
+                    }
+#endif
                     // Locked or trying to move more than requested, skip to next
                     pToUpdate = pListItem;
                     pListItem = pListItem->field_4_pNext;
