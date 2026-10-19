@@ -231,20 +231,25 @@ static bool Tethys_RequestReadable(const char_type* pFileName)
 static u32 sTethysState0Retries = 0;
 static u32 sTethysWedgeBytes = 0;
 static u8 sTethysWedgeLoc[3] = {0, 0, 0};
+// SATURN 455.ao.1 (AO twin): reads of the file in hand that came back 0. The CD
+// seam recovers medium faults itself, so these are structural and never heal.
+static u32 sTethysReadFails = 0;
 
 extern "C" u32 Tethys_WedgeBytes()
 {
     return sTethysWedgeBytes;
 }
 
-[[noreturn]] static void Tethys_WedgeFatal()
+// 455.ao.1: pTag "wz " = the staging block would not fit (state 0), "cd " = the
+// record cannot be read. Same evidence line: screen, KiB, CdlLOC.
+[[noreturn]] static void Tethys_WedgeFatal(const char_type* pTag)
 {
     Tethys_WedgeCensus(); // the occupant list first, while the heap is intact
     // Budget, counted with the 14 columns Tethys_Fatal prepends: 14 + 3 "wz " +
     // 8 name + 1 + 5 digits + 1 'k' + 1 + 6 nibbles = 39 of 40.
     static char_type msg[32];
     char_type* p = msg;
-    for (const char_type* s = "wz "; *s; s++)
+    for (const char_type* s = pTag; *s; s++)
     {
         *p++ = *s;
     }
@@ -695,6 +700,7 @@ void ResourceManager::vLoadFile_StateMachine_464A70()
                 field_42_state = State_Seek_To_File;
 #ifdef TETHYS_SATURN
                 sTethysState0Retries = 0;
+                sTethysReadFails = 0; // 455.ao.1: a new file, a new count
 #endif
             }
             else
@@ -726,7 +732,7 @@ void ResourceManager::vLoadFile_StateMachine_464A70()
                 }
                 if (sTethysState0Retries > 600)
                 {
-                    Tethys_WedgeFatal();
+                    Tethys_WedgeFatal("wz ");
                 }
 #endif
             }
@@ -765,6 +771,22 @@ void ResourceManager::vLoadFile_StateMachine_464A70()
             else
             {
                 field_42_state = State_Seek_To_File;
+#ifdef TETHYS_SATURN
+                // SATURN 455.ao.1 (AO twin): the seek this goes back to always
+                // succeeds on the Saturn (a cursor move), so the 20-try branch
+                // above never fires and a read that keeps failing looped for
+                // ever. A medium fault no longer comes back from the CD seam
+                // (src/cd_saturn.cxx recovers it, with a screen): a 0 here is
+                // structural and never heals. Eight times, then name the record.
+                if (++sTethysReadFails > 8)
+                {
+                    sTethysWedgeBytes = static_cast<u32>(field_34_num_sectors) << 11;
+                    sTethysWedgeLoc[0] = field_44_cdLoc.field_0_minute;
+                    sTethysWedgeLoc[1] = field_44_cdLoc.field_1_second;
+                    sTethysWedgeLoc[2] = field_44_cdLoc.field_2_sector;
+                    Tethys_WedgeFatal("cd ");
+                }
+#endif
             }
             break;
 

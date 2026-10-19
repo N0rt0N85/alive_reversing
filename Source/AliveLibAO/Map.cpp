@@ -2268,7 +2268,24 @@ void Map::GoTo_Camera_445050()
 
         // Open Path BND
         auto tmp = sOverlayTable_4C5AA8.records[Path_Get_OverlayIdx(field_A_level)].field_4_pos;
+#ifdef TETHYS_SATURN
+        // SATURN 455.ao.1: the false used to be ignored, and the null or garbage
+        // directory then crashed somewhere unnamed. The CD seam recovers medium
+        // faults itself now (src/cd_saturn.cxx), so false means this level's
+        // archive is not on the disc: say which (Exoddus's R3 does the same).
+        if (!sLvlArchive_4FFD60.OpenArchive(CdLvlName(field_A_level), tmp))
+        {
+            char_type msg[32] = "LVL missing ";
+            const char_type* pName = CdLvlName(field_A_level);
+            for (s32 i = 12; pName && *pName && i < 31; i++)
+            {
+                msg[i] = *pName++;
+            }
+            ALIVE_FATAL(msg);
+        }
+#else
         sLvlArchive_4FFD60.OpenArchive(CdLvlName(field_A_level), tmp);
+#endif
 
         ResourceManager::LoadResourceFile_455270(Path_Get_BndName(field_A_level), nullptr);
 

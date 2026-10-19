@@ -512,6 +512,143 @@ MainMenuFrameTable sMainMenuFrameTable_561CC8[49] = {
     {AnimId::MenuParamiteSpeak_DoIt, 10, 2, 41, 14},
     {AnimId::MenuParamiteSpeak_AllAYa, 10, 0, 41, 14}};
 
+#ifdef TETHYS_SATURN
+// SATURN (GameSpeak split, AO 313.ao.1's recipe; Romain 2026-10-19, "Page
+// GameSpeak, decoupe comme Oddysee"): THE SPEAKERS' HEADS, ONE PHRASE AT A TIME.
+//
+// Without a RAM cartridge a speaker's talking head was ONE record staged as one
+// block of its whole sectors: SLGSPEAK.BAN 688,128 B and GLKSPEAK.BAN
+// 768,000 B on an 838,856 B heap, so 469.ae.1 refused those two pages. The
+// converter now also cuts each of the four heads (tools/ae/ae_rules.py,
+// section 6), beside the whole records the cartridge path keeps loading, into:
+//   - an IDLE piece, "MSPKnn.BAN" with nn the speaker's first idle entry of the
+//     table above (18, 27, 37, 41): its idle table(s) only, under the head's own
+//     chunk id, so the pages' GetLoadedResource lines are unchanged (without a
+//     cart the whole head is never loaded, so the id names one block);
+//   - one PHRASE piece per entry that plays a voice (slot 7..10, sound != -1),
+//     "MSPKnn.BAN" with nn THAT entry, chunk id kTethysSpeakIdBase + nn. One id
+//     per FILE: the idle piece and a phrase piece are resident together, and
+//     GetLoadedResource returns the FIRST block of a (type, id) by address
+//     (AO 449.ao.2: ten pieces sharing id 130 under a keep-cache gave orphans
+//     and wrong bytes).
+// A piece is the whole head's own bytes for the tables it keeps (the same CLUT,
+// the same cels), compacted with its first kept table as the TSAT base, so the
+// COMPILED offsets these sites pass translate inside it (Animation.cpp). The
+// palette is not reloaded between the idle and a phrase piece of one slot
+// (AnimationAndSoundLogic_4CFE80 compares slots, not blocks): the converter
+// asserts the CLUT equality, tools/ae/check_pack_ae.py re-reads it.
+// Measured: the worst moment on a page, idle piece resident + largest phrase
+// piece staged, is Scrab's 277,144 B (Slig 222,920, Glukkon 212,972, Paramite
+// 228,616), against the 644,964 B of Abe's two heads that the main menu holds.
+// A first phrase costs one CD read of 26 to 72 sectors (about 0.25 to 0.55 s,
+// the loop stopped, like AO's phrases), a repeat costs nothing. With a cart
+// nothing changes: the whole heads, as the PC.
+extern "C" volatile u32 Tethys_gCartHeapBytes; // src/main.cxx: 0 = no cartridge
+u32 Tethys_HeapLargestFree();                  // AE ResourceManager.cpp (AO 425.ao.1)
+bool Tethys_MenuPinsRelease();                 // AE ResourceManager.cpp (the menu pins, a loan)
+
+static const u32 kTethysSpeakIdBase = 14000;              // tools/ae/ae_rules.py SPEAK_PIECE_ID_BASE
+static const char_type kTethysSpeakName[] = "MSPK00.BAN"; // tools/ae/ae_rules.py SPEAK_PIECE_PATTERN
+
+// SATURN: the piece of frame-table entry idx (0..99), "MSPKnn.BAN".
+static void Tethys_SpeakPieceName(char_type* pOut, s32 idx)
+{
+    memcpy(pOut, kTethysSpeakName, sizeof(kTethysSpeakName));
+    while (idx >= 10) // tens by subtraction: the SH-2 has no divide instruction
+    {
+        idx -= 10;
+        pOut[4]++;
+    }
+    pOut[5] = static_cast<char_type>(pOut[5] + idx);
+}
+
+// SATURN: a speaker's phrase, as opposed to its idles: one of the four
+// speakers' slots and a voice (every idle entry of the table has sound -1).
+static bool Tethys_IsSpeakPhrase(s32 idx)
+{
+    return idx > 0 && idx < static_cast<s32>(ALIVE_COUNTOF(sMainMenuFrameTable_561CC8))
+        && sMainMenuFrameTable_561CC8[idx].field_4_menu_res_id >= MenuResIds::eSligSpeak
+        && sMainMenuFrameTable_561CC8[idx].field_6_sound != -1;
+}
+
+// SATURN: the file a speaker page loads: the whole head with a cart, else its
+// idle piece (named into pBuf). Out of line: four page loads call it, and the
+// pool pays for every inlined copy (measured on the object).
+__attribute__((noinline)) static const char_type* Tethys_SpeakIdleFile(const char_type* pWhole, s32 idleIdx, char_type* pBuf)
+{
+    if (Tethys_gCartHeapBytes != 0)
+    {
+        return pWhole;
+    }
+    Tethys_SpeakPieceName(pBuf, idleIdx);
+    return pBuf;
+}
+
+// SATURN: the block menu entry idx animates with. Unchanged for every entry but
+// a speaker's phrase without a cart, which lives in its own piece, held in slot
+// eUnknown (never used by the PC, set null by the constructor, freed by the
+// destructor and by Load_AbeSpeakResources), read HERE, before the voice the
+// caller starts (AO 416.ao.1), the previous piece dropped first: one phrase
+// piece is resident at a time. nullptr = refused (no room, no record): the
+// caller drops the request.
+static u8** Tethys_MenuAnimRes(MainMenuController& m, s16 idx)
+{
+    u8** ppSlot = m.field_F4_resources.field_0_resources[sMainMenuFrameTable_561CC8[idx].field_4_menu_res_id];
+    if (Tethys_gCartHeapBytes != 0 || !Tethys_IsSpeakPhrase(idx) || !ppSlot)
+    {
+        return ppSlot;
+    }
+    const u32 id = kTethysSpeakIdBase + static_cast<u32>(idx);
+    u8**& ppPhrase = m.field_F4_resources.field_0_resources[MenuResIds::eUnknown];
+    if (ppPhrase && ResourceManager::Get_Header_49C410(ppPhrase)->field_C_id == id)
+    {
+        return ppPhrase; // the same phrase again: no read
+    }
+    if (ppPhrase)
+    {
+        // AO 449.ao.1's twin: the animation never stays on a freed block. It goes
+        // back on the speaker's idle (resident) the same tick, never drawn when the
+        // read below succeeds. Defensive: input waits for a phrase to end
+        // (HandleMainMenuUpdate, eBit22), so it is normally on the idle already.
+        if (m.field_20_animation.field_20_ppBlock == ppPhrase)
+        {
+            const s16 idleIdx = sMainMenuFrameTable_561CC8[idx].field_8_anim_enum;
+            const AnimRecord& idleRec = AnimRec(sMainMenuFrameTable_561CC8[idleIdx].field_0_animation);
+            m.field_20_animation.Set_Animation_Data_409C80(idleRec.mFrameTableOffset, ppSlot);
+        }
+        ResourceManager::FreeResource_49C330(ppPhrase); // a real free flushes the cel cache
+        ppPhrase = nullptr;
+    }
+    char_type name[sizeof(kTethysSpeakName)];
+    Tethys_SpeakPieceName(name, idx);
+    const LvlFileRecord* pRec = sLvlArchive_5BC520.Find_File_Record_433160(name);
+    if (!pRec)
+    {
+        return nullptr;
+    }
+    // Never the loader's ten-second wedge (ResourceManager.cpp, the staging
+    // valve): the whole staging block must exist as one free run first, after
+    // a compaction and, failing that, after the menu pins (a loan) go back.
+    const u32 need = static_cast<u32>(pRec->field_10_num_sectors) << 11;
+    if (Tethys_HeapLargestFree() < need)
+    {
+        ResourceManager::Reclaim_Memory_49C470(0);
+        if (Tethys_HeapLargestFree() < need && Tethys_MenuPinsRelease())
+        {
+            ResourceManager::Reclaim_Memory_49C470(0);
+        }
+        if (Tethys_HeapLargestFree() < need)
+        {
+            return nullptr;
+        }
+    }
+    ResourceManager::LoadResourceFile_49C170(name, nullptr);
+    // The only reference this object takes: FreeResource then really frees.
+    ppPhrase = ResourceManager::GetLoadedResource_49C2A0(ResourceManager::Resource_Animation, id, TRUE, FALSE);
+    return ppPhrase;
+}
+#endif
+
 #if DEVELOPER_MODE
 bool gBootToLoadScreen = false;
 #endif
@@ -1044,7 +1181,14 @@ void MainMenuController::SligSpeak_Load_4D3090()
 {
     Unload_AbeSpeakResources();
 
+#ifdef TETHYS_SATURN
+    // SATURN (GameSpeak split): without a cart the idle piece, under the head's
+    // own id (see Tethys_MenuAnimRes).
+    char_type tethysName[sizeof(kTethysSpeakName)];
+    ResourceManager::LoadResourceFile_49C170(Tethys_SpeakIdleFile("SLGSPEAK.BAN", eSlig_Idle, tethysName), nullptr);
+#else
     ResourceManager::LoadResourceFile_49C170("SLGSPEAK.BAN", nullptr);
+#endif
     field_F4_resources.field_0_resources[MenuResIds::eSligSpeak] = ResourceManager::GetLoadedResource_49C2A0(ResourceManager::Resource_Animation, AEResourceID::kSligSpeakResID, TRUE, FALSE);
     const AnimRecord& rec = AnimRec(AnimId::MenuSligSpeak_Idle);
     field_20_animation.Set_Animation_Data_409C80(rec.mFrameTableOffset, field_F4_resources.field_0_resources[MenuResIds::eSligSpeak]);
@@ -1104,7 +1248,14 @@ void MainMenuController::GlukkonSpeak_Load_4D3480()
 {
     Unload_AbeSpeakResources();
 
+#ifdef TETHYS_SATURN
+    // SATURN (GameSpeak split): without a cart the idle piece (Idle and
+    // IdleVariation), under the head's own id (see Tethys_MenuAnimRes).
+    char_type tethysName[sizeof(kTethysSpeakName)];
+    ResourceManager::LoadResourceFile_49C170(Tethys_SpeakIdleFile("GLKSPEAK.BAN", eGlukkon_Idle, tethysName), nullptr);
+#else
     ResourceManager::LoadResourceFile_49C170("GLKSPEAK.BAN", nullptr);
+#endif
     field_F4_resources.field_0_resources[MenuResIds::eGlukkonSpeak] = ResourceManager::GetLoadedResource_49C2A0(ResourceManager::Resource_Animation, AEResourceID::kGlukkonSpeakResID, TRUE, FALSE);
     const AnimRecord& rec = AnimRec(AnimId::MenuGlukkonSpeak_Idle);
     field_20_animation.Set_Animation_Data_409C80(rec.mFrameTableOffset, field_F4_resources.field_0_resources[MenuResIds::eGlukkonSpeak]);
@@ -1158,7 +1309,14 @@ void MainMenuController::ScrabSpeak_Load_4D3870()
 {
     Unload_AbeSpeakResources();
 
+#ifdef TETHYS_SATURN
+    // SATURN (GameSpeak split): without a cart the idle piece (Idle and
+    // IdleVariation), under the head's own id (see Tethys_MenuAnimRes).
+    char_type tethysName[sizeof(kTethysSpeakName)];
+    ResourceManager::LoadResourceFile_49C170(Tethys_SpeakIdleFile("SCRSPEAK.BAN", eScrab_Idle, tethysName), nullptr);
+#else
     ResourceManager::LoadResourceFile_49C170("SCRSPEAK.BAN", nullptr);
+#endif
     field_F4_resources.field_0_resources[MenuResIds::eScrabSpeak] = ResourceManager::GetLoadedResource_49C2A0(ResourceManager::Resource_Animation, AEResourceID::kScrabSpeakResID, TRUE, FALSE);
     const AnimRecord& rec = AnimRec(AnimId::MenuScrabSpeak_Idle);
     field_20_animation.Set_Animation_Data_409C80(rec.mFrameTableOffset, field_F4_resources.field_0_resources[MenuResIds::eScrabSpeak]);
@@ -1221,7 +1379,14 @@ void MainMenuController::ParamiteSpeak_Load_4D3B70()
 {
     Unload_AbeSpeakResources();
 
+#ifdef TETHYS_SATURN
+    // SATURN (GameSpeak split): without a cart the idle piece (Idle and
+    // IdleVariation), under the head's own id (see Tethys_MenuAnimRes).
+    char_type tethysName[sizeof(kTethysSpeakName)];
+    ResourceManager::LoadResourceFile_49C170(Tethys_SpeakIdleFile("PARSPEAK.BAN", eParamite_Idle, tethysName), nullptr);
+#else
     ResourceManager::LoadResourceFile_49C170("PARSPEAK.BAN", nullptr);
+#endif
     field_F4_resources.field_0_resources[MenuResIds::eParamiteSpeak] = ResourceManager::GetLoadedResource_49C2A0(ResourceManager::Resource_Animation, AEResourceID::kParamiteSpeakResID, TRUE, FALSE);
     const AnimRecord& rec = AnimRec(AnimId::MenuParamiteSpeak_Idle);
     field_20_animation.Set_Animation_Data_409C80(rec.mFrameTableOffset, field_F4_resources.field_0_resources[MenuResIds::eParamiteSpeak]);
@@ -1726,25 +1891,55 @@ void MainMenuController::AbeMotions_Render_4D25E0(PrimHeader** ot)
 #ifdef TETHYS_SATURN
 u32 Tethys_ResHeapSize(); // SATURN: AE ResourceManager.cpp, the bound heap's size
 
-// SATURN (review RV1, R3's open item): a speaker's talking head is ONE record,
-// loaded as one block of its whole sectors once Abe's two heads are freed
-// (SligSpeak_Load_4D3090 and its three twins). Converted, the Slig head is
-// 686,380 B and the Glukkon head 767,068 B; the no-cart heap is 838,856 B with
-// the menu resident in it, and a record that cannot fit wedges the loader ten
-// seconds before its named fatal. So a speaker whose record cannot fit beside
-// what stays resident once Abe's heads are gone is refused (the error sound,
-// the page stays) instead of entered. Bytes, not contiguity: the load compacts
-// first and the locked blocks sit at the top (last-fit). A cartridge's heap
-// always passes. The cure is AO 313.ao.1's per-phrase split.
-static bool Tethys_SpeakerFits(const char_type* pBan, u8** ppAbe, u8** ppAbe2)
+// SATURN (review RV1, R3's open item; retargeted by the GameSpeak split): the
+// most a speaker page asks of the heap once Abe's two heads are freed
+// (SligSpeak_Load_4D3090 and its three twins). With a cart, its whole head, one
+// block of its whole sectors (a cartridge's heap always passes). Without one,
+// its idle piece plus its LARGEST phrase piece, one phrase piece being resident
+// at a time (Tethys_MenuAnimRes): 213 to 277 KB, where the whole Slig and
+// Glukkon heads staged 688,128 and 768,000 B on the 838,856 B heap and made
+// 469.ae.1 refuse those pages. A speaker whose pieces are not ALL in this
+// level's archive is refused too: its idle would load nothing and a phrase
+// would play on the wrong block. Refused = the error sound, the page stays (a
+// record that cannot fit would wedge the loader ten seconds before its named
+// fatal). Bytes, not contiguity: the load compacts first and the locked blocks
+// sit at the top (last-fit).
+static bool Tethys_SpeakerFits(s32 speaker, u8** ppAbe, u8** ppAbe2)
 {
+    static const char_type* const kWhole[5] = {nullptr, "SLGSPEAK.BAN", "GLKSPEAK.BAN", "SCRSPEAK.BAN", "PARSPEAK.BAN"};
+    static const s16 kIdle[5] = {0, MainMenuController::eSlig_Idle, MainMenuController::eGlukkon_Idle,
+                                 MainMenuController::eScrab_Idle, MainMenuController::eParamite_Idle};
     const u32 kSlack = 16384; // block headers, alignment, the loader's own small blocks
-    const LvlFileRecord* pRec = sLvlArchive_5BC520.Find_File_Record_433160(pBan);
+    char_type name[sizeof(kTethysSpeakName)];
+    const char_type* pFile = Tethys_SpeakIdleFile(kWhole[speaker], kIdle[speaker], name);
+    const LvlFileRecord* pRec = sLvlArchive_5BC520.Find_File_Record_433160(pFile);
     if (!pRec)
     {
         return false;
     }
-    const u32 need = (static_cast<u32>(pRec->field_10_num_sectors) << 11) + kSlack;
+    u32 need = (static_cast<u32>(pRec->field_10_num_sectors) << 11) + kSlack;
+    if (pFile == name)
+    {
+        u32 most = 0;
+        for (s32 i = 1; i < static_cast<s32>(ALIVE_COUNTOF(sMainMenuFrameTable_561CC8)); i++)
+        {
+            if (sMainMenuFrameTable_561CC8[i].field_4_menu_res_id == MenuResIds::eSligSpeak + speaker - 1
+                && Tethys_IsSpeakPhrase(i))
+            {
+                Tethys_SpeakPieceName(name, i);
+                const LvlFileRecord* pPiece = sLvlArchive_5BC520.Find_File_Record_433160(name);
+                if (!pPiece)
+                {
+                    return false;
+                }
+                if (static_cast<u32>(pPiece->field_10_num_sectors) > most)
+                {
+                    most = static_cast<u32>(pPiece->field_10_num_sectors);
+                }
+            }
+        }
+        need += most << 11;
+    }
     u32 freed = 0;
     if (ppAbe)
     {
@@ -1774,10 +1969,9 @@ MainMenuNextCam MainMenuController::Gamespeak_Update_4D1FC0(u32 input_held)
     }
 
 #ifdef TETHYS_SATURN
-    // SATURN (review RV1): see Tethys_SpeakerFits.
-    static const char_type* const kSpeakerBan[5] = {nullptr, "SLGSPEAK.BAN", "GLKSPEAK.BAN", "SCRSPEAK.BAN", "PARSPEAK.BAN"};
+    // SATURN (review RV1, the GameSpeak split): see Tethys_SpeakerFits.
     if (field_1FC_button_index >= 1 && field_1FC_button_index <= 4
-        && !Tethys_SpeakerFits(kSpeakerBan[field_1FC_button_index],
+        && !Tethys_SpeakerFits(field_1FC_button_index,
                                field_F4_resources.field_0_resources[MenuResIds::eAbeSpeak],
                                field_F4_resources.field_0_resources[MenuResIds::eAbeSpeak2]))
     {
@@ -4018,7 +4212,21 @@ void MainMenuController::AnimationAndSoundLogic_4CFE80()
     {
         if (!field_22C_T80_animation_delay)
         {
+#ifdef TETHYS_SATURN
+            // SATURN (GameSpeak split): the block this entry animates with. A
+            // speaker's phrase without a cart is read HERE, before its voice
+            // below (AO 416.ao.1: voice and animation start on the same tick). A
+            // refused piece drops the request instead of retrying it every frame:
+            // a page change waits for it (ChangeScreenAndIntroLogic_4CF640).
+            u8** ppTethysRes = Tethys_MenuAnimRes(*this, field_228_res_idx);
+            if (!ppTethysRes && Tethys_gCartHeapBytes == 0 && Tethys_IsSpeakPhrase(field_228_res_idx))
+            {
+                field_228_res_idx = 0;
+            }
+            if (ppTethysRes)
+#else
             if (field_F4_resources.field_0_resources[sMainMenuFrameTable_561CC8[field_228_res_idx].field_4_menu_res_id])
+#endif
             {
                 if (field_228_res_idx > 0)
                 {
@@ -4074,9 +4282,13 @@ void MainMenuController::AnimationAndSoundLogic_4CFE80()
                         field_20_animation.field_4_flags.Set(AnimFlags::eBit2_Animate);
 
                         const AnimRecord& rec = AnimRec(sMainMenuFrameTable_561CC8[field_228_res_idx].field_0_animation);
+#ifdef TETHYS_SATURN
+                        field_20_animation.Set_Animation_Data_409C80(rec.mFrameTableOffset, ppTethysRes); // SATURN: the split's block
+#else
                         field_20_animation.Set_Animation_Data_409C80(
                             rec.mFrameTableOffset,
                             field_F4_resources.field_0_resources[sMainMenuFrameTable_561CC8[field_228_res_idx].field_4_menu_res_id]);
+#endif
                         if (sMainMenuFrameTable_561CC8[field_228_res_idx].field_4_menu_res_id != sMainMenuFrameTable_561CC8[field_220_frame_table_idx].field_4_menu_res_id)
                         {
                             Load_Anim_Pal_4D06A0(&field_20_animation);
@@ -4266,6 +4478,15 @@ void MainMenuController::Unload_AbeSpeakResources()
 
 void MainMenuController::Load_AbeSpeakResources()
 {
+#ifdef TETHYS_SATURN
+    // SATURN (GameSpeak split): the speaker's phrase piece (slot eUnknown,
+    // Tethys_MenuAnimRes) leaves with its page, before Abe's two heads come
+    // back. The four speaker pages' unloads call this, and nothing else does.
+    // The animation is on the idle piece by then: a page change waits for the
+    // last phrase to end (ChangeScreenAndIntroLogic_4CF640).
+    ResourceManager::FreeResource_49C330(field_F4_resources.field_0_resources[MenuResIds::eUnknown]);
+    field_F4_resources.field_0_resources[MenuResIds::eUnknown] = nullptr;
+#endif
     // Compact heap + load file to memory
     ResourceManager::Reclaim_Memory_49C470(0);
     ResourceManager::LoadResourceFile_49C170("ABESPEK2.BAN", nullptr);

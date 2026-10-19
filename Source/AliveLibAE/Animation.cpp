@@ -201,6 +201,16 @@ EXPORT s32 CC Animation_OnFrame_Common_4561B0(void* pObjPtr, s16* pData)
         ypos -= FP_FromInteger(5);
     }
 
+#ifdef TETHYS_SATURN
+    // SATURN: the sneak's dust is made at scale 0 (below), which the PC draws as
+    // nothing; here the one-pixel quad would be decimated to a half-size puff
+    // under the floor line. Not made at all.
+    if (pObj->field_106_current_motion == eAbeMotions::Motion_40_SneakLoop_450550)
+    {
+        return 1;
+    }
+#endif
+
     auto pPartical = ae_new<Particle>();
     if (pPartical)
     {
@@ -215,6 +225,17 @@ EXPORT s32 CC Animation_OnFrame_Common_4561B0(void* pObjPtr, s16* pData)
         {
             pPartical->field_20_animation.field_C_render_layer = Layer::eLayer_Foreground_Half_17;
         }
+#ifdef TETHYS_SATURN
+        // SATURN: one layer under Abe. The PC adds the dust over him; here it is
+        // a VDP2 addition with the background (DUST.BAN promoted to 8 bpp,
+        // tools/ae/ae_rules.py), and a dust texel drawn after Abe would REPLACE
+        // his pixel (one VDP1 word per pixel), so the cloud of a run-stop would
+        // hollow him out. Drawn just before him, his pixels win and the dust
+        // adds to the background around him (Romain, 2026-10-19: the cloud must
+        // never make Abe disappear).
+        pPartical->field_20_animation.field_C_render_layer =
+            static_cast<Layer>(static_cast<s16>(pObj->field_20_animation.field_C_render_layer) - 1);
+#endif
 
         pPartical->field_D0_r = 45;
         pPartical->field_D2_g = 35;

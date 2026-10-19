@@ -96,6 +96,9 @@ ALIVE_VAR(1, 0x50768C, s16, bLoadingAFile_50768C, 0);
 // SATURN: LoadingFile state-0 allocation retry counter (wedge detector --
 // see the fatal in VUpdate_41E900).
 static u32 Tethys_gState0Retries = 0;
+// SATURN 455.ao.1: state-2 reads that came back 0 for the file in hand. The CD
+// seam recovers medium faults itself, so these are structural and never heal.
+static u32 Tethys_gReadFails = 0;
 
 // SATURN sticky resources (S7): the flip protocol frees the old camera's
 // refs BEFORE the new camera queues its list, so shared heavyweights -- the
@@ -972,7 +975,9 @@ extern "C" u32 Tethys_WedgeBytes()
     return sTethysWedgeBytes;
 }
 
-static void Tethys_WedgeFatal()
+// 455.ao.1: pTag "wz " = the staging block would not fit (state 0), "cd " = the
+// record cannot be read (state 2). Same evidence line: screen, KiB, CdlLOC.
+static void Tethys_WedgeFatal(const char_type* pTag)
 {
     // ao261.24b: print the occupant list FIRST, while the heap is still intact
     // -- Tethys_Fatal cannot do it (bt815) and the overlay is no longer on to
@@ -994,7 +999,7 @@ static void Tethys_WedgeFatal()
     // columns were carrying no information while the CdlLOC needs six.
     static char_type msg[32];
     char_type* p = msg;
-    for (const char_type* s = "wz "; *s; s++)
+    for (const char_type* s = pTag; *s; s++)
     {
         *p++ = *s;
     }
@@ -1120,6 +1125,7 @@ public:
                         field_28_state = 1;
 #ifdef TETHYS_SATURN
                         Tethys_gState0Retries = 0;
+                        Tethys_gReadFails = 0; // 455.ao.1: a new file, a new count
 #endif
                     }
                     else
@@ -1188,7 +1194,7 @@ public:
                         // occupants.
                         if (Tethys_gState0Retries > 600)
                         {
-                            Tethys_WedgeFatal();
+                            Tethys_WedgeFatal("wz ");
                         }
 #endif
                     }
@@ -1213,6 +1219,25 @@ public:
                     }
                     break;
                 }
+#ifdef TETHYS_SATURN
+                // SATURN 455.ao.1: this state used to retry the same read every
+                // update for ever, without a word. A medium fault no longer comes
+                // back from the CD seam (src/cd_saturn.cxx recovers it, with a
+                // screen), so a 0 here is structural -- no open file after a slot
+                // theft, a record past the archive's end -- and never heals. Seek
+                // again first, as AE's state machine does: the cursor is one
+                // global and another reader may have moved it. Eight times, then
+                // name the record (screen, KiB, CdlLOC) instead of freezing.
+                field_28_state = 1;
+                if (++Tethys_gReadFails > 8)
+                {
+                    sTethysWedgeBytes = static_cast<u32>(field_10_size) << 11;
+                    sTethysWedgeLoc[0] = field_2A_cdLoc.field_0_minute;
+                    sTethysWedgeLoc[1] = field_2A_cdLoc.field_1_second;
+                    sTethysWedgeLoc[2] = field_2A_cdLoc.field_2_sector;
+                    Tethys_WedgeFatal("cd ");
+                }
+#endif
                 break;
 
             case 3:
