@@ -23,3 +23,9 @@ private:
     s16 field_FA_16_random;
 };
 ALIVE_ASSERT_SIZEOF(Sparks, 0xFC);
+
+#ifdef TETHYS_SATURN
+#include "TethysObjectHooks.hpp"
+// SATURN (U1d T1): every ae_new<Sparks> site null-tests its result (3 sites): soft OOM.
+TETHYS_AE_SOFT_OOM_TYPE(Sparks);
+#endif

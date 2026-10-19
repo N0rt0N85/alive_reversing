@@ -13,6 +13,18 @@
 #include "../AliveLibCommon/PathDataExtensionsTypes.hpp"
 #include "Renderer/IRenderer.hpp"
 
+// SATURN (D-T1): French text read out of the user's Exoddus.exe by
+// tools/ae/ae_text.py into build/generated/ae (gitignored game data). The four
+// .inc files are written together, a text arm also requires the French atlas
+// (RELIVE's US rects draw the French sheets' accents wrong or blank), and
+// TETHYS_LANG_EN keeps RELIVE's English.
+#if defined(TETHYS_SATURN) && !defined(TETHYS_LANG_EN) && __has_include("ae/tethys_ae_lcd_fr.inc") && __has_include("ae/tethys_ae_font_atlas_fr.inc")
+#include "ae/tethys_ae_lcd_fr.inc"
+#define TETHYS_AE_LCD_FR 1
+#else
+#define TETHYS_AE_LCD_FR 0
+#endif
+
 u8 sLCDScreen_Palette[] = {
     0x00, 0x00, 0x01, 0x80, 0x01, 0x84, 0x20, 0x84, 0x21, 0x80,
     0x20, 0x84, 0x21, 0x84, 0x65, 0xCE, 0x65, 0x8C, 0x8C, 0xB1,
@@ -28,6 +40,11 @@ u8 sLCDScreen_Palette2[] = {
 
 
 // TODO: Remove spaces and add them at runtime.
+#if TETHYS_AE_LCD_FR
+// SATURN (D-T1): ONE merged table; RELIVE's English literals below lose their
+// last referrer (tools/lcdmsg.py: the image pays the delta, not the sum).
+static const char_type* sLCDMessageTable_555768[TETHYS_AE_LCD_COUNT] = {TETHYS_AE_LCD_ROWS};
+#else
 static const char_type* sLCDMessageTable_555768[101] = {
     "",
     "                               SoulStorm Mining Company is an equal opportunity employer.",
@@ -131,13 +148,28 @@ static const char_type* sLCDMessageTable_555768[101] = {
     "",
     "",
 };
+#endif
 
 
+#ifndef TETHYS_SATURN
 static const StringTable* sPerLvlMessages[static_cast<u32>(LevelIds::eCredits_16) + 1][99] = {};
+#endif
+// SATURN (L5, decision D-B4; AO's S8/450.ao.1 twin): that array is 6,732 B of
+// .bss PROVABLY always null on this port. Its only writer is
+// SetLcdMessagesForLvl, whose only caller is Path_Set_NewData_FromLvls
+// (PathDataExtensions.cpp), reached only for a Pxtd chunk, which no AE level
+// carries (measured), and which the Saturn boot does not call (Game.cpp).
 
 void SetLcdMessagesForLvl(const StringTable& msgs, LevelIds lvl, u32 pathId)
 {
+#ifdef TETHYS_SATURN
+    // SATURN: unreachable here (no Pxtd chunk), see above.
+    (void) msgs;
+    (void) lvl;
+    (void) pathId;
+#else
     sPerLvlMessages[static_cast<u32>(lvl)][pathId] = &msgs;
+#endif
 }
 
 class LCDMessages final
@@ -145,6 +177,11 @@ class LCDMessages final
 public:
     const char_type* GetMessage(LevelIds lvlId, u32 pathId, u32 msgId) const
     {
+#ifdef TETHYS_SATURN
+        // SATURN (L5): the Pxtd table path is compiled out, it can only be null.
+        (void) lvlId;
+        (void) pathId;
+#else
         const StringTable* pTable = sPerLvlMessages[static_cast<u32>(lvlId)][pathId];
         if (pTable && pTable->mStringCount > 0)
         {
@@ -158,6 +195,7 @@ public:
                 return pTable->mStrings[0].string_ptr;
             }
         }
+#endif
 
         if (msgId < ALIVE_COUNTOF(sLCDMessageTable_555768))
         {
@@ -206,7 +244,14 @@ LCDScreen* LCDScreen::ctor_460680(Path_LCDScreen* params, TlvItemInfoUnion itemI
     field_98_pal_rect.w = rec.depth;
     field_98_pal_rect.h = 1;
 
+#ifdef TETHYS_SATURN
+    // SATURN (U1c L4): the second palette, which Update_460A00 swaps in at every
+    // message change, is a compiled PSX little-endian one like the first (the
+    // Font ctor converts that one): same conversion (Font.cpp).
+    Tethys_PalSetCompiled(rec.x, rec.y, rec.depth, sLCDScreen_Palette2);
+#else
     IRenderer::GetRenderer()->PalSetData(rec, sLCDScreen_Palette2);
+#endif
 
     if (SwitchStates_Get_466020(field_2B2_toggle_message_switch_id))
     {
@@ -314,6 +359,13 @@ void LCDScreen::Update_460A00()
 
 void LCDScreen::Render_460CB0(PrimHeader** ppOt)
 {
+#ifdef TETHYS_SATURN
+    // SATURN (U1c L1): not drawn while paused (Font.hpp, Tethys_PauseHidesText).
+    if (Tethys_PauseHidesText())
+    {
+        return;
+    }
+#endif
     if (sNum_CamSwappers_5C1B66 == 0)
     {
         const FP_Point* camPos = pScreenManager_5BB5F4->field_20_pCamPos;

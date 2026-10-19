@@ -46,8 +46,21 @@ BrewMachine* BrewMachine::ctor_413060(Path_BrewMachine* pTlv, s32 tlvInfo)
 
     SetType(AETypes::eBrewMachine_13);
 
+#ifdef TETHYS_SATURN
+    // SATURN (U1c T14/D13): share the LCDFONT sheet the LCD screens already hold
+    // through sFont2Context with a load count (a private context uploaded a
+    // second copy and registered one more font rect than the renderer keeps,
+    // GasCountDown.cpp has the whole reason). Same sheet, same atlas.
+    if (!sFontType2LoadCount_5BC5E8)
+    {
+        sFont2Context_5BC5D8.LoadFontType_433400(2);
+    }
+    sFontType2LoadCount_5BC5E8++;
+    field_104_font.ctor_433590(3, fontPalette_550F08, &sFont2Context_5BC5D8);
+#else
     field_F4_font_context.LoadFontType_433400(2);
     field_104_font.ctor_433590(3, fontPalette_550F08, &field_F4_font_context);
+#endif
 
     const AnimRecord& rec = AnimRec(AnimId::BrewMachine_Button);
     u8** ppRes = Add_Resource_4DC130(ResourceManager::Resource_Animation, rec.mResourceId);
@@ -115,7 +128,14 @@ void BrewMachine::dtor_413330()
     SetVTable(this, 0x544424);
     Path::TLV_Reset_4DB8E0(field_140_tlvInfo, -1, 0, 0);
     field_104_font.dtor_433540();
+#ifdef TETHYS_SATURN
+    if (!--sFontType2LoadCount_5BC5E8) // SATURN: the shared sheet (see the ctor)
+    {
+        sFont2Context_5BC5D8.dtor_433510();
+    }
+#else
     field_F4_font_context.dtor_433510();
+#endif
     BaseAnimatedWithPhysicsGameObject_dtor_424AD0();
 }
 
@@ -139,7 +159,13 @@ void BrewMachine::vUpdate_4132C0()
 
 void BrewMachine::vRender_4133F0(PrimHeader** ppOt)
 {
+#ifdef TETHYS_SATURN
+    // SATURN (U1c T15): the counter is not drawn while paused (Font.hpp,
+    // Tethys_PauseHidesText); the machine's own animation still is.
+    if (gMap_5C3030.field_4_current_camera == field_1E6_cam_id && !Tethys_PauseHidesText())
+#else
     if (gMap_5C3030.field_4_current_camera == field_1E6_cam_id)
+#endif
     {
         char_type text[12] = {};
         sprintf(text, "%02d", field_144_total_brew_count);

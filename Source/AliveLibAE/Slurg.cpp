@@ -9,6 +9,9 @@
 #include "SwitchStates.hpp"
 #include "stdlib.hpp"
 #include "PathData.hpp"
+#ifdef TETHYS_SATURN
+#include "TethysObjectHooks.hpp"
+#endif
 
 ALIVE_VAR(1, 0x5C1C08, u16, sSlurg_Step_Watch_Points_Idx_5C1C08, 0);
 ALIVE_ARY(1, 0x5BD4DC, s8, 2, sSlurg_Step_Watch_Points_Count_5BD4DC, {});
@@ -390,7 +393,14 @@ s32 Slurg::vSaveState_4C8FC0(Slurg_State* pState)
     pState->field_1A_anim_frame_change_counter = field_20_animation.field_E_frame_change_counter;
     pState->field_1D_bDrawable = field_6_flags.Get(BaseGameObject::eDrawable_Bit4);
     pState->field_1C_bRender = field_20_animation.field_4_flags.Get(AnimFlags::eBit3_Render);
+#ifdef TETHYS_SATURN
+    // SATURN (D-A1, U1b D13): store the COMPILED offset, as the PC does, not the
+    // TSAT-translated one of the compacted SLURG.BAN 306: the save bytes then do
+    // not depend on the converter build (CreateFromSaveState never reads it).
+    pState->field_20_frame_table_offset = Tethys_UntranslateFrameTable(field_20_animation.field_20_ppBlock, field_20_animation.field_18_frame_table_offset);
+#else
     pState->field_20_frame_table_offset = field_20_animation.field_18_frame_table_offset;
+#endif
     pState->field_24_tlvInfo = field_12C_tlvInfo;
     pState->field_28_state = field_11C_state;
     pState->field_2A_flags.Set(SlurgFlags::Bit1_Direction, field_118_flags.Get(SlurgFlags::Bit1_Direction));

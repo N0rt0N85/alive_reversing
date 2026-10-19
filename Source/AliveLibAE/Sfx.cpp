@@ -150,7 +150,16 @@ s32 CC SFX_Play_46FBA0(SoundEffect sfxIdx, s16 volume, s32 pitch, FP scale)
     }
     if (scale == FP_FromDouble(0.5))
     {
+#ifdef TETHYS_SATURN
+        // SATURN (U3 T10): a double division per half-scale sound. trunc(v / 1.5)
+        // == (2 * v) / 3 in C's truncating integer division for every s16 v: the
+        // division of an integer by 1.5 is correctly rounded and an exact
+        // quotient 2v/3 is never within 2^-53 of an integer it is not equal to
+        // (proven exhaustively over all 65,536 values, obj/R2/probe/sfx_div.cpp).
+        volume = static_cast<s16>((volume * 2) / 3);
+#else
         volume = static_cast<s16>(volume / 1.5);
+#endif
     }
     return SFX_SfxDefinition_Play_4CA420(&sSfxEntries_55C2A0[sfxIdx], volume, static_cast<s16>(pitch), static_cast<s16>(pitch));
 }

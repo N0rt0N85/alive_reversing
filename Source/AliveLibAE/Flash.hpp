@@ -20,3 +20,9 @@ private:
     s32 field_78_flash_time;
 };
 ALIVE_ASSERT_SIZEOF(Flash, 0x7C);
+
+#ifdef TETHYS_SATURN
+#include "TethysObjectHooks.hpp"
+// SATURN (U1d T1): every ae_new<Flash> site null-tests its result: soft OOM.
+TETHYS_AE_SOFT_OOM_TYPE(Flash);
+#endif

@@ -17,7 +17,10 @@ struct WorkWheel_SaveState final
     // pad
     s32 field_4_tlvInfo;
     s16 field_8_snd_counter;
-    // pad
+    // SATURN (C6): the original state word is at 0xC; without this pad RELIVE
+    // read it at 0xA (and field_E_padding at 0xC). Size unchanged (0x10).
+    // Unconditional: the original layout, read by tools/ae/ae_save_schema.py.
+    s16 field_A_padding;
     WheelStates field_C_state;
     s16 field_E_padding;
 };

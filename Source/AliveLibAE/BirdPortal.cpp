@@ -257,6 +257,13 @@ void BirdPortal::vUpdate_498280()
                                 rec.mMaxH,
                                 ppLightRes);
                         }
+#ifdef TETHYS_SATURN
+                        // SATURN (U1b T3, soft OOM): Particle is a soft type, so a
+                        // refused allocation reaches here as null: skip its setup (no
+                        // random draw inside), the spark's sound below still plays.
+                        if (pParticle)
+                        {
+#endif
                         pParticle->field_DC_bApplyShadows &= ~1u;
                         pParticle->field_20_animation.field_B_render_mode = TPageAbr::eBlend_1;
                         pParticle->SetType(AETypes::eBirdPortalTerminator_100);
@@ -267,6 +274,9 @@ void BirdPortal::vUpdate_498280()
                             pParticle->field_20_animation.field_4_flags.Set(AnimFlags::eBit19_LoopBackwards);
                             pParticle->field_20_animation.SetFrame_409D50(pParticle->field_20_animation.Get_Frame_Count_40AC70());
                         }
+#ifdef TETHYS_SATURN
+                        }
+#endif
 
                         if (direction == CameraPos::eCamCurrent_0)
                         {
@@ -391,9 +401,16 @@ void BirdPortal::vUpdate_498280()
                             rec.mMaxH,
                             ppLightRes);
                     }
+#ifdef TETHYS_SATURN
+                    if (pParticle) // SATURN (U1b T3, soft OOM): null when refused
+                    {
+#endif
                     pParticle->field_20_animation.field_B_render_mode = TPageAbr::eBlend_1;
                     pParticle->field_DC_bApplyShadows &= ~1u;
                     pParticle->field_CC_sprite_scale = field_60_scale;
+#ifdef TETHYS_SATURN
+                    }
+#endif
                 }
 
                 field_28_state = PortalStates::StopSound_11;

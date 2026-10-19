@@ -6,6 +6,9 @@
 #include "ScreenManager.hpp"
 #include "PsxDisplay.hpp"
 #include "Game.hpp"
+#ifdef TETHYS_SATURN
+#include "TethysObjectHooks.hpp"
+#endif
 
 EXPORT ZapLine* ZapLine::ctor_4CC690(FP xPosSource, FP yPosSource, FP xPosDest, FP yPosDest, s16 aliveTime, ZapLineType type, Layer layer)
 {
@@ -17,7 +20,16 @@ EXPORT ZapLine* ZapLine::ctor_4CC690(FP xPosSource, FP yPosSource, FP xPosDest, 
     if (type == ZapLineType::eThin_1)
     {
         // Creates thin blue zap lines.
+#ifdef TETHYS_SATURN
+        // SATURN (U1d T3, AO 383.ao.1 twin): 12 x 20 = 240 dots against a Sprt
+        // allowance of 96 a frame (src/renderer_saturn.cxx kBloodCapPacked) and
+        // 128 VDP1 commands: the tail was never drawn. The Shrykull's bolt keeps
+        // its 12 segments (the jitter, the authored shape) and lays 7 dots on
+        // each: 84, the same thinning AO ships on the same object.
+        field_130_number_of_pieces_per_segment = 7;
+#else
         field_130_number_of_pieces_per_segment = 20;
+#endif
         field_12E_number_of_segments = 12;
         const AnimRecord& rec = AnimRec(AnimId::Zap_Line_Blue);
         u8** ppRes = Add_Resource_4DC130(ResourceManager::Resource_Animation, rec.mResourceId);
@@ -27,7 +39,17 @@ EXPORT ZapLine* ZapLine::ctor_4CC690(FP xPosSource, FP yPosSource, FP xPosDest, 
     else if (type == ZapLineType::eThick_0)
     {
         // Creates thick red zap lines.
+#ifdef TETHYS_SATURN
+        // SATURN (U1d T3, decision D3 (b)): 28 x 10 = 280 dots a bolt, and a
+        // Greeter fires THREE at once (Greeter.cpp:515-551): even AO's 3 dots a
+        // segment would be 252 against the 96 allowance, and the bolts were cut.
+        // One dot a segment keeps the 28-segment shape at 28 dots: 84 for a
+        // Greeter's zap, 28 for a security orb's. CalculateZapPoints scales
+        // with it (delta = 1 / pieces): the dot sits between two segment points.
+        field_130_number_of_pieces_per_segment = 1;
+#else
         field_130_number_of_pieces_per_segment = 10;
+#endif
         field_12E_number_of_segments = 28;
         const AnimRecord& rec = AnimRec(AnimId::Zap_Line_Red);
         u8** ppRes = Add_Resource_4DC130(ResourceManager::Resource_Animation, rec.mResourceId);
@@ -40,12 +62,59 @@ EXPORT ZapLine* ZapLine::ctor_4CC690(FP xPosSource, FP yPosSource, FP xPosDest, 
     field_20_animation.field_4_flags.Clear(AnimFlags::eBit15_bSemiTrans);
     field_20_animation.field_C_render_layer = layer;
 
+#ifdef TETHYS_SATURN
+    // SATURN (U1d T2/T3): ONE locked block for the four arrays (the sprites, the
+    // dot positions, the zap points, the segment positions), taken from the
+    // resource heap instead of three HWRAM pool mallocs (the pool is the scarce
+    // memory: ~350 B a bolt moved out of it), and refused SOFTLY: the beam is
+    // decoration, its caller deals the damage on its own (Greeter, SecurityOrb,
+    // Shrykull). Every array size is a multiple of 4 and the block is 4-aligned,
+    // so each carved array is aligned for its FP members. Locked: the block
+    // never moves, which is what makes the raw pointers below legal (upstream
+    // relies on the same for its sprites).
+    {
+        const u32 sprBytes = sizeof(ZapLineSprites) * field_132_number_of_sprites;
+        const u32 posBytes = sizeof(PSX_Point) * field_132_number_of_sprites;
+        const u32 zapBytes = sizeof(ZapPoint) * field_130_number_of_pieces_per_segment;
+        const u32 segBytes = sizeof(FP_Point) * field_12E_number_of_segments;
+        field_F8_ppRes = Tethys_ResAllocSoft(ResourceManager::ResourceType::Resource_Spline, 0, sprBytes + posBytes + zapBytes + segBytes,
+                                             true /*locked*/, true /*reclaim: nothing here holds a raw pointer yet*/);
+        if (!field_F8_ppRes)
+        {
+            // Dead on arrival, with null buffers (the dtor and the two virtuals
+            // below tolerate them). A thick bolt is fired and forgotten: it dies
+            // now. The Shrykull's thin bolt is KEPT by id and moved every tick
+            // (Shrykull.cpp:179-200, :339, the last without a null test), so it
+            // stays alive and simply never draws, as long as its owner wants it.
+            Tethys_gZapAllocFail++;
+            field_134_pSprites = nullptr;
+            field_138_sprite_positions = nullptr;
+            field_13C_zap_points = nullptr;
+            field_140_sprite_segment_positions = nullptr;
+            field_128_max_alive_time = aliveTime;
+            field_F4_state = ZapLineState::eInit_0;
+            field_126_alive_timer = 0;
+            if (type != ZapLineType::eThin_1)
+            {
+                field_6_flags.Set(BaseGameObject::eDead_Bit3);
+            }
+            CalculateSourceAndDestinationPositions_4CCAD0(xPosSource, yPosSource, xPosDest, yPosDest);
+            return this;
+        }
+        u8* const pBlock = *field_F8_ppRes;
+        field_134_pSprites = reinterpret_cast<ZapLineSprites*>(pBlock);
+        field_138_sprite_positions = reinterpret_cast<PSX_Point*>(pBlock + sprBytes);
+        field_13C_zap_points = reinterpret_cast<ZapPoint*>(pBlock + sprBytes + posBytes);
+        field_140_sprite_segment_positions = reinterpret_cast<FP_Point*>(pBlock + sprBytes + posBytes + zapBytes);
+    }
+#else
     field_F8_ppRes = ResourceManager::Allocate_New_Locked_Resource_49BF40(ResourceManager::ResourceType::Resource_Spline, 0, sizeof(ZapLineSprites) * field_132_number_of_sprites); // Spln (spline?).
 
     field_134_pSprites = reinterpret_cast<ZapLineSprites*>(*field_F8_ppRes);
     field_138_sprite_positions = reinterpret_cast<PSX_Point*>(ae_malloc_non_zero_4954F0(sizeof(PSX_Point) * field_132_number_of_sprites));
     field_13C_zap_points = reinterpret_cast<ZapPoint*>(ae_malloc_non_zero_4954F0(sizeof(ZapPoint) * field_130_number_of_pieces_per_segment));
     field_140_sprite_segment_positions = reinterpret_cast<FP_Point*>(ae_malloc_non_zero_4954F0(sizeof(FP_Point) * field_12E_number_of_segments));
+#endif
 
     field_128_max_alive_time = aliveTime;
 
@@ -164,9 +233,12 @@ void ZapLine::dtor_4CCCB0()
 {
     SetVTable(this, 0x5478A0);
     ResourceManager::FreeResource_49C330(field_F8_ppRes);
+#ifndef TETHYS_SATURN
+    // SATURN: the three arrays live inside field_F8_ppRes (see the ctor).
     ae_non_zero_free_495560(field_138_sprite_positions);
     ae_non_zero_free_495560(field_13C_zap_points);
     ae_non_zero_free_495560(field_140_sprite_segment_positions);
+#endif
     BaseAnimatedWithPhysicsGameObject_dtor_424AD0();
 }
 
@@ -351,6 +423,12 @@ void ZapLine::CalculateSpritePositionsOuter_4CD5D0()
 
 void ZapLine::vUpdate_4CD790()
 {
+#ifdef TETHYS_SATURN
+    if (!field_134_pSprites)
+    {
+        return; // SATURN: refused its buffers (ctor): an inert thin bolt, nothing to move
+    }
+#endif
     field_126_alive_timer++;
 
     // TODO: States 3 and 4 might not actually be needed, since states 1 and 2 do the same thing; though the class only seems to render in states 3 and 4.
@@ -406,6 +484,15 @@ void ZapLine::vUpdate_4CD790()
 
 void ZapLine::vRender_4CD8C0(PrimHeader** ppOt)
 {
+#ifdef TETHYS_SATURN
+    // SATURN (AO 390.ao.1 twin): `h` counts render calls and dots queued; an
+    // inert bolt (refused its buffers) draws nothing.
+    Tethys_gZapLink++;
+    if (!field_134_pSprites)
+    {
+        return;
+    }
+#endif
     if (gMap_5C3030.Is_Point_In_Current_Camera_4810D0(
             field_C2_lvl_number,
             field_C0_path_number,
@@ -421,9 +508,35 @@ void ZapLine::vRender_4CD8C0(PrimHeader** ppOt)
             for (s32 j = 0; j < field_130_number_of_pieces_per_segment; j++)
             {
                 Prim_Sprt* pSprt = &field_134_pSprites->field_0_sprts[j + (i * field_130_number_of_pieces_per_segment)];
+#ifdef TETHYS_SATURN
+                pSprt[bufferIdx].mBase.header.hackPtr = nullptr; // queued once, below
+                Tethys_gZapLink++;
+#else
                 OrderingTable_Add_4F8AA0(OtLayer(ppOt, field_20_animation.field_C_render_layer), &pSprt[bufferIdx].mBase.header);
+#endif
             }
         }
+
+#ifdef TETHYS_SATURN
+        // SATURN (U1d T3, AO 448.ao.8 twin): ONE RENDERER CALL FOR THE BEAM. The
+        // dots share one cel, palette, size and colour and only their places
+        // move; the first dot is the only one queued and stands for all of them,
+        // in the order the table would have walked them (src/renderer_saturn.cxx,
+        // DrawSprtBurst), before the tpage as they were. The loop above reads the
+        // Sprts as one flat array, a Sprt apart (RELIVE's own indexing, kept: on
+        // the single-buffered AE display bufferIdx is always 0).
+        const s32 tethysDots = field_12E_number_of_segments * field_130_number_of_pieces_per_segment;
+        if (tethysDots > 0)
+        {
+            Prim_Sprt* pLead = &field_134_pSprites->field_0_sprts[bufferIdx];
+            field_154_tethys_spray.mMagic = kTethysSprayMagic;
+            field_154_tethys_spray.mpFirst = reinterpret_cast<const u8*>(pLead);
+            field_154_tethys_spray.mCount = static_cast<u16>(tethysDots);
+            field_154_tethys_spray.mStride = static_cast<u16>(sizeof(Prim_Sprt));
+            pLead->mBase.header.hackPtr = &field_154_tethys_spray;
+            OrderingTable_Add_4F8AA0(OtLayer(ppOt, field_20_animation.field_C_render_layer), &pLead->mBase.header);
+        }
+#endif
 
         const s32 calcTPage = PSX_getTPage_4F60E0(
             field_124_tPageMode,

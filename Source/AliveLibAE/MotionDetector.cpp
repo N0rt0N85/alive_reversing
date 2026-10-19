@@ -15,6 +15,40 @@
 #include "Function.hpp"
 #include "Sys_common.hpp"
 
+#ifdef TETHYS_SATURN
+// SATURN (U1d T6, decision D-V4; AO 423.ao.2 / 425.ao.1 twin) -- THE DETECTOR,
+// ITS BEAM AND ITS LASER BAR GO BEHIND THE ACTORS. Upstream files all three on
+// eLayer_Foreground_36 and relies on the PC/PSX additive blend to tint whoever
+// stands in them; VDP1 has one framebuffer and can only ADD against the VDP2
+// background, so a beam or a laser bar drawn over Abe replaces his texels and
+// cuts him in two. Exoddus Mudokons draw at 28 (eLayer_ZapLinesMuds_28) and do
+// cross lasers (IsInLaser_468980 fires on a moving Mudokon), so the group's
+// band sits BELOW 28: the flare and the bar at 27, the beams at 26, 25, 24 by
+// fan rank (AO 425.ao.1: shortest beam in front, so when the hero cuts one beam
+// of a fan the bright one is never hidden behind a long idle one; the bar a
+// band above every beam, so no beam eats a bar). 26 is the full-scale shadow
+// bucket: beams hang from the ceiling, shadows lie on the floor. The band
+// follows the HERO's plane: a half-scale hero takes the half mirror (-19: bar
+// 8, beams 7..5, under the half Mudokons at 9), so whoever the player controls
+// is in front of the laser on his own plane (AO's 425.ao.1 rule; Exoddus also
+// has half-scale Greeters, whose detectors then sit on the hero's plane too).
+// AO's red tint on Abe (424.ao.2) is NOT ported: fitted on AO's silhouette Abe
+// (25/25/25), while Exoddus's Abe in the detector levels is tinted 102/102/102
+// (Abe.cpp:372-387); it waits for an Exoddus capture (D-V4).
+static constexpr s16 kLaserBarLayer = 27;  // eLayer_27
+static constexpr s16 kLaserBeamLayer = 26; // eLayer_Shadow_26, then 25, 24 by rank
+static constexpr s16 kLaserHalfBand = 19;  // full layer - half layer (28 - 9, 32 - 13)
+static constexpr s16 kLaserFanDepth = 3;   // most beams on one emitter: 3 (mi 5/26, mi 12/21)
+static constexpr Layer kDetectorLayer = static_cast<Layer>(kLaserBarLayer); // was eLayer_Foreground_36
+
+// Emitter-to-bar distance in PSX units: the fan's rank key.
+static s32 Tethys_LaserSpan(FP emitterX, FP barX)
+{
+    const s32 d = FP_GetExponent(barX) - FP_GetExponent(emitterX);
+    return d < 0 ? -d : d;
+}
+#endif
+
 MotionDetectorLaser* MotionDetectorLaser::ctor_468290(FP xpos, FP ypos, FP scale, Layer layer)
 {
     BaseAnimatedWithPhysicsGameObject_ctor_424930(0);
@@ -60,7 +94,11 @@ MotionDetector* MotionDetector::ctor_4683B0(Path_MotionDetector* pTlv, s32 tlvIn
 
     field_20_animation.field_4_flags.Set(AnimFlags::eBit15_bSemiTrans);
     field_20_animation.field_B_render_mode = TPageAbr::eBlend_1;
+#ifdef TETHYS_SATURN
+    field_20_animation.field_C_render_layer = kDetectorLayer; // SATURN (U1d T6): was eLayer_Foreground_36
+#else
     field_20_animation.field_C_render_layer = Layer::eLayer_Foreground_36;
+#endif
 
     field_D8_yOffset = 0;
 
@@ -111,7 +149,11 @@ MotionDetector* MotionDetector::ctor_4683B0(Path_MotionDetector* pTlv, s32 tlvIn
             pLaser = ae_new<MotionDetectorLaser>();
             if (pLaser)
             {
+#ifdef TETHYS_SATURN
+                pLaser->ctor_468290(field_11C_y1_fp, field_120_y2_fp, field_CC_sprite_scale, kDetectorLayer); // SATURN (U1d T6)
+#else
                 pLaser->ctor_468290(field_11C_y1_fp, field_120_y2_fp, field_CC_sprite_scale, Layer::eLayer_Foreground_36);
+#endif
             }
         }
         else if (pTlv->field_18_initial_move_direction == Path_MotionDetector::InitialMoveDirection::eRight_0)
@@ -120,7 +162,11 @@ MotionDetector* MotionDetector::ctor_4683B0(Path_MotionDetector* pTlv, s32 tlvIn
             pLaser = ae_new<MotionDetectorLaser>();
             if (pLaser)
             {
+#ifdef TETHYS_SATURN
+                pLaser->ctor_468290(field_114_x1_fp, field_120_y2_fp, field_CC_sprite_scale, kDetectorLayer); // SATURN (U1d T6)
+#else
                 pLaser->ctor_468290(field_114_x1_fp, field_120_y2_fp, field_CC_sprite_scale, Layer::eLayer_Foreground_36);
+#endif
             }
         }
         else
@@ -174,7 +220,11 @@ MotionDetector* MotionDetector::ctor_4683B0(Path_MotionDetector* pTlv, s32 tlvIn
     auto pLaserMem = ae_new<MotionDetectorLaser>();
     if (pLaserMem)
     {
+#ifdef TETHYS_SATURN
+        pLaserMem->ctor_468290(pOwner->field_B8_xpos, pOwner->field_BC_ypos, field_CC_sprite_scale, kDetectorLayer); // SATURN (U1d T6)
+#else
         pLaserMem->ctor_468290(pOwner->field_B8_xpos, pOwner->field_BC_ypos, field_CC_sprite_scale, Layer::eLayer_Foreground_36);
+#endif
     }
 
     field_F8_laser_id = pLaserMem->field_8_object_id;
@@ -254,6 +304,50 @@ void MotionDetector::vScreenChanged_469460()
 
 void MotionDetector::vRender_469120(PrimHeader** ppOt)
 {
+#ifdef TETHYS_SATURN
+    // SATURN (U1d T6): file the group BEFORE the flare goes in (the base VRender
+    // below reads field_C_render_layer). The bar is a separate drawable: it reads
+    // what is written here in the same pass, or one frame late in the worst case
+    // (Remove_Item swaps the list), which nobody can see.
+    const bool tethysHeroHalf = sActiveHero_5C1B68 && sActiveHero_5C1B68->field_CC_sprite_scale != FP_FromInteger(1);
+    const s16 tethysBand = tethysHeroHalf ? kLaserHalfBand : static_cast<s16>(0);
+    s16 tethysRank = 0;
+    auto pTethysLaser = static_cast<BaseAnimatedWithPhysicsGameObject*>(sObjectIds_5C1B70.Find_449CF0(field_F8_laser_id));
+    if (pTethysLaser && gObjList_drawables_5C1124)
+    {
+        const s32 mySpan = Tethys_LaserSpan(field_B8_xpos, pTethysLaser->field_B8_xpos);
+        for (s32 i = 0; i < gObjList_drawables_5C1124->Size(); i++)
+        {
+            BaseGameObject* pObj = gObjList_drawables_5C1124->ItemAt(i);
+            if (!pObj || pObj == this || pObj->Type() != AETypes::eGreeterBody_91) // eGreeterBody_91 = MotionDetector (ctor)
+            {
+                continue;
+            }
+            auto pOther = static_cast<MotionDetector*>(pObj);
+            auto pOtherLaser = static_cast<BaseAnimatedWithPhysicsGameObject*>(sObjectIds_5C1B70.Find_449CF0(pOther->field_F8_laser_id));
+            if (!pOtherLaser)
+            {
+                continue;
+            }
+            const s32 span = Tethys_LaserSpan(pOther->field_B8_xpos, pOtherLaser->field_B8_xpos);
+            // strict, then a stable tie-break, so two equal spans never swap
+            if (span < mySpan || (span == mySpan && pOther < this))
+            {
+                tethysRank++;
+            }
+        }
+        if (tethysRank >= kLaserFanDepth)
+        {
+            tethysRank = static_cast<s16>(kLaserFanDepth - 1);
+        }
+    }
+    field_20_animation.field_C_render_layer = static_cast<Layer>(kLaserBarLayer - tethysBand);
+    if (pTethysLaser)
+    {
+        pTethysLaser->field_20_animation.field_C_render_layer = static_cast<Layer>(kLaserBarLayer - tethysBand);
+    }
+    const Layer tethysBeamLayer = static_cast<Layer>(kLaserBeamLayer - tethysBand - tethysRank);
+#endif
     BaseAnimatedWithPhysicsGameObject::VRender(ppOt);
 
     if (field_20_animation.field_4_flags.Get(AnimFlags::eBit3_Render))
@@ -284,13 +378,24 @@ void MotionDetector::vRender_469120(PrimHeader** ppOt)
 
         // Add triangle
         Poly_Set_SemiTrans_4F8A60(&pPrim->mBase.header, TRUE);
+#ifdef TETHYS_SATURN
+        // SATURN (U1d T6): the beam's own layer, a band under its bar. The tpage
+        // MUST stay in the same bucket right behind it (the bucket walk is LIFO:
+        // [tpage, triangle] adjacent guarantees the beam's own blend mode).
+        OrderingTable_Add_4F8AA0(OtLayer(ppOt, tethysBeamLayer), &pPrim->mBase.header);
+#else
         OrderingTable_Add_4F8AA0(OtLayer(ppOt, field_20_animation.field_C_render_layer), &pPrim->mBase.header);
+#endif
 
         // Add tpage
         const s32 tpage = PSX_getTPage_4F60E0(TPageMode::e16Bit_2, field_178_bObjectInLaser != 0 ? TPageAbr::eBlend_1 : TPageAbr::eBlend_3, 0, 0); // When detected transparency is off, gives the "solid red" triangle
         Prim_SetTPage* pTPage = &field_154_tPage[gPsxDisplay_5C1130.field_C_buffer_index];
         Init_SetTPage_4F5B60(pTPage, 0, 0, tpage);
+#ifdef TETHYS_SATURN
+        OrderingTable_Add_4F8AA0(OtLayer(ppOt, tethysBeamLayer), &pTPage->mBase); // SATURN: see the triangle
+#else
         OrderingTable_Add_4F8AA0(OtLayer(ppOt, field_20_animation.field_C_render_layer), &pTPage->mBase);
+#endif
 
         pScreenManager_5BB5F4->InvalidateRect_40EC90(
             std::min(x0, std::min(x1, x1)),

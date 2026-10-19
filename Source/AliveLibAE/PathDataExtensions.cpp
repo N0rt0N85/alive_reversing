@@ -10,6 +10,30 @@ struct MudCounts final
     s32 mBadEnding = 255;
     s32 mGoodEnding = 150;
 };
+#ifdef TETHYS_SATURN
+// SATURN (L5, decision D-B4; AO's 450.ao.1 twin): THE 20,196 B TABLE ONLY EVER
+// HELD ITS INITIALIZER. sMudExtData[17][99] has one writer,
+// Path_Set_NewData_FromLvls below, which applies Pxtd chunks; the Saturn boot
+// does not call it (Game.cpp) and none of the 11 AE path BNDs carries one
+// (measured). Every entry therefore reads MudCounts' own defaults, and so do
+// these getters, without 20,196 B of initialised HWRAM .data.
+static constexpr MudCounts kTethysMudCounts = {};
+
+s32 Path_GetTotalMuds(LevelIds /*lvlId*/, u32 /*pathNum*/)
+{
+    return kTethysMudCounts.mTotal;
+}
+
+s32 Path_BadEndingMuds(LevelIds /*lvlId*/, u32 /*pathNum*/)
+{
+    return kTethysMudCounts.mBadEnding;
+}
+
+s32 Path_GoodEndingMuds(LevelIds /*lvlId*/, u32 /*pathNum*/)
+{
+    return kTethysMudCounts.mGoodEnding;
+}
+#else
 static MudCounts sMudExtData[static_cast<u32>(LevelIds::eCredits_16) + 1][99];
 
 
@@ -27,6 +51,7 @@ s32 Path_GoodEndingMuds(LevelIds lvlId, u32 pathNum)
 {
     return sMudExtData[static_cast<u32>(lvlId)][pathNum].mGoodEnding;
 }
+#endif
 
 static u8* sPathExtData[static_cast<u32>(LevelIds::eCredits_16) + 1] = {};
 
@@ -120,7 +145,7 @@ void Path_Set_NewData_FromLvls()
                             SetAndLog("abe start xpos", rPathData.field_1A_abe_start_xpos, static_cast<s16>(pExt->mAbeStartXPos));
                             SetAndLog("abe start ypos", rPathData.field_1C_abe_start_ypos, static_cast<s16>(pExt->mAbeStartYPos));
 
-                            rPathData.field_1E_object_funcs = kObjectFactory;
+                            rPathData.field_1E_object_funcs = &kObjectFactory; // SATURN: field_1E is a pointer now (PathData.hpp)
 
                             rBlyRec.field_8_pCollisionData = &GetCollisions(lvlIdx)[pExt->mPathId];
 
@@ -135,6 +160,7 @@ void Path_Set_NewData_FromLvls()
                             SetAndLog<u32>("grid width", rColInfo.field_14_grid_width, pExt->mGridWidth);
                             SetAndLog<u32>("grid height", rColInfo.field_18_grid_height, pExt->mGridHeight);
 
+#ifndef TETHYS_SATURN // SATURN (L5): the table is gone, its defaults stand (see above)
                             if (pExt->mTotalMuds != 0)
                             {
                                 SetAndLog("sTotalMuds", sMudExtData[lvlIdx][pExt->mPathId].mTotal, pExt->mTotalMuds);
@@ -149,6 +175,7 @@ void Path_Set_NewData_FromLvls()
                             {
                                 SetAndLog("sGoodEndingMuds", sMudExtData[lvlIdx][pExt->mPathId].mGoodEnding, pExt->mGoodEndingMuds);
                             }
+#endif
 
                             if (pExt->mNumMudsInPath != 0)
                             {

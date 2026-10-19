@@ -167,6 +167,44 @@ void CameraSwapper::Init_4E50C0(u8** ppCamRes, CameraSwapEffects changeEffect)
     }
     field_38_changeEffect = changeEffect;
 
+#ifdef TETHYS_SATURN
+    // SATURN (AO 421.ao.3 + 448.ao.7 twin, U1a A15, U10 R13): THE WIPES BECOME
+    // AN INSTANT CHANGE. A wipe here re-blits the new camera one slice a tick
+    // through the dirty tiles while a ScreenClipper at layer 0 hides what is not
+    // revealed yet. On Saturn the camera is the VDP2 bitmap, displayed whole the
+    // moment it streams, and the dirty tiles have no reader
+    // (ScreenManager::InvalidateRect_40EC90): what survived of a wipe is the
+    // CLOCK, the game frozen behind the swapper (sNum_CamSwappers_5C1B66 gates
+    // the update loops) for 8 to 30 ticks, and the clipper cutting every sprite
+    // over a screen that is already complete. So they take what
+    // eInstantChange_0 does below, the path of every menu change and the boot.
+    // The door "whoosh" is a sound, not the wipe: it stays. NOT IN AN ATTRACT
+    // DEMO (448.ao.7): a replay of recorded input needs every frozen tick where
+    // the recording had it (random draws per rendered frame), so a demo waits
+    // through its wipes as the PSX did.
+    switch (gAttract_5C1BA0 ? CameraSwapEffects::eInstantChange_0 : changeEffect)
+    {
+        case CameraSwapEffects::eLeftToRight_1:
+        case CameraSwapEffects::eRightToLeft_2:
+        case CameraSwapEffects::eTopToBottom_3:
+        case CameraSwapEffects::eBottomToTop_4:
+        case CameraSwapEffects::eVerticalSplit_6:
+        case CameraSwapEffects::eHorizontalSplit_7:
+        case CameraSwapEffects::eBoxOut_8:
+            if (changeEffect == CameraSwapEffects::eBoxOut_8)
+            {
+                SFX_Play_46FA90(SoundEffect::IngameTransition_84, 127); // the door whoosh
+            }
+            pScreenManager_5BB5F4->InvalidateRect_Layer3_40EDB0(0, 0, gPsxDisplay_5C1130.field_0_width, gPsxDisplay_5C1130.field_2_height);
+            field_6_flags.Set(BaseGameObject::eDead_Bit3);
+            field_34_pSubObject = nullptr;
+            return;
+
+        default:
+            break; // the films and eInstantChange_0 go on untouched
+    }
+#endif
+
     PSX_Point xy = {};
     PSX_Point wh = {};
 
@@ -490,7 +528,16 @@ void CameraSwapper::vUpdate_4E5850()
             pScreenManager_5BB5F4->field_44_unused = 1;
 
             // Now apply the camera we where storing now that the movie is finished
+#ifdef TETHYS_SATURN
+            // SATURN (U1a A21): the handle is always null here (the camera
+            // streamed straight to VDP2, ResourceManager::Tethys_StreamCamFile),
+            // and the restore must still run: ScreenManager's decompress then
+            // reveals the destination camera Map painted hidden behind the films
+            // (no CD read), whether or not a film actually drew.
+            if (true)
+#else
             if (field_30_ppCamRes)
+#endif
             {
                 pScreenManager_5BB5F4->DecompressCameraToVRam_40EF60(reinterpret_cast<u16**>(field_30_ppCamRes));
                 pScreenManager_5BB5F4->InvalidateRect_40EC90(0, 0, gPsxDisplay_5C1130.field_0_width, gPsxDisplay_5C1130.field_2_height, 0);

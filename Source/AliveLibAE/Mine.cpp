@@ -271,7 +271,22 @@ void Mine::ScreenChanged_46BAE0()
 {
     if (gMap_5C3030.field_0_current_level != gMap_5C3030.field_A_level
         || gMap_5C3030.field_2_current_path != gMap_5C3030.field_C_path
-        || !field_1BC_flags.Get(Mine_Flags_1BC::eBit1_PersistOffscreen))
+        || !field_1BC_flags.Get(Mine_Flags_1BC::eBit1_PersistOffscreen)
+#ifdef TETHYS_SATURN
+        // SATURN (U1d T11, AO ao262.17 twin, decision D5): persist_offscreen KEEPS
+        // A MINE THAT IS COUNTING DOWN, NOT ONE THAT WAS NEVER TOUCHED. 231 of the
+        // 233 Exoddus mines carry the flag (up to 17 on one screen, br 20/10) and
+        // each pins the explosion set (ABEBOMB, DEBRIS00, BGEXPLD, ABEBLOW,
+        // DOGBLOW: ~80 KB of PC resources) on screens where no object can name it.
+        // field_118_detonating is 0 from the ctor until something triggers the
+        // mine, and at 0 the object holds nothing its TLV does not: the dtor
+        // resets the TLV with bSetDestroyed = (detonating == 1), so an untouched
+        // mine goes back to Created 0 / Destroyed 0 and the camera's loader
+        // re-creates it, resources included, on the next visit. A mine mid
+        // countdown still persists, as the flag intends.
+        || field_118_detonating == 0
+#endif
+        )
     {
         field_6_flags.Set(Options::eDead_Bit3);
     }

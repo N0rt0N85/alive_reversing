@@ -130,6 +130,15 @@ void AnimationUnknown::vRender_40C690(s32 xpos, s32 ypos, PrimHeader** ppOt, s32
         {
             SetPrimExtraPointerHack(pPoly, nullptr);
         }
+#ifdef TETHYS_SATURN
+        // SATURN (448.ao.7 twin): no table = compute the poly, queue nothing. A
+        // burst lists its items for the renderer in one call instead
+        // (Tethys_PrimBurst, ParticleBurst.cpp).
+        if (!ppOt)
+        {
+            return;
+        }
+#endif
         OrderingTable_Add_4F8AA0(OtLayer(ppOt, field_C_render_layer), &pPoly->mBase.header);
     }
 }

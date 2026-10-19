@@ -11,7 +11,17 @@
 #include "../AliveLibCommon/CamDecompressor.hpp"
 
 ALIVE_VAR(1, 0x5BB5F4, ScreenManager*, pScreenManager_5BB5F4, nullptr);
+#ifndef TETHYS_SATURN // SATURN (L5): written for nobody here, see Init_40E4B0
 ALIVE_ARY(1, 0x5b86c8, SprtTPage, 300, sSpriteTPageBuffer_5B86C8, {});
+#endif
+#ifdef TETHYS_SATURN
+// SATURN (decision D-R1, U1a A5): the VDP2 camera upload of src/renderer_saturn.cxx
+// (global namespace, C++ linkage), AO's ScreenManager.cpp:16 twin. The blob is
+// the converter's Saturn camera (u16 BE 320 | u16 BE 240 | 256 x u16 BE CRAM
+// words | 320*240 8bpp indices).
+void Tethys_UploadCamBlob(const u8* pBlob);
+extern "C" bool Tethys_CamRevealHidden(); // src/renderer_saturn.cxx (420.ao.1)
+#endif
 
 void ScreenManager::sub_40EE10()
 {
@@ -53,6 +63,21 @@ BaseGameObject* ScreenManager::vdtor_40E460(s32 flags)
 
 void ScreenManager::InvalidateRect_40EC90(s32 x, s32 y, s32 width, s32 height, s32 idx)
 {
+#ifdef TETHYS_SATURN
+    // SATURN (AO ao262.18 twin, U1a A5): THE WRITER OUTLIVED ITS READERS. The
+    // dirty tiles fed two readers: the 300-tile recomposition in VRender_40E6E0
+    // (gated `if (false)` below: the background is the VDP2 bitmap) and AE FG1's
+    // per-tile IsDirty gate (removed with the FG1 rewrite, decision D-R2, which
+    // draws every piece every frame as AO does). Enumerated: IsDirty_40EBC0 has
+    // no other caller in AliveLibAE. About 60 call sites a frame computed bits
+    // for nobody (AO measured -0.3 ms a tick for its twin). Every entry point
+    // (InvalidateRect_40EC10/_40EC50/_Layer3_40EDB0) forwards here.
+    (void) x;
+    (void) y;
+    (void) width;
+    (void) height;
+    (void) idx;
+#else
     x = std::max(x, 0);
     y = std::max(y, 0);
 
@@ -66,6 +91,7 @@ void ScreenManager::InvalidateRect_40EC90(s32 x, s32 y, s32 width, s32 height, s
             field_64_20x16_dirty_bits[idx].SetTile(tileX, tileY, true);
         }
     }
+#endif
 }
 
 void ScreenManager::InvalidateRect_Layer3_40EDB0(s32 x, s32 y, s32 width, s32 height)
@@ -101,6 +127,7 @@ void ScreenManager::InvalidateRect_40EC10(s32 x, s32 y, s32 width, s32 height)
     InvalidateRect_40EC90(x, y, width, height, field_3A_idx);
 }
 
+#ifndef TETHYS_SATURN // SATURN: the PC strip decode's helpers (see DecompressCameraToVRam_40EF60)
 const s32 kStripSize = 16;
 const s32 kNumStrips = 640 / kStripSize;
 
@@ -126,9 +153,41 @@ static bool IsHackedAOCamera(u16** ppBits)
 
     return countOf7680SizedSegments == kNumStrips;
 }
+#endif
 
 void ScreenManager::DecompressCameraToVRam_40EF60(u16** ppBits)
 {
+#ifdef TETHYS_SATURN
+    // SATURN (decision D-R1, U1a A5): AE cameras are decoded OFFLINE into AO's
+    // Saturn blob (8bpp + palette, LZ4) and reach VDP2 NBG1 through the camera
+    // stream (ResourceManager::Tethys_StreamCamFile), which never stages the
+    // Bits in the heap: every Camera's field_C_pCamRes stays null, so every
+    // caller of this function (the ScreenManager construction, the boot splash
+    // Game.cpp:561, the post-film restores of CameraSwapper, Abe, Glukkon,
+    // MainMenu and Map) arrives with a null handle: the bitmap already holds the
+    // camera. Repainting after a film is the film layer's job on Saturn
+    // (Tethys_CamRevealHidden, then Tethys_RestreamCurrentCamera), as AO's
+    // movie_stub.cxx RestoreBackground does. The PC VLC decoder (CamDecompressor,
+    // 183,770 B of tables plus a 32,256 B heap block per decode) is not in the
+    // image, and IsHackedAOCamera would read the blob's header as strip sizes.
+    // A Bits blob handed in anyway (no route makes one today) is uploaded whole.
+    //   With a null handle, one thing is still owed here: CameraSwapper calls
+    // this at the end of a screen change's films (ePlay1FMV_5/2FMVs_9/3FMVs_10),
+    // and Map::Load_Path_Items_482C10 painted that destination camera HIDDEN
+    // behind them (AO 420.ao.1). Reveal it (register writes, no CD); a no-op
+    // when nothing waits, so the other callers and a film layer that already
+    // revealed it (AO movie_stub.cxx RestoreBackground's twin) are unaffected,
+    // and a film that was cut before drawing still brings the screen back
+    // (AO 422.ao.1's field report: black, audible and walkable).
+    if (ppBits && *ppBits)
+    {
+        Tethys_UploadCamBlob(reinterpret_cast<const u8*>(*ppBits));
+    }
+    else
+    {
+        Tethys_CamRevealHidden();
+    }
+#else
     if (IsHackedAOCamera(ppBits))
     {
         LOG_INFO("Applying AO camera");
@@ -182,6 +241,7 @@ void ScreenManager::DecompressCameraToVRam_40EF60(u16** ppBits)
     UnsetDirtyBits_40EDE0(1);
     UnsetDirtyBits_40EDE0(2);
     UnsetDirtyBits_40EDE0(3);
+#endif
 }
 
 ScreenManager* ScreenManager::ctor_40E3E0(u8** ppBits, FP_Point* pCameraOffset)
@@ -213,6 +273,17 @@ void ScreenManager::Init_40E4B0(u8** ppBits)
     Vram_alloc_explicit_4955F0(0, 272, 640 - 1, 512 - 1);
     DecompressCameraToVRam_40EF60(reinterpret_cast<u16**>(ppBits));
 
+#ifdef TETHYS_SATURN
+    // SATURN (L5, decision D-B4; AO's 450.ao.1 twin): THE 300 PSX BACKGROUND
+    // TILES ARE NOT BUILT. On PSX the background is redrawn as 300 32x16
+    // sprites out of this buffer; on Saturn it is the VDP2 bitmap, and the one
+    // loop that reads the buffer, the dirty-tile recomposition in
+    // VRender_40E6E0, is gated below as AO's ao242.12 gates its twin. 14,400 B
+    // of .bss and a 300-iteration loop per construction, for no reader. (In AE
+    // that loop also drew FG1's FULL blocks: those come back as pixel pieces
+    // with the FG1 rewrite, decision D-R2, stream R1.)
+    field_24_screen_sprites = nullptr;
+#else
     field_24_screen_sprites = &sSpriteTPageBuffer_5B86C8[0];
 
     s16 xpos = 0;
@@ -244,6 +315,7 @@ void ScreenManager::Init_40E4B0(u8** ppBits)
             ypos += 16;
         }
     }
+#endif
 
     for (s32 i = 0; i < 8; i++)
     {
@@ -326,6 +398,14 @@ void ScreenManager::VRender_40E6E0(PrimHeader** ppOt)
     pCurrent_SprtTPage_5BB5DC = nullptr;
     sCurrentYPos_5BB5F0 = -1;
 
+#ifdef TETHYS_SATURN
+    // SATURN (AO's ao242.12 twin, with L5 above): the PSX dirty-rectangle
+    // recomposition. The background is the VDP2 bitmap, displayed whole, and
+    // the renderer discards these tiles by their modal tpage: producing them
+    // cost AO 3.3-3.8 ms of every tick for no pixel. The tiles are not built
+    // any more (Init_40E4B0). The bookkeeping after the loop is kept.
+    if (false)
+#endif
     for (s32 i = 0; i < 300; i++)
     {
         SprtTPage* pSpriteTPage = &field_24_screen_sprites[i];

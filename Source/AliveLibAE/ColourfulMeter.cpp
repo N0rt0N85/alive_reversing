@@ -26,8 +26,21 @@ ColourfulMeter* ColourfulMeter::ctor_43CE40(Path_ColourfulMeter* pTlv, s32 tlvIn
     field_74_tlv_x = pTlv->field_8_top_left.field_0_x;
     field_76_tlv_y = pTlv->field_8_top_left.field_2_y;
 
+#ifdef TETHYS_SATURN
+    // SATURN (U1c T14/D13): share the LCDFONT sheet the LCD screens already hold
+    // through sFont2Context with a load count (a private context uploaded a
+    // second copy and registered one more font rect than the renderer keeps,
+    // GasCountDown.cpp has the whole reason). Same sheet, same atlas.
+    if (!sFontType2LoadCount_5BC5E8)
+    {
+        sFont2Context_5BC5D8.LoadFontType_433400(2);
+    }
+    sFontType2LoadCount_5BC5E8++;
+    field_30_font.ctor_433590(5, byte_5543D0, &sFont2Context_5BC5D8);
+#else
     field_20_font_context.LoadFontType_433400(2);
     field_30_font.ctor_433590(5, byte_5543D0, &field_20_font_context);
+#endif
     field_6_flags.Set(BaseGameObject::eDrawable_Bit4);
     gObjList_drawables_5C1124->Push_Back(this);
 
@@ -108,7 +121,14 @@ void ColourfulMeter::dtor_43D080()
     gObjList_drawables_5C1124->Remove_Item(this);
     Path::TLV_Reset_4DB8E0(field_68_tlvInfo, -1, 0, 0);
     field_30_font.dtor_433540();
+#ifdef TETHYS_SATURN
+    if (!--sFontType2LoadCount_5BC5E8) // SATURN: the shared sheet (see the ctor)
+    {
+        sFont2Context_5BC5D8.dtor_433510();
+    }
+#else
     field_20_font_context.dtor_433510();
+#endif
     BaseGameObject_dtor_4DBEC0();
 }
 
@@ -254,7 +274,13 @@ void ColourfulMeter::vRender_43D2B0(PrimHeader** ppOt)
         OrderingTable_Add_4F8AA0(OtLayer(ppOt, Layer::eLayer_Well_23), &pPolyG4->mBase.header);
     }
 
+#ifdef TETHYS_SATURN
+    // SATURN (U1c T15): the countdown digits are not drawn while paused
+    // (Font.hpp, Tethys_PauseHidesText); the bars are not text and stay.
+    if (gbDrawMeterCountDown_5C1BF8 && !Tethys_PauseHidesText())
+#else
     if (gbDrawMeterCountDown_5C1BF8)
+#endif
     {
         char_type text[12] = {};
         sprintf(text, "%01d:%02d", sTimerValue_5C1BFC / 1800u, sTimerValue_5C1BFC / 30u % 60);

@@ -5,6 +5,31 @@
 struct Path_TLV;
 class Path;
 
+#if defined(TETHYS_GAME_AE)
+// SATURN (stream R1, C6's request): the parts in REVERSE order on the
+// big-endian SH-2, so that `.all` keeps the PC's numeric value,
+// pathId << 24 | levelId << 16 | tlvOffset (on the PC's little-endian layout
+// below, pathId is the top byte). Declared as on the PC, a TLV at offset 0 of
+// MI path 1 would read .all == 257 here and meet the BaseGameObject id counter:
+// BaseGameObject::Find_Flags_4DC170 returns the FIRST object with a matching
+// field_C_objectId, with no type test, so a death or quickload relink could
+// bind the wrong object; on the PC a TLV id is >= 2^24 and never does. Every
+// AE user goes through the part NAMES (Path.cpp, Factory.cpp), so only the
+// numeric value changes, to the PC's (tools/ae/ae_save_schema.py measures this
+// order and converts the shipped saves' ids as plain u32).
+struct TlvOffsetLevelIdPathId final
+{
+    u8 pathId;
+    u8 levelId;
+    u16 tlvOffset;
+};
+
+struct TlvOffsetCombinedLevelIdPathId final
+{
+    u16 levelIdPathId;
+    u16 tlvOffset;
+};
+#else
 struct TlvOffsetLevelIdPathId final
 {
     u16 tlvOffset;
@@ -17,6 +42,7 @@ struct TlvOffsetCombinedLevelIdPathId final
     u16 tlvOffset;
     u16 levelIdPathId;
 };
+#endif
 
 union TlvItemInfoUnion
 {

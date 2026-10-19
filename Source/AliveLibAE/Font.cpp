@@ -8,6 +8,77 @@
 #include "Sys_common.hpp"
 #include "Renderer/IRenderer.hpp"
 
+// SATURN (D-T1): the French ABE2.FNT / LCDFONT.FNT sheets need their own rects
+// (tools/ae/ae_text.py reads them out of Exoddus.exe; the index rule is
+// unchanged). Without them the French accents draw wrong (font1) or blank
+// (font2); TETHYS_LANG_EN keeps RELIVE's US rects.
+#if defined(TETHYS_SATURN) && !defined(TETHYS_LANG_EN) && __has_include("ae/tethys_ae_font_atlas_fr.inc")
+#include "ae/tethys_ae_font_atlas_fr.inc"
+#define TETHYS_AE_FONT_FR 1
+#else
+#define TETHYS_AE_FONT_FR 0
+#endif
+
+#ifdef TETHYS_SATURN
+// SATURN (U10 R25, AO 310.ao.1 twin): a font sheet is the one 4bpp upload the
+// converter does NOT pre-decimate 2:1 (tools/converter/font.py ships it at its
+// native width). The renderer reads a slot at the sheet's own stride only when
+// the slot is registered as a font sheet (src/renderer_saturn.cxx,
+// Tethys_NoteFontRect); unregistered, every row after the first shears.
+extern "C" void Tethys_NoteFontRect(s16 x, s16 y);
+extern "C" void Tethys_ForgetFontRect(s16 x, s16 y);
+extern "C" [[noreturn]] void Tethys_Fatal(const char_type* msg);
+
+// SATURN: THE INDEX RULE, AS Exoddus.exe COMPILES IT (read in the decrypted
+// image, Font::DrawString 0x4337D0, MeasureWidth 0x433630/0x433700): UNSIGNED
+// byte compares (`cmp al, 0x20 / jbe`, `cmp al, 0xaf / ja`, `cmp al, 7 / jb`).
+// RELIVE reads the byte as a signed char in MeasureWidth_433700 and compares a
+// plain char in MeasureWidth_433630; sh2eb-elf GCC makes plain char SIGNED, so
+// every CP437 accent (0x80..0xAF) took the blank branch there: every accented
+// letter measured as a space (U1c finding 8). -1 = the blank advance
+// (atlas[1]). Both AE tables have 169 entries and the largest index this rule
+// can produce is 0x1F + 137 = 168, so no bounds check is needed (asserted
+// below, after the tables).
+static inline s32 Tethys_AeFontIndex(u8 c, u8 printableHi)
+{
+    if (c > 0x20u && c <= printableHi)
+    {
+        return static_cast<s32>(c) - 31;
+    }
+    if (c >= 7u && c <= 0x1Fu)
+    {
+        return static_cast<s32>(c) + 137;
+    }
+    return -1;
+}
+
+// SATURN: every palette a Font is built with is a COMPILED PSX u16[16] stored
+// as little-endian byte pairs (pal_554474, pal_560F80, sLCDScreen_Palette(2),
+// sStatsSignFontPalette_55CF8C, GasCountDown, ColourfulMeter, BrewMachine). The
+// Saturn PalSetData assembles entries BIG-endian because every other palette
+// it sees comes from the offline converter, already CRAM-ready. So these are
+// swapped here and put through the project CRAM rule (tools/converter/common.py
+// sat_cram): 0x0000 stays transparent, anything else gets the opaque bit 15.
+// AO's twin is AO::Tethys_PalSetCompiled (AliveLibAO/Font.cpp).
+void Tethys_PalSetCompiled(s16 palX, s16 palY, s16 depth, const u8* pPalette)
+{
+    u8 swapped[32];
+    s16 entries = depth;
+    if (entries > 16)
+    {
+        entries = 16; // compiled palettes are u8[32] = 16 entries, never more
+    }
+    for (s16 i = 0; i < entries; i++)
+    {
+        const u16 psx = static_cast<u16>(static_cast<u16>(pPalette[2 * i]) | (static_cast<u16>(pPalette[(2 * i) + 1]) << 8));
+        const u16 sat = (psx == 0) ? static_cast<u16>(0) : static_cast<u16>(0x8000u | (psx & 0x7FFFu));
+        swapped[2 * i] = static_cast<u8>(sat >> 8);
+        swapped[(2 * i) + 1] = static_cast<u8>(sat & 0xFF);
+    }
+    IRenderer::GetRenderer()->PalSetData(IRenderer::PalRecord{palX, palY, entries}, swapped);
+}
+#endif
+
 void Font_ForceLink()
 {
 }
@@ -58,7 +129,9 @@ ALIVE_VAR(1, 0x5ca4b4, u8, sFontDrawScreenSpace_5CA4B4, 0);
 
 ALIVE_VAR(1, 0x5BC5E8, s16, sFontType2LoadCount_5BC5E8, 0);
 
+#ifndef TETHYS_SATURN // SATURN: the custom-font loaders (DebugHelpers.cpp only) are std::vector, never linked
 static std::vector<std::vector<u8>> sLoadedAtlas;
+#endif
 
 namespace Alive {
 Font::Font()
@@ -80,7 +153,13 @@ void Font::ctor_433590(s32 maxCharLength, const u8* palette, Font_Context* fontC
         LOG_ERROR("PalAlloc failure");
     }
 
+#ifdef TETHYS_SATURN
+    // SATURN: `palette` is always a compiled PSX little-endian u8[32] (see
+    // Tethys_PalSetCompiled above): swap it before the big-endian PalSetData.
+    Tethys_PalSetCompiled(rec.x, rec.y, rec.depth, palette);
+#else
     IRenderer::GetRenderer()->PalSetData(rec, palette);
+#endif
 
     field_28_palette_rect.x = rec.x;
     field_28_palette_rect.y = rec.y;
@@ -92,8 +171,32 @@ void Font::ctor_433590(s32 maxCharLength, const u8* palette, Font_Context* fontC
     auto db = new void*[1];
     db[0] = ae_new_malloc_4954D0(sizeof(Poly_FT4) * 2 * maxCharLength);
     field_20_fnt_poly_block_ptr = reinterpret_cast<u8**>(db);
+#elif defined(TETHYS_GAME_AE)
+    // SATURN (AO Font.cpp ao262.4 twin, review RV1): the same locked last-fit
+    // block with its reclaim retry, but NON-FATAL. On Saturn
+    // Allocate_New_Locked_Resource_49BF40 ends in the "RES NULL" fatal
+    // (ResourceManager.cpp Alloc_New_Resource_Impl), so the dead-font branch
+    // below could never run; AO's tester died on this very block (FntP,
+    // 5,760 B, heap at 99.10 %).
+    field_20_fnt_poly_block_ptr = ResourceManager::Alloc_New_Resource_ImplEx(
+        ResourceManager::Resource_FntP, fontContext->field_C_resource_id, sizeof(Poly_FT4) * 2 * maxCharLength,
+        true, ResourceManager::BlockAllocMethod::eLastMatching, true /*reclaim*/, false /*never fatal*/);
 #else
     field_20_fnt_poly_block_ptr = ResourceManager::Allocate_New_Locked_Resource_49BF40(ResourceManager::Resource_FntP, fontContext->field_C_resource_id, sizeof(Poly_FT4) * 2 * maxCharLength);
+#endif
+#ifdef TETHYS_SATURN
+    // SATURN (AO ao262.4 twin): the FntP block comes from the resource heap and
+    // Alloc_New_Resource_Impl returns null when it is full (after one reclaim,
+    // ResourceManager.cpp). The PC dereferenced it; here the font is DEAD
+    // instead: DrawString draws nothing, the dtor frees nothing. A text that
+    // vanishes on a full heap is visible and survivable; *nullptr is the BIOS
+    // reset vector queued into the ordering table.
+    if (!field_20_fnt_poly_block_ptr)
+    {
+        field_24_fnt_poly_array = nullptr;
+        field_30_poly_count = 0;
+        return;
+    }
 #endif
     field_24_fnt_poly_array = reinterpret_cast<Poly_FT4*>(*field_20_fnt_poly_block_ptr);
 }
@@ -103,6 +206,13 @@ void Font::dtor_433540()
     IRenderer::GetRenderer()->PalFree(IRenderer::PalRecord{field_28_palette_rect.x, field_28_palette_rect.y, field_28_palette_rect.w});
     field_28_palette_rect.x = 0;
 
+#ifdef TETHYS_SATURN
+    // SATURN: a dead font (see the ctor) holds no FntP block.
+    if (!field_20_fnt_poly_block_ptr)
+    {
+        return;
+    }
+#endif
 #if DEVELOPER_MODE
     auto db = reinterpret_cast<void**>(field_20_fnt_poly_block_ptr);
     ae_delete_free_495540(*db);
@@ -112,6 +222,112 @@ void Font::dtor_433540()
 #endif
 }
 
+#ifdef TETHYS_SATURN
+// SATURN (U1c T01, U3 T10): the Saturn body is Exoddus.exe's own (read in the
+// decrypted image at 0x4337D0), all integer: no FPU on SH-2, and the PC's
+// doubles were RELIVE's reading of integer code, not the game's.
+//   - x and the right edge: (40 * x + 11) / 23, i.e. PsxToPCX(x, 11), a ROUNDED
+//     368 -> 640 conversion (RELIVE wrote x / 0.575, which truncates).
+//   - glyph size: Math_FixedPoint_Multiply(w << 16, scale) then the signed
+//     divide by 65536, i.e. FP_GetExponent(FP_FromInteger(w) * scale).
+//   - spacing: FP_GetExponent(FP_FromInteger(atlas[0].w) * scale). RELIVE wrote
+//     atlas[0].w * FP_GetExponent(scale), which is 0 for every menu label drawn
+//     at scale 0.75 or 0.84: letters touching where the game spaces them.
+//   - the byte is UNSIGNED (Tethys_AeFontIndex) and the loop stops at the NUL
+//     (no strlen re-evaluated per glyph, AO bt1136's quadratic cost).
+// Plus two Saturn guards AO paid for: a dead font draws nothing (the ctor), and
+// the cursor is bounded by the pool (AO 390.ao.1): `poly` indexes the FntP
+// block at 2 * (polyOffset + n), and nothing upstream checks it. A string that
+// would run past the pool stops drawing there.
+s32 Font::DrawString_4337D0(PrimHeader** ppOt, const char_type* text, s32 x, s16 y, TPageAbr abr, s32 bSemiTrans, s32 blendMode, Layer layer, u8 r, u8 g, u8 b, s32 polyOffset, FP scale, s32 maxRenderWidth, s16 colorRandomRange)
+{
+    if (!field_24_fnt_poly_array || polyOffset < 0 || polyOffset >= field_30_poly_count)
+    {
+        return polyOffset;
+    }
+    if (!sFontDrawScreenSpace_5CA4B4)
+    {
+        x = PsxToPCX(x, 11); // 368 to 640. Convert world space to screen space coords.
+    }
+
+    s32 characterRenderCount = 0;
+    const s32 maxRenderX = PsxToPCX(maxRenderWidth, 11);
+    s32 offsetX = x;
+    auto poly = &field_24_fnt_poly_array[gPsxDisplay_5C1130.field_C_buffer_index + (2 * polyOffset)];
+
+    const Font_Context* fContext = field_34_font_context;
+    const Font_AtlasEntry* pAtlas = fContext->field_8_atlas_array;
+    const s32 tpage = PSX_getTPage_4F60E0(TPageMode::e4Bit_0, abr, fContext->field_0_rect.x & 0xFFC0, fContext->field_0_rect.y & 0xFF00);
+    const s32 clut = PSX_getClut_4F6350(field_28_palette_rect.x, field_28_palette_rect.y);
+    const s16 spacing = FP_GetExponent(FP_FromInteger(static_cast<s32>(pAtlas[0].field_2_width)) * scale);
+
+    for (const u8* pText = reinterpret_cast<const u8*>(text); *pText; pText++)
+    {
+        if (offsetX >= maxRenderX)
+        {
+            break;
+        }
+        if (polyOffset + characterRenderCount >= field_30_poly_count)
+        {
+            break; // the pool is full: see the block above
+        }
+
+        const s32 charInfoIndex = Tethys_AeFontIndex(*pText, 0xAFu);
+        if (charInfoIndex < 0)
+        {
+            offsetX += pAtlas[1].field_2_width;
+            continue;
+        }
+
+        const Font_AtlasEntry* atlasEntry = &pAtlas[charInfoIndex];
+        const u8 charWidth = atlasEntry->field_2_width;
+        const u8 charHeight = atlasEntry->field_3_height;
+        const u8 texture_u = static_cast<u8>(atlasEntry->field_0_x + (4 * (fContext->field_0_rect.x & 0x3F)));
+        const u8 texture_v = static_cast<u8>(atlasEntry->field_1_y + LOBYTE(fContext->field_0_rect.y));
+
+        const s16 widthScaled = FP_GetExponent(FP_FromInteger(static_cast<s32>(charWidth)) * scale);
+        const s16 heightScaled = FP_GetExponent(FP_FromInteger(static_cast<s32>(charHeight)) * scale);
+
+        PolyFT4_Init(poly);
+        Poly_Set_SemiTrans_4F8A60(&poly->mBase.header, bSemiTrans);
+        Poly_Set_Blending_4F8A20(&poly->mBase.header, blendMode);
+
+        SetRGB0(
+            poly,
+            static_cast<u8>(r + Math_RandomRange_496AB0(-colorRandomRange, colorRandomRange)),
+            static_cast<u8>(g + Math_RandomRange_496AB0(-colorRandomRange, colorRandomRange)),
+            static_cast<u8>(b + Math_RandomRange_496AB0(-colorRandomRange, colorRandomRange)));
+
+        SetTPage(poly, static_cast<s16>(tpage));
+        SetClut(poly, static_cast<s16>(clut));
+
+        // Padding
+        poly->mVerts[1].mUv.tpage_clut_pad = 0;
+        poly->mVerts[2].mUv.tpage_clut_pad = 0;
+
+        const s16 x0 = static_cast<s16>(offsetX);
+        const s16 x1 = static_cast<s16>(offsetX + widthScaled);
+        SetXY0(poly, x0, y);
+        SetUV0(poly, texture_u, texture_v);
+        SetXY1(poly, x1, y);
+        SetUV1(poly, static_cast<u8>(texture_u + charWidth), texture_v);
+        SetXY2(poly, x0, static_cast<s16>(y + heightScaled));
+        SetUV2(poly, texture_u, static_cast<u8>(texture_v + charHeight));
+        SetXY3(poly, x1, static_cast<s16>(y + heightScaled));
+        SetUV3(poly, static_cast<u8>(texture_u + charWidth), static_cast<u8>(texture_v + charHeight));
+
+        OrderingTable_Add_4F8AA0(OtLayer(ppOt, layer), &poly->mBase.header);
+
+        ++characterRenderCount;
+        offsetX += widthScaled + spacing;
+        poly += 2;
+    }
+
+    pScreenManager_5BB5F4->InvalidateRect_40EC90(x, y - 1, offsetX, y + 24, pScreenManager_5BB5F4->field_3A_idx);
+
+    return polyOffset + characterRenderCount;
+}
+#else
 s32 Font::DrawString_4337D0(PrimHeader** ppOt, const char_type* text, s32 x, s16 y, TPageAbr abr, s32 bSemiTrans, s32 blendMode, Layer layer, u8 r, u8 g, u8 b, s32 polyOffset, FP scale, s32 maxRenderWidth, s16 colorRandomRange)
 {
     if (!sFontDrawScreenSpace_5CA4B4)
@@ -207,7 +423,100 @@ s32 Font::DrawString_4337D0(PrimHeader** ppOt, const char_type* text, s32 x, s16
 
     return polyOffset + characterRenderCount;
 }
+#endif // TETHYS_SATURN: DrawString_4337D0
 
+#ifdef TETHYS_SATURN
+// SATURN (U1c T01): the four measures, as Exoddus.exe computes them
+// (0x433700, 0x4336C0, 0x433630, 0x433BD0), all integer.
+//   - The 640 -> 368 conversion is (23 * w + 20) / 40 = PCToPsxX(w, 20), a
+//     ROUNDED one; RELIVE's `w * 0.575` truncates (and costs a soft double).
+//   - The byte is unsigned everywhere (see Tethys_AeFontIndex).
+s32 Font::MeasureWidth_433700(const char_type* text)
+{
+    s32 result = 0;
+    const Font_AtlasEntry* pAtlas = field_34_font_context->field_8_atlas_array;
+    for (const u8* pText = reinterpret_cast<const u8*>(text); *pText; pText++)
+    {
+        const s32 charIndex = Tethys_AeFontIndex(*pText, 0xAFu);
+        if (charIndex < 0)
+        {
+            result += pAtlas[1].field_2_width;
+            continue;
+        }
+        result += pAtlas[0].field_2_width;
+        result += pAtlas[charIndex].field_2_width;
+    }
+
+    if (!sFontDrawScreenSpace_5CA4B4)
+    {
+        result = PCToPsxX(result, 20); // Convert screen space to world space.
+    }
+    return result;
+}
+
+// Measures the width of a string with scale applied: FP_FromDouble(0.5) is
+// exactly FP_FromRaw(0x8000), the image's `add eax, 0x8000`.
+s32 Font::MeasureWidth_4336C0(const char_type* text, FP scale)
+{
+    const FP ret = (FP_FromInteger(MeasureWidth_433700(text)) * scale) + FP_FromRaw(0x8000);
+    return FP_GetExponent(ret);
+}
+
+// Measures the width of a single character (the blank is returned unscaled,
+// as in the image).
+s32 Font::MeasureWidth_433630(char_type character)
+{
+    const Font_AtlasEntry* pAtlas = field_34_font_context->field_8_atlas_array;
+    const s32 charIndex = Tethys_AeFontIndex(static_cast<u8>(character), 0xAFu);
+    if (charIndex < 0)
+    {
+        return pAtlas[1].field_2_width;
+    }
+    s32 result = pAtlas[charIndex].field_2_width;
+    if (!sFontDrawScreenSpace_5CA4B4)
+    {
+        result = PCToPsxX(result, 20); // Convert screen space to world space.
+    }
+    return result;
+}
+
+// The LCD marquee's cut points, as the image computes them (0x433BD0):
+//   - both edges go 368 -> 640 with the ROUNDED (40 * x + 11) / 23: RELIVE wrote
+//     `right * 0.575` for the right edge, the conversion the other way round;
+//   - each glyph advances FP_GetExponent(FP_FromInteger(w) * scale) + spacing:
+//     RELIVE divided that product by 0x10000 a second time (the `<< 16` of its
+//     own comment got lost), so the marquee measured 2 px per letter and its
+//     cut-off and tick sound ran ahead of the text (U1c finding 8);
+//   - the printable ceiling IS 0x7A here, in the shipped French image too
+//     (`cmp al, 0x7a`): accents slice at the blank advance. Kept: it is the
+//     game's own behaviour, and on LCDFONT (every printable glyph 14 or 9 px,
+//     the blank 14) it moves a cut point by at most one glyph;
+//   - it returns where the walk stopped, the NUL when the whole string fits
+//     (RELIVE returned the start of the string there).
+const char_type* Font::SliceText_433BD0(const char_type* text, s32 left, FP scale, s32 right)
+{
+    const Font_AtlasEntry* pAtlas = field_34_font_context->field_8_atlas_array;
+    const s32 rightWorldSpace = PsxToPCX(right, 11);
+    s32 xOff = sFontDrawScreenSpace_5CA4B4 ? left : PsxToPCX(left, 11);
+
+    const u8* pText = reinterpret_cast<const u8*>(text);
+    for (; *pText; pText++)
+    {
+        if (xOff >= rightWorldSpace)
+        {
+            break;
+        }
+        const s32 atlasIdx = Tethys_AeFontIndex(*pText, 0x7Au);
+        if (atlasIdx < 0)
+        {
+            xOff += pAtlas[1].field_2_width;
+            continue;
+        }
+        xOff += FP_GetExponent(FP_FromInteger(static_cast<s32>(pAtlas[atlasIdx].field_2_width)) * scale) + pAtlas[0].field_2_width;
+    }
+    return reinterpret_cast<const char_type*>(pText);
+}
+#else
 s32 Font::MeasureWidth_433700(const char_type* text)
 {
     s32 result = 0;
@@ -327,6 +636,7 @@ const char_type* Font::SliceText_433BD0(const char_type* text, s32 left, FP scal
 
     return text;
 }
+#endif // TETHYS_SATURN: the measures
 } // namespace Alive
 
 void Font_Context::LoadFontType_433400(s16 resourceID)
@@ -346,11 +656,26 @@ void Font_Context::LoadFontType_433400(s16 resourceID)
 #endif
 
     auto loadedResource = ResourceManager::GetLoadedResource_49C2A0(ResourceManager::Resource_Font, resourceID, 1u, 0);
+#ifdef TETHYS_SATURN
+    // SATURN: the PC dereferenced a missing sheet (*nullptr). Every caller loads
+    // the sheet's file first (the menu cameras and ABE2.FNT for id 1, LCDFONT.FNT
+    // through the factories for id 2), so an absent one is a loader fault:
+    // named here rather than an address error further on.
+    if (!loadedResource)
+    {
+        Tethys_Fatal(resourceID == 1 ? "AE font sheet 1 (ABE2.FNT) not resident" : "AE font sheet 2 (LCDFONT.FNT) not resident");
+    }
+#endif
     auto fontFile = reinterpret_cast<File_Font*>(*loadedResource);
 
     field_C_resource_id = resourceID;
 
     Vram_alloc_4956C0(fontFile->field_0_width, fontFile->field_2_height, fontFile->field_4_color_depth, &field_0_rect);
+#ifdef TETHYS_SATURN
+    // SATURN (310.ao.1 twin): register the slot as a native-width font sheet
+    // BEFORE the upload, which is where the renderer derives the slot's stride.
+    Tethys_NoteFontRect(field_0_rect.x, field_0_rect.y);
+#endif
     const PSX_RECT vramAllocatedRect = {field_0_rect.x, field_0_rect.y, static_cast<s16>(fontFile->field_0_width / 4), fontFile->field_2_height};
 
     IRenderer::GetRenderer()->Upload(fontFile->field_4_color_depth == 16 ? IRenderer::BitDepth::e16Bit : IRenderer::BitDepth::e4Bit, vramAllocatedRect, fontFile->field_28_pixel_buffer);
@@ -376,10 +701,16 @@ void Font_Context::dtor_433510()
 {
     if (field_0_rect.x)
     {
+#ifdef TETHYS_SATURN
+        // SATURN (310.ao.1 twin): a later cel landing on the freed origin must
+        // not be read as a font sheet.
+        Tethys_ForgetFontRect(field_0_rect.x, field_0_rect.y);
+#endif
         Vram_free_495A60({field_0_rect.x, field_0_rect.y}, {field_0_rect.w, field_0_rect.h});
     }
 }
 
+#ifndef TETHYS_SATURN // SATURN: the custom-font loaders (DebugHelpers.cpp only) read host files into std::vector
 bool Font_Context::LoadFontTypeFromFile(const char_type* fontPath, const char_type* atlasPath, s8* pPaletteOut)
 {
     auto debugFont = FS::ReadFile(fontPath);
@@ -440,7 +771,11 @@ bool Font_Context::LoadFontTypeFromOddFontMem(u8* data, s8* pPaletteOut)
     LoadFontTypeCustom(reinterpret_cast<File_Font*>(data), reinterpret_cast<Font_AtlasEntry*>(sLoadedAtlas.back().data()), pPaletteOut);
     return true;
 }
+#endif // !TETHYS_SATURN: the custom-font loaders
 
+#if TETHYS_AE_FONT_FR
+ALIVE_ARY(1, 0x551D34, Font_AtlasEntry, 169, sFont1Atlas_551D34, {TETHYS_AE_FONT1_ATLAS_ROWS});
+#else
 ALIVE_ARY(1, 0x551D34, Font_AtlasEntry, 169, sFont1Atlas_551D34,
           {{0u, 0u, 2u, 0u},
            {0u, 0u, 9u, 0u},
@@ -611,7 +946,11 @@ ALIVE_ARY(1, 0x551D34, Font_AtlasEntry, 169, sFont1Atlas_551D34,
            {148u, 162u, 16u, 24u},
            {163u, 162u, 16u, 24u},
            {180u, 162u, 16u, 24u}});
+#endif
 
+#if TETHYS_AE_FONT_FR
+ALIVE_ARY(1, 0x551FD8, Font_AtlasEntry, 169, sFont2Atlas_551FD8, {TETHYS_AE_FONT2_ATLAS_ROWS});
+#else
 ALIVE_ARY(1, 0x551FD8, Font_AtlasEntry, 169, sFont2Atlas_551FD8,
           {{0u, 0u, 2u, 0u},
            {0u, 0u, 14u, 0u},
@@ -782,3 +1121,12 @@ ALIVE_ARY(1, 0x551FD8, Font_AtlasEntry, 169, sFont2Atlas_551FD8,
            {0u, 0u, 0u, 0u},
            {0u, 0u, 0u, 0u},
            {0u, 0u, 0u, 0u}});
+#endif
+
+#ifdef TETHYS_SATURN
+// SATURN: the largest index Tethys_AeFontIndex can return is 0x1F + 137 = 168
+// (see its block), so both tables must keep their 169 entries.
+static_assert(ALIVE_ARY_SIZEOF(sFont1Atlas_551D34) == 169 * sizeof(Font_AtlasEntry)
+                  && ALIVE_ARY_SIZEOF(sFont2Atlas_551FD8) == 169 * sizeof(Font_AtlasEntry),
+              "Tethys_AeFontIndex reads up to entry 168");
+#endif

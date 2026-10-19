@@ -26,3 +26,9 @@ private:
     FP field_100_speed;
 };
 ALIVE_ASSERT_SIZEOF(BulletShell, 0x104);
+
+#ifdef TETHYS_SATURN
+#include "TethysObjectHooks.hpp"
+// SATURN (U1d T1): every ae_new<BulletShell> site null-tests its result: soft OOM.
+TETHYS_AE_SOFT_OOM_TYPE(BulletShell);
+#endif

@@ -11,8 +11,25 @@
 #include "Sys.hpp"
 #include "VGA.hpp"
 #include "StringFormatters.hpp"
+#if !defined(TETHYS_SATURN) // SATURN: SDL.h via TouchController.hpp:3; the touch pad is mobile-only
 #include "TouchController.hpp"
+#endif
 #include "GameAutoPlayer.hpp"
+
+#if defined(TETHYS_SATURN)
+extern "C" s32 Tethys_PadAnyHeld(void); // src/sys_saturn.cxx: any button or direction down on pad 1, raw
+#endif
+
+// SATURN (decision D-S3): THIS FILE IS COMPILED FOR ITS GAME HALF ONLY. Kept
+// verbatim: the sInputKey_* constants, sInputObject_5BD4E0 and Input(), the
+// controller index, the demo flag, InputObject (Update with its demo branch,
+// the PSX word conversions the quicksave states use, isPressed/isHeld/
+// IsReleased), Input_Reset, Input_IsChanting and Input_SaveSettingsIni_492840.
+// Guarded out: the PC device and INI half (keyboard and joystick tables, the
+// ini parser on std::vector<std::string> and streams, which must never link:
+// +655 KB measured), and the functions src/sys_saturn.cxx defines for the
+// Saturn pad (Input_Read_Pad_4FA9C0, the enable/disable gate, key states,
+// remap, button strings, Input_Init_491BC0, Input_SaveSettingsIni_Common).
 
 #if USE_SDL2
 static SDL_GameController* pSDLController = nullptr;
@@ -53,12 +70,22 @@ const InputCommands::Enum sInputKey_Chant = InputCommands::Enum::eChant;
 // Bitmask for all menu-exclusive (navigation, entering, etc.) input commands
 const u32 AllMenuCommandsMask = (InputCommands::Enum::ePause | InputCommands::Enum::eUnPause_OrConfirm | InputCommands::Enum::eBack | InputCommands::Enum::eConfigure);
 
+#if !defined(TETHYS_SATURN) // SATURN: PC joystick device state
 // Is a joystick plugged in and can be switched to?
 ALIVE_VAR(1, 0x5C2EF4, bool, sJoystickAvailable_5C2EF4, false);
+#endif
 
 // Is the joystick selected as the active controller device (instead of keyboard)?
+#if defined(TETHYS_SATURN)
+// SATURN: a pad is always the device: with 0 the remap page skips the Speak
+// rows, films cannot be skipped and button strings take the keyboard path
+// (MainMenu.cpp:2784, :2796, Movie.cpp:762-765, StringFormatters.cpp).
+ALIVE_VAR(1, 0x5c9f70, s32, sJoystickEnabled_5C9F70, 1);
+#else
 ALIVE_VAR(1, 0x5c9f70, s32, sJoystickEnabled_5C9F70, 0);
+#endif
 
+#if !defined(TETHYS_SATURN) // SATURN: PC joystick, keyboard and callback state
 ALIVE_VAR(1, 0x5C2EFC, s32, sJoystickNumButtons_5C2EFC, 0);
 ALIVE_VAR(1, 0x5C2F00, s32, sJoystickID_5C2F00, 0);
 ALIVE_VAR(1, 0x5c2edc, s32, sJoystickCapFlags_5C2EDC, 0);
@@ -72,9 +99,11 @@ ALIVE_VAR(1, 0x5c2ea8, joyinfoex_tag, sJoystickInfo_5C2EA8, {});
 
 ALIVE_ARY(1, 0xBD2F60, u8, 256, sInputKeyStates_BD2F60, {});
 ALIVE_VAR(1, 0xBBB9D0, u8, sInputEnabled_BBB9D0, 0);
+#endif
 ALIVE_VAR(1, 0x5BD4E0, InputObject, sInputObject_5BD4E0, {});
 ALIVE_VAR(1, 0x5C1BBE, u16, sCurrentControllerIndex_5C1BBE, 0);
 ALIVE_VAR(1, 0x5C1B9A, s16, bLongerTimeoutToNextDemo_5C1B9A, 0);
+#if !defined(TETHYS_SATURN) // SATURN: PC keyboard, bindings, names and callback state
 ALIVE_VAR(1, 0xbd30a0, u32, sLastPressedKey_BD30A0, 0);
 ALIVE_VAR(1, 0xbd309c, s32, sIsAKeyDown_BD309C, 0);
 ALIVE_ARY(1, 0x5C9D30, s8, 256, sAllowedGameKeys_5C9D30, {});
@@ -548,6 +577,16 @@ struct KeyNames final
 ALIVE_VAR(1, 0x5C9E30, KeyNames, sKeyboardDisplayKeyNames_5C9E30, {});
 ALIVE_VAR(1, 0x5C9798, KeyNames, sGamepadDisplayKeyNames_5C9798, {});
 
+#endif // !TETHYS_SATURN: PC device state and functions
+
+#if defined(TETHYS_SATURN)
+// SATURN: the display names of the PC binding pages. The Saturn pad's names
+// come from src/sys_saturn.cxx's Input_GetButtonString_492530; MainMenu still
+// calls this one (MainMenu.cpp), so it exists, and has nothing to build.
+EXPORT void CC Input_Init_Names_491870()
+{
+}
+#else
 EXPORT void CC Input_Init_Names_491870()
 {
     sKeyboardDisplayKeyNames_5C9E30 = {};
@@ -1231,11 +1270,16 @@ EXPORT void Input_SaveSettingsIni_Common(bool isAo)
     Input_Init_Names_491870();
 }
 
+#endif // !TETHYS_SATURN: Input_Init_Names_491870 .. Input_SaveSettingsIni_Common
+
+// SATURN: kept: Input_SaveSettingsIni_Common is src/sys_saturn.cxx's (the
+// options record on backup RAM).
 EXPORT void Input_SaveSettingsIni_492840()
 {
     Input_SaveSettingsIni_Common(false);
 }
 
+#if !defined(TETHYS_SATURN) // SATURN: the ini reader, the PC conversion callback, joystick init, Input_Init
 EXPORT void CC Input_LoadSettingsIni_492D40()
 {
     NewParseSettingsIni();
@@ -1878,6 +1922,8 @@ EXPORT u32 Input_GetLastPressedKey_492610()
     return lastVKeyPressed;
 }
 
+#endif // !TETHYS_SATURN: Input_LoadSettingsIni_492D40 .. Input_GetLastPressedKey_492610
+
 void Input_Reset_492660()
 {
     Input_EnableInput_4EDDD0();
@@ -1888,6 +1934,8 @@ EXPORT u32 Input_IsChanting_45F260()
 {
     return (sInputObject_5BD4E0.field_0_pads[0].field_0_pressed & InputCommands::Enum::eChant) == InputCommands::Enum::eChant;
 }
+
+#if !defined(TETHYS_SATURN) // SATURN: key states and the PC pad read are src/sys_saturn.cxx's
 
 // Zeros the input key state array.
 EXPORT void CC Input_InitKeyStateArray_4EDD60()
@@ -1942,16 +1990,20 @@ EXPORT s32 CC Input_Read_Pad_4FA9C0(s32 padNum)
 }
 
 
+#endif // !TETHYS_SATURN: Input_InitKeyStateArray_4EDD60 .. Input_Read_Pad_4FA9C0
+
 EXPORT InputObject& Input()
 {
     return sInputObject_5BD4E0;
 }
 
+#if !defined(TETHYS_SATURN) // SATURN: src/sys_saturn.cxx arms its own pad read
 EXPORT void CC Input_Pads_Reset_4FA960()
 {
     sLastPad_Input_BD1878 = 0;
     sReadPadEnable_BD1874 = true;
 }
+#endif
 
 s32 InputObject::Is_Demo_Playing_45F220()
 {
@@ -2001,8 +2053,16 @@ void InputObject::Update(BaseGameAutoPlayer& autoPlayer)
 
     if (Is_Demo_Playing_45F220())
     {
+#if defined(TETHYS_SATURN)
+        // SATURN (U1b T7, AO 448.ao.7 twin): any button stops a demo, as on the
+        // PSX, START and a lone shoulder included: neither reaches the word on
+        // press here (START pauses on release, L and R are the GameSpeak bank
+        // enablers, src/sys_saturn.cxx SaturnPadToAEInput).
+        if (field_0_pads[sCurrentControllerIndex_5C1BBE].field_0_pressed || Tethys_PadAnyHeld())
+#else
         // Stop if any button on any pad is pressed
         if (field_0_pads[sCurrentControllerIndex_5C1BBE].field_0_pressed)
+#endif
         {
             bLongerTimeoutToNextDemo_5C1B9A = 0;
             UnsetDemoPlaying_45F240();

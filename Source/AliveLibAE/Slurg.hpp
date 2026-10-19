@@ -55,8 +55,11 @@ struct Slurg_State final
     s16 field_16_current_motion;
     s16 field_18_anim_current_frame;
     s16 field_1A_anim_frame_change_counter;
-    s8 field_1D_bDrawable;
+    // SATURN (C6): the original writes bRender at 0x1C and bDrawable at 0x1D
+    // (the names say so); RELIVE declared them swapped. Unconditional: it is
+    // the original layout, and tools/ae/ae_save_schema.py reads this body.
     s8 field_1C_bRender;
+    s8 field_1D_bDrawable;
     s16 field_1E_padding;
     s32 field_20_frame_table_offset;
     s32 field_24_tlvInfo;

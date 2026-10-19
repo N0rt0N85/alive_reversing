@@ -46,6 +46,40 @@
 void Game_ForceLink()
 { }
 
+#ifdef TETHYS_SATURN
+// SATURN (U4 T13, twin of AO Game.cpp:3-176): the overlay's frame-phase feeds.
+// All are defined, game-neutral, in src/sys_saturn.cxx, which resets them on
+// every screen change and prints them (rows 3, 12): pu = the VUpdate walk, pa
+// = AnimateAll, pv = the drawables, the FG1 list and ScreenManager::VRender;
+// what PSX_VSync and the OT walk cost is measured there. nu/nl count VUpdate
+// calls and list length, n the drawables walked, vs the ScreenManager walk in
+// raw FRT ticks. The raw-tick reads go through the probe gate (START+L stops
+// the instrument, not only its display: AO ao242.13).
+extern "C" u32 Tethys_gPhUpd;
+extern "C" u32 Tethys_gPhAnim;
+extern "C" u32 Tethys_gPhAnimRaw;
+extern "C" u32 Tethys_gPhRend;
+extern "C" u32 Tethys_gScrRaw;
+extern "C" u32 Tethys_gDrawWalk;
+extern "C" u32 Tethys_gVuCalls;
+extern "C" u32 Tethys_gVuList;
+extern "C" u32 Tethys_gCurCam; // so a photo names its own screen
+extern "C" u32 Tethys_gAbeX;   // Abe's world position (the debug spawn's coordinates
+extern "C" u32 Tethys_gAbeY;   // are read off these, never derived)
+extern "C" u8 Tethys_gProbeOn;
+extern "C" u32 Tethys_RawTicks(void);
+#define TETHYS_PT() (Tethys_gProbeOn ? Tethys_RawTicks() : 0u)
+// SATURN (R2's request, AO Game.cpp:790-814 twin): the parent flag that routes
+// each cel upload's cost to AnimateAll or to VUpdate (the dc gauges of AE
+// Animation.cpp), and the slave SH-2's LZSS prefetch of the next tick's cels
+// (AliveLibCommon/TethysCelCache.hpp, compiled into AE Animation.cpp; fenced
+// before the sprite flush by src/sys_saturn.cxx).
+extern "C" u32 Tethys_gInAnimate;
+extern "C" void Tethys_CelPrefetch();
+static u32 sTethysPhase0 = 0;
+extern "C" void Tethys_ConfigLoad(void); // src/sys_saturn.cxx: the options record
+#endif
+
 using TExitGameCallBack = AddPointer_t<void CC()>;
 
 ALIVE_VAR(1, 0xBBFB00, TExitGameCallBack, sGame_OnExitCallback_BBFB00, nullptr);
@@ -76,7 +110,9 @@ ALIVE_VAR(1, 0x5CA4E0, s32, dword_5CA4E0, 0);
 
 // Fps calcs
 ALIVE_VAR(1, 0xBD0F08, s8, bQuitting_BD0F08, 0);
+#ifndef TETHYS_SATURN // SATURN: see Calculate_FPS_495250
 ALIVE_VAR(1, 0x55EFDC, f64, sFps_55EFDC, 0.0);
+#endif
 ALIVE_VAR(1, 0x5CA4DC, s32, sFrameDiff_5CA4DC, 0);
 ALIVE_VAR(1, 0xC2D03C, s32, sNumRenderedPrims_C2D03C, 0);
 ALIVE_VAR(1, 0x5CA300, s32, sFrameCount_5CA300, 0);
@@ -155,6 +191,7 @@ void DestroyObjects_4A1F20()
     }
 }
 
+#ifndef TETHYS_SATURN // SATURN (U3 T10): the PC's FPS text (doubles), only Game_End_Frame_4950F0 (src's on the Saturn) called it
 EXPORT f64 CC Calculate_FPS_495250(s32 frameCount)
 {
     static u32 sLastTime_5CA338 = SYS_GetTicks() - 500;
@@ -182,6 +219,7 @@ EXPORT void CC DrawFps_4952F0(Bitmap* pBmp, s32 x, s32 y, f32 fps)
     BMP_Draw_String_4F2230(pBmp, x, y, 0xFF80FFu, 1, strBuffer);
     Add_Dirty_Area_4ED970(0, 0, 97, 32);
 }
+#endif // !TETHYS_SATURN: Calculate_FPS_495250, DrawFps_4952F0
 
 EXPORT void CC sub_4FBA20()
 {
@@ -199,6 +237,7 @@ EXPORT void CC Draw_Debug_Strings_4F2800()
 }
 
 
+#ifndef TETHYS_SATURN // SATURN: src/sys_saturn.cxx defines it (the PC body is FPS text, the message pump, exit())
 EXPORT s32 CC Game_End_Frame_4950F0(u32 flags)
 {
     if (flags & 1)
@@ -256,6 +295,7 @@ EXPORT s32 CC Game_End_Frame_4950F0(u32 flags)
     sub_4FBA20();
     return 0;
 }
+#endif
 
 EXPORT void CC VLC_Tables_Init_496720()
 {
@@ -289,6 +329,12 @@ EXPORT void CC Main_ParseCommandLineArguments_494EA0(const char_type* /*pCmdLine
 
     PSX_EMU_Set_Cd_Emulation_Paths_4FAA70(".", strDrive, strDrive);
 
+#ifdef TETHYS_SATURN
+    // SATURN (L0, decision D-B3): there is no window; the title builders of
+    // Sys_common.hpp:41-75 are std::string, which would pull libstdc++'s
+    // string and exception chain into the image. A literal, as AO's twin.
+    Sys_WindowClass_Register_4EE22F("ABE_WINCLASS", "Tethys Exoddus", 32, 64, 640, 480);
+#else
     std::string windowTitle = WindowTitleAE();
     
     if (GetGameAutoPlayer().IsRecording())
@@ -301,6 +347,7 @@ EXPORT void CC Main_ParseCommandLineArguments_494EA0(const char_type* /*pCmdLine
     }
 
     Sys_WindowClass_Register_4EE22F("ABE_WINCLASS", windowTitle.c_str(), 32, 64, 640, 480);
+#endif
     Sys_Set_Hwnd_4F2C50(Sys_GetWindowHandle_4EE180());
 
     dword_5CA4D4 = 0;
@@ -416,6 +463,7 @@ EXPORT void CC Init_Sound_DynamicArrays_And_Others_43BDB0()
     Init_GameStates_43BF40(); // Init other vars + switch states
 }
 
+#ifndef TETHYS_SATURN // SATURN: src/sys_saturn.cxx defines it (no message pump, no exit)
 EXPORT void CC SYS_EventsPump_494580()
 {
     if (Sys_PumpMessages_4EE4F4())
@@ -425,6 +473,7 @@ EXPORT void CC SYS_EventsPump_494580()
     }
     sub_4FBA20();
 }
+#endif
 
 EXPORT void CC DDCheat_Allocate_415320()
 {
@@ -496,10 +545,22 @@ EXPORT void CC Game_Run_466D40()
 
     Init_Sound_DynamicArrays_And_Others_43BDB0();
 
+#ifdef TETHYS_SATURN
+    // SATURN (U1c T13, AO 448.ao.7 twin): the player's options record (pad
+    // remap, mono), ABE_EXOD_99 on the backup device. Here rather than in
+    // Input_Init above, where the PC reads its ini: without a cartridge the
+    // backup library borrows its 24 KB from the resource heap, which the call
+    // just above has only now bound; with one, main.cxx already fetched it
+    // before the cartridge heap existed and this only applies it.
+    Tethys_ConfigLoad();
+#endif
+
     Camera camera;
     camera.ctor_480DD0();
 
+#ifndef TETHYS_SATURN // SATURN (L5): no Pxtd chunk in any AE level; AO skips its twin too
     Path_Set_NewData_FromLvls();
+#endif
     
     sLvlArchive_5BC520.Open_Archive_432E80(CdLvlName(LevelIds::eMenu_0));
 
@@ -539,10 +600,12 @@ EXPORT void CC Game_Run_466D40()
     pCheatController_5BC120 = ae_new<CheatController>();
     pCheatController_5BC120->ctor_421BD0();
 
+#ifndef TETHYS_SATURN // SATURN: the PC developer console (DebugHelpers.cpp) is not in the image
     if (gDebugHelpersEnabled)
     {
         DebugHelpers_Init(); // Custom helper code
     }
+#endif
 
     Game_Init_LoadingIcon_482CD0();
 
@@ -648,7 +711,7 @@ EXPORT void CC Game_Shutdown_4F2C30()
 
 EXPORT s32 TMR_Init_4EDE20()
 {
-#if USE_SDL2
+#if USE_SDL2 || defined(TETHYS_SATURN) // SATURN: no Win32 timer; SYS_GetTicks is the FRT (sys_saturn.cxx)
     return 0;
 #else
     struct timecaps_tag ptc = {};
@@ -761,6 +824,9 @@ EXPORT void CC Game_Loop_467230()
                     }
                     else
                     {
+#ifdef TETHYS_SATURN
+                        Tethys_gVuCalls++; // SATURN (U4 T13): one add, no clock read
+#endif
                         pBaseGameObject->VUpdate();
                     }
                 }
@@ -772,12 +838,45 @@ EXPORT void CC Game_Loop_467230()
         }
         GetGameAutoPlayer().SyncPoint(SyncPoints::ObjectsUpdateEnd);
 
+#ifdef TETHYS_SATURN
+        // SATURN (U4 T13): close pu (armed after the previous OT render), feed
+        // the screen and Abe readouts, then bracket AnimateAll.
+        Tethys_gVuList += static_cast<u32>(gBaseGameObject_list_BB47C4->Size());
+        {
+            const u32 tNow = SYS_GetTicks(); // one read per stamp: each span is a difference
+            Tethys_gPhUpd += tNow - sTethysPhase0;
+            sTethysPhase0 = tNow;
+        }
+        Tethys_gCurCam = static_cast<u32>(gMap_5C3030.field_4_current_camera);
+        if (sActiveHero_5C1B68)
+        {
+            Tethys_gAbeX = static_cast<u32>(FP_GetExponent(sActiveHero_5C1B68->field_B8_xpos));
+            Tethys_gAbeY = static_cast<u32>(FP_GetExponent(sActiveHero_5C1B68->field_BC_ypos));
+        }
+        Tethys_gInAnimate = 1; // SATURN (R2's request): set and cleared once per tick
+        const u32 tTethysAnimRaw0 = TETHYS_PT();
+#endif
         // Animate everything
         if (sNum_CamSwappers_5C1B66 <= 0)
         {
             GetGameAutoPlayer().SyncPoint(SyncPoints::AnimateAll);
             AnimationBase::AnimateAll_40AC20(gObjList_animations_5C1A24);
+#ifdef TETHYS_SATURN
+            // SATURN (R2's request, AO 445.ao.1 twin): hand the NEXT tick's cels
+            // to the slave SH-2, which decodes them while VRender and the OT walk
+            // run below.
+            Tethys_CelPrefetch();
+#endif
         }
+#ifdef TETHYS_SATURN
+        Tethys_gInAnimate = 0; // SATURN: back under VUpdate's parentage
+        Tethys_gPhAnimRaw += TETHYS_PT() - tTethysAnimRaw0;
+        {
+            const u32 tNow = SYS_GetTicks();
+            Tethys_gPhAnim += tNow - sTethysPhase0;
+            sTethysPhase0 = tNow;
+        }
+#endif
 
         PrimHeader** ppOtBuffer = gPsxDisplay_5C1130.field_10_drawEnv[gPsxDisplay_5C1130.field_C_buffer_index].field_70_ot_buffer;
 
@@ -802,6 +901,11 @@ EXPORT void CC Game_Loop_467230()
             }
         }
         GetGameAutoPlayer().SyncPoint(SyncPoints::DrawAllEnd);
+#ifdef TETHYS_SATURN
+        // SATURN (U4 T13): the list length, one add at the exit (the walk stops
+        // only on a null, which DynamicArray's swap-with-last forbids).
+        Tethys_gDrawWalk += static_cast<u32>(gObjList_drawables_5C1124->Size());
+#endif
 
         // Render FG1's
         for (s32 i = 0; i < gFG1List_5D1E28->Size(); i++)
@@ -825,12 +929,29 @@ EXPORT void CC Game_Loop_467230()
 
         DebugFont_Flush_4DD050();
         PSX_DrawSync_4F6280(0);
+#ifdef TETHYS_SATURN
+        {
+            // SATURN (U4 T13) 'vs': ScreenManager::VRender, one call a tick.
+            const u32 tScr0 = TETHYS_PT();
+            pScreenManager_5BB5F4->VRender(ppOtBuffer);
+            Tethys_gScrRaw += TETHYS_PT() - tScr0;
+        }
+#else
         pScreenManager_5BB5F4->VRender(ppOtBuffer);
+#endif
         SYS_EventsPump_494580(); // Exit checking?
+#ifdef TETHYS_SATURN
+        Tethys_gPhRend += SYS_GetTicks() - sTethysPhase0; // SATURN (U4 T13): pv
+#endif
 
         GetGameAutoPlayer().SyncPoint(SyncPoints::RenderOT);
         gPsxDisplay_5C1130.PSX_Display_Render_OT_41DDF0();
-        
+#ifdef TETHYS_SATURN
+        // SATURN (U4 T13): pu restarts here, after the OT render (whose walk and
+        // present src/sys_saturn.cxx measures itself), as AO's loop does.
+        sTethysPhase0 = SYS_GetTicks();
+#endif
+
         GetGameAutoPlayer().SyncPoint(SyncPoints::RenderStart);
 
         // Destroy objects with certain flags

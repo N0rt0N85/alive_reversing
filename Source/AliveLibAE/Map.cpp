@@ -34,6 +34,37 @@ ALIVE_VAR(1, 0x5c311c, s16, sMap_bDoPurpleLightEffect_5C311C, 0);
 ALIVE_VAR(1, 0x5c3118, Camera*, sCameraBeingLoaded_5C3118, nullptr);
 ALIVE_VAR(1, 0x5c3120, u32, sSoundChannelsMask_5C3120, 0);
 
+#ifdef TETHYS_SATURN
+// SATURN (stream R1): the platform hooks this file calls, AO Map.cpp's twins.
+// Flip notification and marks, src/renderer_saturn.cxx: the sprite list is
+// emptied and the flip timer stamped at T0 (420.ao.1: the wipe effect travels
+// with the notification), row 20's head marks (446.ao.8).
+extern "C" void Tethys_OnScreenChange(s32 inMenu, s32 effect);
+extern "C" void Tethys_FlipMark(s32 k);
+extern "C" bool Tethys_gCamPaintHidden; // 420.ao.1: the next stream paints behind a film
+extern "C" volatile s32 Tethys_gBootPhase; // src/sys_saturn.cxx: which GoTo_Camera phase was live
+extern "C" void Tethys_CamCacheReset();    // src/cam_cache.cxx, level-scoped (bt1061)
+extern "C" void Tethys_CamPathPreload(const void* pCamNames, s32 count); // ResourceManager.cpp (426.ao.4)
+bool Tethys_MenuPinsRelease();             // ResourceManager.cpp (442.ao.1)
+extern "C" void Tethys_ActorPackForLevel(const char* lvl2); // src/renderer_saturn.cxx (R2, D-V1)
+extern "C" u8 Tethys_gChangeFilmPass;      // src/movie_ae.cxx: the eUnknown_11 film pass is running
+// 425.ao.10/426.ao.2/bt1044-1047/bt1069: the flip partition, latched per screen
+// change (renderer and CD seam counters, zeroed at T0; raw ticks ~208 a ms).
+extern "C" u32 Tethys_RawTicks();
+extern "C" u32 Tethys_gFlipPostRaw0;
+extern "C" volatile u32 Tethys_gFlipPostMs;
+extern "C" volatile u32 Tethys_gFlipQ[4];
+extern "C" u32 Tethys_gCdRawAccum;
+extern "C" volatile u32 Tethys_gFlipCdMs;
+extern "C" u32 Tethys_gCdBytes;
+extern "C" volatile u32 Tethys_gFlipKb;
+extern "C" u32 Tethys_gCdReads;
+extern "C" volatile u32 Tethys_gFlipReads;
+// 446.ao.11: the camera GoTo_Camera already asked for (the block above its old
+// cameras' teardown); Load_Path_Items must not ask a second time.
+static Camera* sTethysAskedEarly = nullptr;
+#endif
+
 
 // Map Path_ChangeTLV::field_18_wipe to CameraSwapEffects
 const CameraSwapEffects kPathChangeEffectToInternalScreenChangeEffect_55D55C[10] = {
@@ -66,6 +97,9 @@ EXPORT void CC static_map_init_4802D0()
 
 void Map::ScreenChange_Common()
 {
+#ifdef TETHYS_SATURN
+    Tethys_FlipMark(0); // 446.ao.8: row 20 `a` = T0 to here (the teardown); one caller, after it
+#endif
     if (field_6_state == CamChangeStates::eSliceCam_1)
     {
         ResourceManager::Reclaim_Memory_49C470(0);
@@ -89,6 +123,89 @@ void Map::ScreenChange_480B80()
     {
         return;
     }
+
+#ifdef TETHYS_SATURN
+    // SATURN (AO 420.ao.1/310.ao.1 twin, U1a A13, U10 R13): a screen change is
+    // committed past this point. The renderer empties the sprite list (the dtor
+    // storm below frees their textures while the synchronous stream holds the
+    // display), stamps the flip timer and carries the effect; the level is
+    // passed in, not sampled later, because field_0_current_level is the next
+    // one by the time the flip ramp reads it.
+    Tethys_OnScreenChange(field_0_current_level == LevelIds::eMenu_0 ? 1 : 0,
+                          static_cast<s32>(field_10_screen_change_effect));
+    // SATURN (AO 446.ao.8/446.ao.9 twin, U1a A18): start the new screen's .CAM
+    // read NOW, under the teardown and the heap compaction below. Inside the
+    // loaded level only (a level change swaps the .LVL), never for a film, which
+    // owns the drive. A walk off the screen edge (eSliceCam_1) is predicted the
+    // way Handle_PathTransition_481610 will pick it: the PathTransition TLV
+    // under the hero, else the neighbouring cell in the direction of travel. A
+    // wrong guess costs one stopped read (the reader restarts any read that is
+    // not its record).
+    if (field_0_current_level != LevelIds::eMenu_0)
+    {
+        char_type camName[20] = {};
+        LevelIds lvl = field_A_level;
+        CameraSwapEffects eff = field_10_screen_change_effect;
+        if (field_6_state == CamChangeStates::eInstantChange_2)
+        {
+            Path_Format_CameraName_460FB0(camName, field_A_level, field_C_path, field_E_camera); // with ".CAM"
+        }
+        else if (field_6_state == CamChangeStates::eSliceCam_1)
+        {
+            Path_Change* pTlv = nullptr;
+            if (field_18_pAliveObj)
+            {
+                const s16 x = FP_GetExponent(field_18_pAliveObj->field_B8_xpos);
+                const s16 y = FP_GetExponent(field_18_pAliveObj->field_BC_ypos);
+                pTlv = static_cast<Path_Change*>(sPath_dword_BB47C0->TLV_Get_At_4DB4B0(x, y, x, y, TlvTypes::PathTransition_1));
+            }
+            if (pTlv)
+            {
+                lvl = pTlv->field_10_level;
+                eff = kPathChangeEffectToInternalScreenChangeEffect_55D55C[pTlv->field_18_wipe];
+                Path_Format_CameraName_460FB0(camName, pTlv->field_10_level, pTlv->field_12_path, pTlv->field_14_camera);
+            }
+            else
+            {
+                eff = CameraSwapEffects::eLeftToRight_1; // a slide, as Handle_PathTransition sets
+                s32 cx = field_D0_cam_x_idx;
+                s32 cy = field_D2_cam_y_idx;
+                switch (field_14_direction)
+                {
+                    case MapDirections::eMapLeft_0:
+                        cx--;
+                        break;
+                    case MapDirections::eMapRight_1:
+                        cx++;
+                        break;
+                    case MapDirections::eMapTop_2:
+                        cy--;
+                        break;
+                    case MapDirections::eMapBottom_3:
+                        cy++;
+                        break;
+                    default:
+                        break;
+                }
+                if (cx >= 0 && cy >= 0 && cx < sPath_dword_BB47C0->field_6_cams_on_x && cy < sPath_dword_BB47C0->field_8_cams_on_y)
+                {
+                    const u8* pPathRes = *GetPathResourceBlockPtr(field_2_current_path);
+                    memcpy(camName, pPathRes + sizeof(CameraName) * (cx + cy * sPath_dword_BB47C0->field_6_cams_on_x), sizeof(CameraName));
+                    if (camName[0])
+                    {
+                        strcat(camName, ".CAM");
+                    }
+                }
+            }
+        }
+        if (camName[0] && lvl == field_0_current_level
+            && eff != CameraSwapEffects::ePlay1FMV_5 && eff != CameraSwapEffects::ePlay2FMVs_9
+            && eff != CameraSwapEffects::ePlay3FMVs_10 && eff != CameraSwapEffects::eUnknown_11)
+        {
+            ResourceManager::Tethys_PrefetchCamFile(camName);
+        }
+    }
+#endif
 
     if (sMap_bDoPurpleLightEffect_5C311C)
     {
@@ -186,7 +303,18 @@ void Map::GetPathResourceBlockPtrs()
     // Get pointer to each PATH
     for (s32 i = 1; i < Path_Get_Num_Paths(field_A_level); ++i)
     {
+#ifdef TETHYS_SATURN
+        // SATURN (AO 454.ao.1 twin, U1a A10): THE PATHS ARE LOCKED. Path::Loader_4DB800
+        // keeps a raw Path_TLV* across every factory call, and a factory whose
+        // allocation compacts the heap (Reclaim_Memory_49C470 moves every
+        // unlocked block) would leave it on the old address. A locked block is
+        // never moved and still goes with its last ref (FreeResource_Impl clears
+        // the flag), so the level change frees it as before. `pp` counts the
+        // compactions it refused.
+        sPathsArrayExtended.field_0_pPathRecs[i] = ResourceManager::GetLoadedResource_49C2A0(ResourceManager::Resource_Path, i, TRUE, TRUE);
+#else
         sPathsArrayExtended.field_0_pPathRecs[i] = ResourceManager::GetLoadedResource_49C2A0(ResourceManager::Resource_Path, i, TRUE, FALSE);
+#endif
 
         if (i < ALIVE_COUNTOF(field_54_path_res_array.field_0_pPathRecs))
         {
@@ -615,6 +743,11 @@ void Map::Reset_4805D0()
 
 void Map::GoTo_Camera_481890()
 {
+#ifdef TETHYS_SATURN
+    Tethys_gBootPhase = 1;
+    Tethys_FlipMark(1);          // 446.ao.8: row 20 `b` ends here (the heap compaction)
+    sTethysAskedEarly = nullptr; // 446.ao.11: never carried across a change
+#endif
     s16 bShowLoadingIcon = FALSE;
     if (field_0_current_level != LevelIds::eMenu_0 && field_0_current_level != LevelIds::eCredits_16 && field_0_current_level != LevelIds::eNone)
     {
@@ -623,6 +756,11 @@ void Map::GoTo_Camera_481890()
 
     if (field_10_screen_change_effect == CameraSwapEffects::eUnknown_11)
     {
+#ifdef TETHYS_SATURN
+        // SATURN (review RV1): the films of this pass play before the destination
+        // is painted; src/movie_ae.cxx RestoreBackground leaves only those to it.
+        Tethys_gChangeFilmPass = 1;
+#endif
         BaseGameObject* pFmvRet = FMV_Camera_Change_482650(nullptr, this, field_0_current_level);
         for (s32 i = 0; i < gBaseGameObject_list_BB47C4->Size(); i++)
         {
@@ -660,6 +798,9 @@ void Map::GoTo_Camera_481890()
                 }
             }
         }
+#ifdef TETHYS_SATURN
+        Tethys_gChangeFilmPass = 0;
+#endif
 
         if (sSoundChannelsMask_5C3120)
         {
@@ -668,7 +809,21 @@ void Map::GoTo_Camera_481890()
         sSoundChannelsMask_5C3120 = SND_4CA5D0(0, 0, 36, 70, 0, 0);
     }
 
+#ifdef TETHYS_SATURN
+    // SATURN (decision D-R5, AO 420.ao.1 + 448.ao.7 policy, U1a A16): test the
+    // DESTINATION level. field_0_current_level is still the level being left
+    // here, so the PC's test never armed the icon on "Begin" (the menu is
+    // current), the one load the player watches. Never at the boot's arrival at
+    // the menu (from eNone, the only origin that arrives there from nowhere),
+    // never when an attract demo leaves the menu (the icon is an object, and one
+    // more object moves the order a recording's actors update in), never for
+    // the credits.
+    if (field_A_level != LevelIds::eCredits_16
+        && !(field_A_level == LevelIds::eMenu_0 && field_0_current_level == LevelIds::eNone)
+        && !(gAttract_5C1BA0 && field_0_current_level == LevelIds::eMenu_0))
+#else
     if (field_0_current_level != LevelIds::eMenu_0 && field_0_current_level != LevelIds::eNone)
+#endif
     {
         if (field_A_level != field_0_current_level
             || field_8_force_load
@@ -689,6 +844,17 @@ void Map::GoTo_Camera_481890()
     {
         pResourceManager_5C1BB0->LoadingLoop_465590(bShowLoadingIcon);
 
+#ifdef TETHYS_SATURN
+        if (field_A_level != field_0_current_level)
+        {
+            // SATURN (AO bt1061 + 442.ao.1 twins, U1a A13): the .CAM cache is
+            // level-scoped (record names are unique only within an archive, and
+            // the archive's base sector moves: a stale hit would stream the wrong
+            // screen), and the menu pins mean nothing once the menu is left.
+            Tethys_CamCacheReset();
+            Tethys_MenuPinsRelease();
+        }
+#endif
         // Free all cameras
         for (s32 i = 0; i < ALIVE_COUNTOF(field_2C_camera_array); i++)
         {
@@ -721,6 +887,20 @@ void Map::GoTo_Camera_481890()
 
         pResourceManager_5C1BB0->LoadingLoop_465590(bShowLoadingIcon);
 
+#ifdef TETHYS_SATURN
+        if (field_A_level != field_0_current_level)
+        {
+            // SATURN (R2's request, U10 R08 runtime half, D-V1): the DESTINATION
+            // level's actor palette pack (ACTORPAL.<two letters>;1). Here no CD
+            // file is mid-read (LoadingLoop just drained the queue), no camera
+            // streams (every camera was freed above; ScreenChange never
+            // prefetches across levels) and the new archive is not open yet (the
+            // pack read may close the current GFS handle). The boot level comes
+            // through here too: the first GoTo_Camera arrives from eNone.
+            Tethys_ActorPackForLevel(Path_Get_Lvl_Name(field_A_level));
+        }
+#endif
+
         // Open LVL
         while (!sLvlArchive_5BC520.Open_Archive_432E80(CdLvlName(field_A_level)))
         {
@@ -744,6 +924,9 @@ void Map::GoTo_Camera_481890()
         // Get pointer to each PATH
         GetPathResourceBlockPtrs();
 
+#ifdef TETHYS_SATURN
+        Tethys_gBootPhase = 2;
+#endif
         if (field_A_level == field_0_current_level)
         {
             MusicController::PlayMusic_47FD60(MusicController::MusicTypes::eNone_0, sActiveHero_5C1B68, 0, 0);
@@ -853,6 +1036,20 @@ void Map::GoTo_Camera_481890()
         field_D8_restore_quick_save = nullptr;
     }
 
+#ifdef TETHYS_SATURN
+    // SATURN (AO 426.ao.4 twin): with a cartridge, the whole path's backgrounds
+    // in ONE CD command at a path or level change, before camera[0] is built so
+    // the screen we arrive on is served from the span too. Best-effort in every
+    // direction (no cartridge, an oversized path, a failed read: the per-screen
+    // reader runs as before).
+    if (prevPathId != field_2_current_path || prevLevelId != field_0_current_level)
+    {
+        Tethys_CamPathPreload(*GetPathResourceBlockPtr(field_2_current_path),
+                              sPath_dword_BB47C0->field_6_cams_on_x * sPath_dword_BB47C0->field_8_cams_on_y);
+    }
+    Tethys_gBootPhase = 4;
+#endif
+
     // Copy camera array and blank out the source
     for (s32 i = 0; i < ALIVE_COUNTOF(field_40_stru_5); i++)
     {
@@ -861,10 +1058,26 @@ void Map::GoTo_Camera_481890()
     }
 
     field_2C_camera_array[0] = Create_Camera_4829E0(field_D0_cam_x_idx, field_D2_cam_y_idx, 1);
+#ifdef TETHYS_SATURN
+    // SATURN (AO S4 twin, decision D-R3, U1a A9): THE NEIGHBOUR CAMERAS ARE NOT
+    // BUILT. The PC keeps the four screens around this one resident (their
+    // FG1, Anim and Font chunks and every resource their TLVs ask for); the
+    // archived beta measured 284,248 of 373,308 B of MIP01C04's resident set
+    // never shown. Null neighbours are an already-supported state: Create_Camera
+    // returns null for any cell without a camera name and every consumer
+    // tolerates it. What they answered is answered from the path's CameraName
+    // grid instead (Tethys_GridHasCamera: the edge flips and the neighbour
+    // world rectangles); a flip loads the new cell inside GoTo_Camera.
+    field_2C_camera_array[3] = nullptr;
+    field_2C_camera_array[4] = nullptr;
+    field_2C_camera_array[1] = nullptr;
+    field_2C_camera_array[2] = nullptr;
+#else
     field_2C_camera_array[3] = Create_Camera_4829E0(field_D0_cam_x_idx - 1, field_D2_cam_y_idx, 0);
     field_2C_camera_array[4] = Create_Camera_4829E0(field_D0_cam_x_idx + 1, field_D2_cam_y_idx, 0);
     field_2C_camera_array[1] = Create_Camera_4829E0(field_D0_cam_x_idx, field_D2_cam_y_idx - 1, 0);
     field_2C_camera_array[2] = Create_Camera_4829E0(field_D0_cam_x_idx, field_D2_cam_y_idx + 1, 0);
+#endif
 
     // Free resources for each camera
     for (s32 i = 0; i < ALIVE_COUNTOF(field_40_stru_5); i++)
@@ -877,6 +1090,27 @@ void Map::GoTo_Camera_481890()
 
     pResourceManager_5C1BB0->LoadingLoop_465590(bShowLoadingIcon);
 
+#ifdef TETHYS_SATURN
+    // SATURN (AO 446.ao.11 twin, U1a A18): ASK FOR WHAT THE NEW SCREEN NEEDS
+    // BEFORE THE OLD ONE LETS GO. With the neighbours not built, the camera Abe
+    // walks off is destroyed just below, releasing everything it held BEFORE
+    // Load_Path_Items asks for the new screen's resources, which then came back
+    // from the CD. Asking first reads nothing (the request pass walks the path's
+    // TLVs, in memory, and only QUEUES what is missing): a resource both screens
+    // use gains the new camera's reference before the old camera drops its own.
+    // The queued files still load after the stream, i.e. after the frees, so the
+    // heap peak does not grow. A reused camera (flag 1 set) asks nothing.
+    {
+        Camera* pNew = field_2C_camera_array[0];
+        if (pNew && !(pNew->field_30_flags & 1))
+        {
+            sCameraBeingLoaded_5C3118 = pNew;
+            sPath_dword_BB47C0->Loader_4DB800(pNew->field_14_xpos, pNew->field_16_ypos, LoadMode::LoadResourceFromList_1, TlvTypes::None_m1);
+            sCameraBeingLoaded_5C3118 = nullptr;
+            sTethysAskedEarly = pNew;
+        }
+    }
+#endif
     // Free each camera itself
     for (s32 i = 0; i < ALIVE_COUNTOF(field_40_stru_5); i++)
     {
@@ -888,8 +1122,21 @@ void Map::GoTo_Camera_481890()
         }
     }
 
+#ifdef TETHYS_SATURN
+    Tethys_gBootPhase = 5;
+#endif
     Map::Load_Path_Items_482C10(field_2C_camera_array[0], LoadMode::ConstructObject_0);
+#ifdef TETHYS_SATURN
+    // 426.ao.2: q0 from lo's own T0 (stamped in FlipEnd, inside the stream above).
+    Tethys_gFlipQ[0] = (Tethys_RawTicks() - Tethys_gFlipPostRaw0) / 208u;
+    u32 qT = Tethys_RawTicks();
+#endif
     pResourceManager_5C1BB0->LoadingLoop_465590(bShowLoadingIcon);
+#ifdef TETHYS_SATURN
+    Tethys_gFlipQ[1] = (Tethys_RawTicks() - qT) / 208u;
+    qT = Tethys_RawTicks();
+    Tethys_gBootPhase = 6;
+#endif
     Map::Load_Path_Items_482C10(field_2C_camera_array[3], LoadMode::ConstructObject_0);
     Map::Load_Path_Items_482C10(field_2C_camera_array[4], LoadMode::ConstructObject_0);
     Map::Load_Path_Items_482C10(field_2C_camera_array[1], LoadMode::ConstructObject_0);
@@ -905,7 +1152,15 @@ void Map::GoTo_Camera_481890()
         }
     }
 
+#ifdef TETHYS_SATURN
+    Tethys_gBootPhase = 7;
+#endif
     sPath_dword_BB47C0->Loader_4DB800(field_D0_cam_x_idx, field_D2_cam_y_idx, LoadMode::ConstructObject_0, TlvTypes::None_m1); // none = load all
+#ifdef TETHYS_SATURN
+    Tethys_gFlipQ[2] = (Tethys_RawTicks() - qT) / 208u; // with the ScreenManager construction (boot only)
+    qT = Tethys_RawTicks();
+    Tethys_gBootPhase = 8;
+#endif
     if (prevPathId != field_2_current_path || prevLevelId != field_0_current_level)
     {
         if (sActiveHero_5C1B68)
@@ -918,6 +1173,17 @@ void Map::GoTo_Camera_481890()
     }
 
     Create_FG1s_480F10();
+
+#ifdef TETHYS_SATURN
+    // 425.ao.10/bt1044-1047/bt1069: q3, then lo (the whole tail since FlipEnd),
+    // lc (the flip's CD time), lk and nr, all over the same window, closed
+    // before the rare film branches below.
+    Tethys_gFlipQ[3] = (Tethys_RawTicks() - qT) / 208u;
+    Tethys_gFlipPostMs = (Tethys_RawTicks() - Tethys_gFlipPostRaw0) / 208u;
+    Tethys_gFlipCdMs = Tethys_gCdRawAccum / 208u;
+    Tethys_gFlipKb = Tethys_gCdBytes >> 10;
+    Tethys_gFlipReads = Tethys_gCdReads;
+#endif
 
     if (field_10_screen_change_effect == CameraSwapEffects::ePlay1FMV_5)
     {
@@ -997,6 +1263,31 @@ Camera* Map::GetCamera(CameraPos pos)
     return field_2C_camera_array[static_cast<s32>(pos)];
 }
 
+#ifdef TETHYS_SATURN
+// SATURN (AO twin, U1a A9): the neighbour Camera objects are never built here
+// (GoTo_Camera_481890), so the edge flips and the neighbour rectangles ask the
+// path's CameraName grid with Create_Camera_4829E0's own border semantics
+// (bounds check, then an empty name = no camera there). No heap.
+static bool Tethys_GridHasCamera(Map* pMap, s32 dx, s32 dy)
+{
+    const s32 xpos = pMap->field_D0_cam_x_idx + dx;
+    const s32 ypos = pMap->field_D2_cam_y_idx + dy;
+    if (!sPath_dword_BB47C0 || xpos < 0 || ypos < 0
+        || xpos >= sPath_dword_BB47C0->field_6_cams_on_x || ypos >= sPath_dword_BB47C0->field_8_cams_on_y)
+    {
+        return false;
+    }
+    u8** ppPathRes = pMap->GetPathResourceBlockPtr(pMap->field_2_current_path);
+    if (!ppPathRes || !*ppPathRes)
+    {
+        return false;
+    }
+    const CameraName* pCamName = reinterpret_cast<const CameraName*>(
+        &(*ppPathRes)[sizeof(CameraName) * (xpos + sPath_dword_BB47C0->field_6_cams_on_x * ypos)]);
+    return pCamName->name[0] != 0;
+}
+#endif
+
 void Map::CreateScreenTransistionForTLV(Path_TLV* pTlv)
 {
     auto obj = ae_new<CameraSwapper>();
@@ -1071,6 +1362,47 @@ s16 Map::Get_Camera_World_Rect_481410(CameraPos camIdx, PSX_RECT* pRect)
     }
 
     Camera* pCamera = field_2C_camera_array[static_cast<s32>(camIdx)];
+#ifdef TETHYS_SATURN
+    // SATURN (AO 448.ao.3 twin, U1a A9): THE NEIGHBOUR SCREENS ARE HEARD. With
+    // the neighbour Camera objects not built, everything that asks where an
+    // object stands relative to the screen got "nowhere" for anything off
+    // screen: the sounds of what walked off (GetDirection_4811A0, Sfx.cpp:243),
+    // the chase and attack logic of a creature next door (Fleech, Glukkon,
+    // Paramite, Scrab, Slog). The cell is tested on the grid, as Create_Camera
+    // would have, and the rectangle is built from the cell indices, which are
+    // what a neighbour Camera's field_14/16 held.
+    s32 camX = 0;
+    s32 camY = 0;
+    if (pCamera)
+    {
+        camX = pCamera->field_14_xpos;
+        camY = pCamera->field_16_ypos;
+    }
+    else if (camIdx != CameraPos::eCamCurrent_0)
+    {
+        static const s8 kDx[5] = {0, 0, 0, -1, 1}; // CameraPos: current, top, bottom, left, right
+        static const s8 kDy[5] = {0, -1, 1, 0, 0};
+        const s32 i = static_cast<s32>(camIdx);
+        if (!Tethys_GridHasCamera(this, kDx[i], kDy[i]))
+        {
+            return 0;
+        }
+        camX = field_D0_cam_x_idx + kDx[i];
+        camY = field_D2_cam_y_idx + kDy[i];
+    }
+    else
+    {
+        return 0;
+    }
+
+    if (!pRect)
+    {
+        return 1;
+    }
+
+    const s16 xpos = static_cast<s16>(camX * field_D4_ptr->field_A_grid_width);
+    const s16 ypos = static_cast<s16>(camY * field_D4_ptr->field_C_grid_height);
+#else
     if (!pCamera)
     {
         return 0;
@@ -1083,6 +1415,7 @@ s16 Map::Get_Camera_World_Rect_481410(CameraPos camIdx, PSX_RECT* pRect)
 
     const s16 xpos = pCamera->field_14_xpos * field_D4_ptr->field_A_grid_width;
     const s16 ypos = pCamera->field_16_ypos * field_D4_ptr->field_C_grid_height;
+#endif
 
     pRect->x = xpos;
     pRect->y = ypos;
@@ -1331,11 +1664,44 @@ void CCSTD Map::Load_Path_Items_482C10(Camera* pCamera, LoadMode loadMode)
     {
         if (loadMode == LoadMode::ConstructObject_0)
         {
+#ifdef TETHYS_SATURN
+            // SATURN (decision D-R1, U1a A4, AO round 5 twin): the .CAM streams
+            // instead of being staged whole: Bits to VDP2 NBG1 (never heaped),
+            // FG1/Anim/Font/Demo fabricated as heap chunks in the camera's array.
+            // Synchronous and complete on return (field_30_flags bit 0 set,
+            // field_C_pCamRes left null: the guarded DecompressCameraToVRam has
+            // nothing to do). The order is the PC's: the camera was queued first
+            // and read first.
+            //   AO 420.ao.1 (U7-T8): a screen change that plays films first paints
+            // its destination HIDDEN, into the background container while NBG1 is
+            // parked, and the end of the films reveals it with register writes
+            // (ScreenManager::DecompressCameraToVRam_40EF60 from CameraSwapper, or
+            // the film layer): no flash of the camera the film will cover, no
+            // second CD read of the same .CAM after it.
+            {
+                const CameraSwapEffects eff = gMap_5C3030.field_10_screen_change_effect;
+                Tethys_gCamPaintHidden = eff == CameraSwapEffects::ePlay1FMV_5
+                                      || eff == CameraSwapEffects::ePlay2FMVs_9
+                                      || eff == CameraSwapEffects::ePlay3FMVs_10;
+            }
+            ResourceManager::Tethys_StreamCamFile(pCamera);
+            Tethys_gCamPaintHidden = false;
+#else
             // Async camera load
             ResourceManager::LoadResourceFile_49C130(pCamera->field_1E_cam_name, Camera::On_Loaded_480ED0, pCamera, pCamera);
+#endif
 
             sCameraBeingLoaded_5C3118 = pCamera;
-            sPath_dword_BB47C0->Loader_4DB800(pCamera->field_14_xpos, pCamera->field_16_ypos, LoadMode::LoadResourceFromList_1, TlvTypes::None_m1); // none = load all
+#ifdef TETHYS_SATURN
+            if (sTethysAskedEarly == pCamera)
+            {
+                sTethysAskedEarly = nullptr; // 446.ao.11: asked before the old camera let go
+            }
+            else
+#endif
+            {
+                sPath_dword_BB47C0->Loader_4DB800(pCamera->field_14_xpos, pCamera->field_16_ypos, LoadMode::LoadResourceFromList_1, TlvTypes::None_m1); // none = load all
+            }
         }
         else
         {
@@ -1409,6 +1775,34 @@ s16 Map::SetActiveCameraDelayed_4814A0(MapDirections direction, BaseAliveGameObj
     {
         switch (direction)
         {
+#ifdef TETHYS_SATURN
+            // SATURN (AO twin, U1a A9): the neighbour cameras are not built:
+            // the grid answers (Tethys_GridHasCamera), else no edge flip at all.
+            case MapDirections::eMapLeft_0:
+                if (!Tethys_GridHasCamera(this, -1, 0))
+                {
+                    return 0;
+                }
+                break;
+            case MapDirections::eMapRight_1:
+                if (!Tethys_GridHasCamera(this, 1, 0))
+                {
+                    return 0;
+                }
+                break;
+            case MapDirections::eMapBottom_3:
+                if (!Tethys_GridHasCamera(this, 0, 1))
+                {
+                    return 0;
+                }
+                break;
+            case MapDirections::eMapTop_2:
+                if (!Tethys_GridHasCamera(this, 0, -1))
+                {
+                    return 0;
+                }
+                break;
+#else
             case MapDirections::eMapLeft_0:
                 if (!GetCamera(CameraPos::eCamLeft_3))
                 {
@@ -1433,6 +1827,7 @@ s16 Map::SetActiveCameraDelayed_4814A0(MapDirections direction, BaseAliveGameObj
                     return 0;
                 }
                 break;
+#endif
         }
 
         field_A_level = field_0_current_level;

@@ -5,6 +5,22 @@
 #include "DynamicArray.hpp"
 #include "Primitives.hpp"
 
+#ifdef TETHYS_SATURN
+// SATURN (decision D-R2, U1a A6): AO's pixel-path block (AliveLibAO/FG1.cpp:23).
+// A piece is uploaded to a PSX VRAM-model slot (field_58_rect, w 0 = refused)
+// and drawn by its two textured quads; the PC's 64-byte transparency mask
+// (field_68_array_of_height) has no reader on this path and goes: 0x68 B a
+// piece instead of 0xA8 (BRP19C05: 94 pieces, 3,760 B less CHNK).
+struct Fg1Block final
+{
+    Poly_FT4 field_0_polys[2];
+    PSX_RECT field_58_rect;
+    s32 field_60_padding;
+    s16 field_64_padding;
+    Layer field_66_mapped_layer;
+};
+ALIVE_ASSERT_SIZEOF(Fg1Block, 0x68);
+#else
 struct Fg1Block final
 {
     Poly_FT4 field_0_polys[2];
@@ -16,6 +32,7 @@ struct Fg1Block final
     u32 field_68_array_of_height[16];
 };
 ALIVE_ASSERT_SIZEOF(Fg1Block, 0xA8);
+#endif
 
 struct Fg1Chunk;
 enum class LevelIds : s16;

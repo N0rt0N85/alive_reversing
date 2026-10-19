@@ -58,3 +58,10 @@ private:
     SparkType field_64_type;
 };
 ALIVE_ASSERT_SIZEOF(Spark, 0x68);
+
+#ifdef TETHYS_SATURN
+#include "TethysObjectHooks.hpp"
+// SATURN (U1d T1): every ae_new<Spark> site null-tests its result (R1's scan,
+// obj/R1/softscan2.py, 19 sites): soft OOM.
+TETHYS_AE_SOFT_OOM_TYPE(Spark);
+#endif

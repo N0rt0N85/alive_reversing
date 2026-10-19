@@ -101,7 +101,14 @@ SnoozeParticle* SnoozeParticle::ctor_4B06F0(FP xpos, FP ypos, Layer layer, FP sc
     field_1E4_state = SnoozeParticleState::eRising_0;
     field_4A_count_down = 1;
     field_48_idx = Math_NextRandom() % 36;
+#ifdef TETHYS_SATURN
+    // SATURN (U1d T20, U3 T10): an s16 table entry through a double was a
+    // soft-float conversion pair at every Z; FP_FromInteger is bit-identical for
+    // integers (x << 16, exact for every s16).
+    field_30_dx = FP_FromInteger(xPositionDeltaEntries_560408[field_48_idx]);
+#else
     field_30_dx = FP_FromDouble(xPositionDeltaEntries_560408[field_48_idx]);
+#endif
     field_48_idx++;
     return this;
 }

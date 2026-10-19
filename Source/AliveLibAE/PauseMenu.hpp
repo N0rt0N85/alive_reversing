@@ -57,7 +57,16 @@ public:
     virtual void VRender(PrimHeader** ppOt) override;
     virtual void VScreenChanged() override;
 
+#ifdef TETHYS_SATURN
+    // SATURN (review RV1): not user-provided, so ae_new's `new (buffer) T()`
+    // zero-initialises the object like every other AE object. ctor_48FB80 never
+    // Inits field_20_animation, and the Saturn base dtor always vCleanUps it
+    // (BaseAnimatedWithPhysicsGameObject.cpp): with the empty user-provided body
+    // it freed whatever handle and VRAM rect the reused TLSF block held.
+    PauseMenu() = default;
+#else
     PauseMenu();
+#endif
 
     EXPORT PauseMenu* ctor_48FB80();
     EXPORT void dtor_48FCE0();

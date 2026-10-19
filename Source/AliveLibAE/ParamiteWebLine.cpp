@@ -9,6 +9,9 @@
 #include "PsxDisplay.hpp"
 #include "ShadowZone.hpp"
 #include "Rope.hpp"
+#ifdef TETHYS_SATURN
+#include "TethysObjectHooks.hpp"
+#endif
 
 ParamiteWebLine* ParamiteWebLine::ctor_4E1FC0(Path_ParamiteWebLine* pTlv, s32 tlvInfo)
 {
@@ -89,7 +92,33 @@ ParamiteWebLine* ParamiteWebLine::ctor_4E1FC0(Path_ParamiteWebLine* pTlv, s32 tl
     }
 
     field_F4_anim_segment_count = (field_F6_piece_length + field_FA_bottom - field_F8_top) / field_F6_piece_length;
+#ifdef TETHYS_SATURN
+    // SATURN (review RV4): -1 when the line's bottom sits two pieces or more
+    // above its top (a collision line 14 px or more below the camera at half
+    // scale). The PC's malloc of the wrapped size failed and the loops never ran;
+    // the locked block below would die on its fatal. vRender's walk does not run
+    // either in that case (bottom <= top).
+    if (field_F4_anim_segment_count < 0)
+    {
+        field_F4_anim_segment_count = 0;
+    }
+#endif
+#ifdef TETHYS_SATURN
+    // SATURN (U1d T22): THE SEGMENTS LEAVE THE HWRAM POOL. One AnimationUnknown
+    // per piece (up to 17 at full scale, 35 at half), 2 to 4 KB of the pool a web
+    // line and up to four lines on one screen (pv 5/10), out of a pool of about
+    // 42 KB. They go to a LOCKED block of the resource heap instead, as
+    // ParamiteWeb's and Rope's already do (locked: the raw pointer below must not
+    // move), with the one-call burst descriptor at its tail (vRender). A web line
+    // is gameplay, so a refusal stays the allocator's named fatal (D-B4: fatal
+    // by default), as the pool's was.
+    field_1AC_tethys_ppSegments = ResourceManager::Allocate_New_Locked_Resource_49BF40(
+        ResourceManager::Resource_Web, 0,
+        sizeof(AnimationUnknown) * field_F4_anim_segment_count + Tethys_BurstTailBytes(field_F4_anim_segment_count));
+    field_FC_pRes = reinterpret_cast<AnimationUnknown*>(*field_1AC_tethys_ppSegments);
+#else
     field_FC_pRes = reinterpret_cast<AnimationUnknown*>(ae_malloc_non_zero_4954F0(sizeof(AnimationUnknown) * field_F4_anim_segment_count));
+#endif
     for (s32 i = 0; i < field_F4_anim_segment_count; i++)
     {
         new (&field_FC_pRes[i]) AnimationUnknown(); // We have memory but no constructor was called.. so use placement new to get a constructed instance
@@ -190,7 +219,11 @@ ParamiteWebLine* ParamiteWebLine::vdtor_4E2460(s32 flags)
 void ParamiteWebLine::dtor_4E2490()
 {
     SetVTable(this, 0x547FA0);
+#ifdef TETHYS_SATURN
+    ResourceManager::FreeResource_49C330(field_1AC_tethys_ppSegments); // SATURN (U1d T22)
+#else
     ae_non_zero_free_495560(field_FC_pRes);
+#endif
     field_108_anim_flare.vCleanUp_40C630();
     Path::TLV_Reset_4DB8E0(field_100_tlv_info, -1, 0, 0);
     BaseAnimatedWithPhysicsGameObject_dtor_424AD0();
@@ -251,6 +284,19 @@ void ParamiteWebLine::vRender_4E2530(PrimHeader** ppOt)
         pScreenManager_5BB5F4->InvalidateRect_40EC90(rect.x, rect.y, rect.w, rect.h, pScreenManager_5BB5F4->field_3A_idx);
     }
 
+#ifdef TETHYS_SATURN
+    // SATURN (U1d T22, AO 448.ao.7 twin): ONE RENDERER CALL FOR THE WHOLE LINE.
+    // Every segment is the lead's quad (field_20_animation, rendered off screen
+    // at 640,240) moved and recoloured; the segments are computed and clipped
+    // exactly as before but LISTED, and only the lead goes in the table carrying
+    // the list (src/renderer_saturn.cxx, DrawBurst draws them in the table's own
+    // order: last queued first, the lead last). A segment whose colour or clip
+    // differs from the first is drawn by the full path, as before. Only when the
+    // lead really queues (it renders and has its block).
+    PrimHeader** ppItemOt = (field_20_animation.field_4_flags.Get(AnimFlags::eBit3_Render) && field_20_animation.field_20_ppBlock) ? nullptr : ppOt;
+    Tethys_PrimBurst* pTethysBurst = reinterpret_cast<Tethys_PrimBurst*>(reinterpret_cast<u8*>(field_FC_pRes) + sizeof(AnimationUnknown) * field_F4_anim_segment_count);
+    s32 tethysListed = 0;
+#endif
     field_20_animation.vRender_40B820(640, 240, ppOt, 0, 0);
 
     s32 idx = 0;
@@ -292,10 +338,21 @@ void ParamiteWebLine::vRender_4E2530(PrimHeader** ppOt)
         field_FC_pRes[idx].field_9_g = static_cast<u8>(g);
         field_FC_pRes[idx].field_A_b = static_cast<u8>(b);
 
+#ifdef TETHYS_SATURN
+        field_FC_pRes[idx].vRender_40B820(
+            FP_GetExponent(FP_FromInteger(render_xpos) - pScreenManager_5BB5F4->field_20_pCamPos->field_0_x),
+            FP_GetExponent(FP_FromInteger(render_ypos) - pScreenManager_5BB5F4->field_20_pCamPos->field_4_y),
+            ppItemOt, 0, 0);
+        if (!ppItemOt && field_FC_pRes[idx].field_4_flags.Get(AnimFlags::eBit3_Render))
+        {
+            pTethysBurst->mIdx[tethysListed++] = static_cast<u8>(idx);
+        }
+#else
         field_FC_pRes[idx].vRender_40B820(
             FP_GetExponent(FP_FromInteger(render_xpos) - pScreenManager_5BB5F4->field_20_pCamPos->field_0_x),
             FP_GetExponent(FP_FromInteger(render_ypos) - pScreenManager_5BB5F4->field_20_pCamPos->field_4_y),
             ppOt, 0, 0);
+#endif
 
         PSX_RECT rect = {};
         field_FC_pRes[idx].GetRenderedSize_40C980(&rect);
@@ -309,6 +366,18 @@ void ParamiteWebLine::vRender_4E2530(PrimHeader** ppOt)
         render_ypos -= field_F6_piece_length;
         idx++;
     }
+#ifdef TETHYS_SATURN
+    if (!ppItemOt && tethysListed != 0)
+    {
+        const s32 buf = gPsxDisplay_5C1130.field_C_buffer_index;
+        pTethysBurst->mMagic = kTethysBurstMagic;
+        pTethysBurst->mSelf = pTethysBurst;
+        pTethysBurst->mpFirst = reinterpret_cast<const u8*>(&field_FC_pRes[0].field_10_polys[buf]);
+        pTethysBurst->mStride = static_cast<u16>(sizeof(AnimationUnknown));
+        pTethysBurst->mCount = static_cast<u16>(tethysListed);
+        field_20_animation.field_2C_ot_data[buf].mBase.header.hackPtr = pTethysBurst;
+    }
+#endif
 }
 
 void ParamiteWebLine::vScreenChanged_4E2BC0()

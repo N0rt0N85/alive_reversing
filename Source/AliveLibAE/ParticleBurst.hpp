@@ -41,3 +41,9 @@ private:
     s16 field_106_count;
 };
 ALIVE_ASSERT_SIZEOF(ParticleBurst, 0x108);
+
+#ifdef TETHYS_SATURN
+#include "TethysObjectHooks.hpp"
+// SATURN (U1d T1): every ae_new<ParticleBurst> site null-tests its result: soft OOM.
+TETHYS_AE_SOFT_OOM_TYPE(ParticleBurst);
+#endif

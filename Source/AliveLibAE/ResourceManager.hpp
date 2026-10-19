@@ -143,12 +143,31 @@ public:
     EXPORT static ResourceHeapItem* CC Split_block_49BDC0(ResourceHeapItem* pItem, s32 size);
     EXPORT static s32 CC SEQ_HashName_49BE30(const char_type* seqFileName);
     static u8** Alloc_New_Resource_Impl(u32 type, u32 id, u32 size, bool locked, ResourceManager::BlockAllocMethod allocType);
+#if defined(TETHYS_GAME_AE)
+    // SATURN (stream R1, AO ao262.2/ao262.3 twin): the allocator's two
+    // decisions, split. bReclaimOnFail = compact and retry once (it MOVES every
+    // unlocked block: never from a caller holding a raw pointer into one);
+    // bFatalOnFail = a refusal is the named RES NULL death screen, else the
+    // null is handed back and counted (`rn`, Tethys_gResSoftNull). Impl is
+    // ImplEx(..., true, true): upstream's behaviour, plus the fatal.
+    static u8** Alloc_New_Resource_ImplEx(u32 type, u32 id, u32 size, bool locked, ResourceManager::BlockAllocMethod allocType, bool bReclaimOnFail, bool bFatalOnFail);
+    // Announces ImplEx to the object side (AliveLibAE/TethysObjectHooks.hpp,
+    // stream R2: Tethys_ResAllocSoft routes the cosmetic sites through it).
+#define TETHYS_AE_RES_IMPLEX 1
+#endif
     EXPORT static u8** CC Alloc_New_Resource_49BED0(u32 type, u32 id, u32 size);
     EXPORT static u8** CC Allocate_New_Locked_Resource_49BF40(u32 type, u32 id, u32 size);
     EXPORT static u8** CC Allocate_New_Block_49BFB0(s32 sizeBytes, BlockAllocMethod allocMethod);
     EXPORT static s32 CC LoadResourceFile_49C130(const char_type* filename, TLoaderFn pFn, Camera* a4, Camera* pCamera);
     EXPORT static s16 CC LoadResourceFile_49C170(const char_type* pFileName, Camera* pCamera);
+#if defined(TETHYS_GAME_AE)
+    // SATURN (AO's twin): blockBytes = the loaded file block (sectors << 11),
+    // so the chunk walk stops at the block's end instead of trusting a size
+    // read from the heap past it. 0 keeps the size-relative backstop alone.
+    EXPORT static s16 CC Move_Resources_To_DArray_49C1C0(u8** ppRes, DynamicArrayT<u8*>* pArray, u32 blockBytes = 0);
+#else
     EXPORT static s16 CC Move_Resources_To_DArray_49C1C0(u8** ppRes, DynamicArrayT<u8*>* pArray);
+#endif
     EXPORT static u8** CC GetLoadedResource_49C2A0(u32 type, u32 resourceID, u16 addUseCount, u16 bLock);
     EXPORT static void CC Inc_Ref_Count_49C310(u8** ppRes);
     EXPORT static s16 CC FreeResource_49C330(u8** handle);
@@ -160,6 +179,25 @@ public:
     EXPORT static void CC Set_Header_Flags_49C650(u8** ppRes, s16 flags);
     EXPORT static void CC Free_Resource_Of_Type_49C6B0(u32 type);
     EXPORT static void CC NoEffect_49C700();
+
+#if defined(TETHYS_GAME_AE)
+    // SATURN (stream R1, D-R1, AO round 5 twin): the .CAM is never staged
+    // whole in the heap. The record streams through CamSectorReader: the Bits
+    // payload goes straight to VDP2 NBG1 (never heaped), every other chunk
+    // (FG1, Anim, Font, Demo) is fabricated in the heap with one reference and
+    // pushed into pCamera->field_0, and field_30_flags bit 0 is set. bitsOnly
+    // re-drives the background alone (a camera kept across a screen change, a
+    // film that drew over NBG1): its field_0 already holds the chunks.
+    static void Tethys_StreamCamFile(Camera* pCamera, bool bitsOnly = false);
+    // The same, for a camera whose field_1E_cam_name is not set (the boot
+    // splash, Game.cpp, loads into a local Camera through LoadResourceFile).
+    static void Tethys_StreamCamFileNamed(Camera* pCamera, const char_type* pName, bool bitsOnly);
+    // AO 446.ao.8: start the next screen's one-read stream at T0.
+    static void Tethys_PrefetchCamFile(const char_type* pName);
+    // src-facing probes of the private FIFO (extern "C" wrappers in the .cpp).
+    static s32 Tethys_PendingReadsImpl(s32* pPos, s32* pSec, s32 max);
+    static void Tethys_LoadingProbeImpl(s32* pCount, s32* pState, s32* pSizeSectors);
+#endif
 
 
 private:

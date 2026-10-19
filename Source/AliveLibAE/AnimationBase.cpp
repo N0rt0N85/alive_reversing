@@ -22,9 +22,17 @@ s8 AnimationBase::Animation_v_40BEE0(s16 /*a2*/, s16 /*a3*/, s32 /*a4*/, s16 /*a
     return 0;
 }
 
+#ifdef TETHYS_SATURN
+// SATURN (bt1128 twin): the animate census the overlay reads (src/sys_saturn.cxx):
+// animations walked (the loop's exit index, one add per call) and decodes made.
+extern "C" unsigned int Tethys_gAnWalk;
+extern "C" unsigned int Tethys_gAnDecode;
+#endif
+
 void CC AnimationBase::AnimateAll_40AC20(DynamicArrayT<AnimationBase>* pAnims)
 {
-    for (auto i = 0; i < pAnims->Size(); i++)
+    auto i = 0;
+    for (; i < pAnims->Size(); i++)
     {
         AnimationBase* pAnim = pAnims->ItemAt(i);
         if (!pAnim)
@@ -42,8 +50,14 @@ void CC AnimationBase::AnimateAll_40AC20(DynamicArrayT<AnimationBase>* pAnims)
             pAnim->field_E_frame_change_counter--;
             if (pAnim->field_E_frame_change_counter == 0)
             {
+#ifdef TETHYS_SATURN
+                Tethys_gAnDecode++;
+#endif
                 pAnim->vDecode_40AC90();
             }
         }
     }
+#ifdef TETHYS_SATURN
+    Tethys_gAnWalk += static_cast<unsigned int>(i);
+#endif
 }

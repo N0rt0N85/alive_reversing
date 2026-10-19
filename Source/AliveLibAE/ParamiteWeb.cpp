@@ -6,6 +6,9 @@
 #include "ShadowZone.hpp"
 #include "ScreenManager.hpp"
 #include "PsxDisplay.hpp"
+#ifdef TETHYS_SATURN
+#include "TethysObjectHooks.hpp"
+#endif
 
 ParamiteWeb* ParamiteWeb::ctor_4E1840(FP xpos, s16 bottom, s16 top, FP scale)
 {
@@ -53,7 +56,12 @@ ParamiteWeb* ParamiteWeb::ctor_4E1840(FP xpos, s16 bottom, s16 top, FP scale)
 
     field_F4_number_of_segments = 240 / field_F6_segment_length;
 
+#ifdef TETHYS_SATURN
+    // SATURN (U1d T22): + the one-call burst descriptor at the block's tail (vRender).
+    field_FC_ppRes = ResourceManager::Allocate_New_Locked_Resource_49BF40(ResourceManager::Resource_Web, 0, sizeof(AnimationUnknown) * (field_F4_number_of_segments) + Tethys_BurstTailBytes(field_F4_number_of_segments));
+#else
     field_FC_ppRes = ResourceManager::Allocate_New_Locked_Resource_49BF40(ResourceManager::Resource_Web, 0, sizeof(AnimationUnknown) * (field_F4_number_of_segments));
+#endif
     field_100_pRes = reinterpret_cast<AnimationUnknown*>(*field_FC_ppRes);
 
     for (s32 i = 0; i < field_F4_number_of_segments; i++)
@@ -170,6 +178,14 @@ void ParamiteWeb::vRender_4E1BA0(PrimHeader** ppOt)
                 maxY = 240;
             }
 
+#ifdef TETHYS_SATURN
+            // SATURN (U1d T22, AO 448.ao.7 twin): one renderer call for the web,
+            // as ParamiteWebLine (see there): the segments are listed, the lead
+            // carries the list.
+            PrimHeader** ppItemOt = (field_20_animation.field_4_flags.Get(AnimFlags::eBit3_Render) && field_20_animation.field_20_ppBlock) ? nullptr : ppOt;
+            Tethys_PrimBurst* pTethysBurst = reinterpret_cast<Tethys_PrimBurst*>(reinterpret_cast<u8*>(field_100_pRes) + sizeof(AnimationUnknown) * field_F4_number_of_segments);
+            s32 tethysListed = 0;
+#endif
             field_20_animation.vRender_40B820(640, 240, ppOt, 0, 0);
 
             if (y_start >= minY)
@@ -183,7 +199,15 @@ void ParamiteWeb::vRender_4E1BA0(PrimHeader** ppOt)
                     field_100_pRes[idx].field_8_r = static_cast<u8>(r);
                     field_100_pRes[idx].field_9_g = static_cast<u8>(g);
                     field_100_pRes[idx].field_A_b = static_cast<u8>(b);
+#ifdef TETHYS_SATURN
+                    field_100_pRes[idx].vRender_40B820(x_start, y_start, ppItemOt, 0, 0);
+                    if (!ppItemOt && field_100_pRes[idx].field_4_flags.Get(AnimFlags::eBit3_Render))
+                    {
+                        pTethysBurst->mIdx[tethysListed++] = static_cast<u8>(idx);
+                    }
+#else
                     field_100_pRes[idx].vRender_40B820(x_start, y_start, ppOt, 0, 0);
+#endif
                     PSX_RECT rect = {};
                     field_100_pRes[idx].GetRenderedSize_40C980(&rect);
                     pScreenManager_5BB5F4->InvalidateRect_40EC90(rect.x, rect.y, rect.w, rect.h, pScreenManager_5BB5F4->field_3A_idx);
@@ -195,6 +219,18 @@ void ParamiteWeb::vRender_4E1BA0(PrimHeader** ppOt)
                     }
                 }
             }
+#ifdef TETHYS_SATURN
+            if (!ppItemOt && tethysListed != 0)
+            {
+                const s32 buf = gPsxDisplay_5C1130.field_C_buffer_index;
+                pTethysBurst->mMagic = kTethysBurstMagic;
+                pTethysBurst->mSelf = pTethysBurst;
+                pTethysBurst->mpFirst = reinterpret_cast<const u8*>(&field_100_pRes[0].field_10_polys[buf]);
+                pTethysBurst->mStride = static_cast<u16>(sizeof(AnimationUnknown));
+                pTethysBurst->mCount = static_cast<u16>(tethysListed);
+                field_20_animation.field_2C_ot_data[buf].mBase.header.hackPtr = pTethysBurst;
+            }
+#endif
         }
     }
 }

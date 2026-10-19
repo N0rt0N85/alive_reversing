@@ -19,6 +19,122 @@
 #include "PathDataExtensions.hpp"
 #include "GameAutoPlayer.hpp"
 
+// SATURN (D-T1): French text read out of the user's Exoddus.exe by
+// tools/ae/ae_text.py into build/generated/ae (gitignored game data). The four
+// .inc files are written together, a text arm also requires the French atlas
+// (RELIVE's US rects draw the French sheets' accents wrong or blank), and
+// TETHYS_LANG_EN keeps RELIVE's English.
+#if defined(TETHYS_SATURN) && !defined(TETHYS_LANG_EN) && __has_include("ae/tethys_ae_pause_fr.inc") && __has_include("ae/tethys_ae_font_atlas_fr.inc")
+#include "ae/tethys_ae_pause_fr.inc"
+#define TETHYS_AE_PAUSE_FR 1
+#define TETHYS_AE_PM_TEXT(fr, en) fr
+#else
+#define TETHYS_AE_PAUSE_FR 0
+#define TETHYS_AE_PM_TEXT(fr, en) en
+#endif
+
+#ifdef TETHYS_SATURN
+// SATURN (U1c T07, PM15): THE PAGES THAT SPOKE KEYBOARD. The rows flagged
+// PC-KEY in the .inc name Enter, Esc, Del and F6; here they name the pad's own
+// buttons through AE's control codes (kConfirm, kBack, kJump, kUp...), which the
+// formatter resolves through the pad map (src/sys_saturn.cxx
+// Input_GetButtonString_492530), so a remap moves the labels too. The French
+// words are the image's own ("Sauver", "Quitter", "Ecraser", "Annuler",
+// "Charger", "Supprimer", "oui", "non"); the banners and the free-slot mark are
+// the Oddysee disc's (425.ao.2), "LIBEREZ" ours. Octal escapes: one byte per
+// glyph in the atlas.
+#if TETHYS_AE_PAUSE_FR
+#define TETHYS_AE_PM_QUIT_YESNO kConfirm " oui   " kBack " non"
+#define TETHYS_AE_PM_SAVE_GO kConfirm "     Sauver"
+#define TETHYS_AE_PM_SAVE_BACK kBack "     Quitter"
+#define TETHYS_AE_PM_OVERWRITE kConfirm " Ecraser   " kBack " Annuler"
+#define TETHYS_AE_PM_LOAD_GO kConfirm "  Charger    " kJump "  Supprimer"
+#define TETHYS_AE_PM_LOAD_BACK kBack "  Annuler"
+#define TETHYS_AE_PM_DELETE_ASK "Supprimer ?   " kConfirm " oui   " kBack " non"
+#define TETHYS_AE_PM_SAVED "SAUVEGARDE OK"
+#define TETHYS_AE_PM_SAVE_FAILED "ECHEC"
+#define TETHYS_AE_PM_LOAD_FAILED "ECHEC"
+#define TETHYS_AE_PM_FREE_FMT "ECHEC : LIBEREZ %d BLOCS"
+#define TETHYS_AE_PM_SLOT_FREE "-- LIBRE --"
+#else
+#define TETHYS_AE_PM_QUIT_YESNO kConfirm " yes   " kBack " no"
+#define TETHYS_AE_PM_SAVE_GO kConfirm "   Save"
+#define TETHYS_AE_PM_SAVE_BACK kBack "   Cancel"
+#define TETHYS_AE_PM_OVERWRITE kConfirm " Overwrite  " kBack " Cancel"
+#define TETHYS_AE_PM_LOAD_GO kUp " " kDown " Select   " kConfirm " Load   " kJump " Delete"
+#define TETHYS_AE_PM_LOAD_BACK kBack "  Cancel"
+#define TETHYS_AE_PM_DELETE_ASK "Delete?   " kConfirm " yes   " kBack " no"
+#define TETHYS_AE_PM_SAVED "SAVED"
+#define TETHYS_AE_PM_SAVE_FAILED "SAVE FAILED"
+#define TETHYS_AE_PM_LOAD_FAILED "LOAD FAILED"
+#define TETHYS_AE_PM_FREE_FMT "FAILED: FREE %d BLOCKS"
+#define TETHYS_AE_PM_SLOT_FREE "-- EMPTY --"
+#endif
+
+// The backup device, shared with the Oddysee disc (src/save_saturn.cxx).
+extern "C" s32 Tethys_SaveSlotRequest(s32 slot);
+extern "C" s32 Tethys_SaveDeviceMask(void);
+extern "C" s32 Tethys_SaveDeviceGet(void);
+extern "C" s32 Tethys_SaveDeviceSet(s32 device);
+extern "C" const char* Tethys_SaveDeviceName(s32 device);
+extern "C" s32 Tethys_SaveFreeBlocks(void);
+extern "C" s32 Tethys_SaveNeedBlocks(void);
+extern "C" s32 Tethys_AeSaveList(char* titles, u32* serials);
+extern "C" s32 Tethys_AeSaveDelete(s32 slot);
+
+// The save page's state. File-scope, not PauseMenu fields: the class has an
+// ALIVE_ASSERT_SIZEOF and there is one pause menu.
+static s16 sTethysSlot = 0;          // slot cursor on the save page
+static s16 sTethysMsg = 0;           // banner: 0 none, 1 saved, 2 save failed, 3 load failed
+static s16 sTethysMsgHold = 0;       // ticks the banner stays (any confirm/back cuts it)
+static s16 sTethysDeleteAsk = 0;     // load page: the delete question is up
+static s32 sTethysSlotMask = 0;      // SNAPSHOT of the device, taken when a page opens and after
+static char_type sTethysSlotTitle[4 * 16] = {}; // a write (never read from the BIOS per frame)
+static u32 sTethysSlotSerial[4] = {};
+static char_type sTethysLine[6][40] = {};       // the composed lines the pages draw
+static PauseMenuPageEntry sTethysPage[9] = {};
+
+// SATURN (review RV1): false while the last snapshot never read the device
+// (Tethys_AeSaveList -1, its backup loan refused). The page then shows no slot
+// as taken, so it must never write on that snapshot: the save is refused until
+// a snapshot reads the device, or an occupied slot would be overwritten
+// without the question.
+static bool sTethysSlotsRead = false;
+
+static void Tethys_SnapshotSlots()
+{
+    const s32 mask = Tethys_AeSaveList(sTethysSlotTitle, sTethysSlotSerial);
+    sTethysSlotsRead = mask >= 0;
+    sTethysSlotMask = mask >= 0 ? mask : 0;
+}
+
+// "<arrow> device <arrow>": the arrows only when there is a second device to
+// switch to (left / right on the pad, both pages).
+static void Tethys_DeviceLine(char_type* pOut, s32 outMax, const char_type* pPrefix)
+{
+    const s32 mask = Tethys_SaveDeviceMask();
+    const bool bChoice = (mask & (mask - 1)) != 0;
+    const char_type* pName = Tethys_SaveDeviceName(Tethys_SaveDeviceGet());
+    snprintf(pOut, outMax, bChoice ? "%s" kLeft " %s " kRight : "%s%s", pPrefix, pName ? pName : "");
+}
+
+// Left / right: the next present device, wrapping. True if it changed.
+static bool Tethys_DeviceToggle(bool bNext)
+{
+    const s32 mask = Tethys_SaveDeviceMask();
+    const s32 cur = Tethys_SaveDeviceGet();
+    for (s32 k = 1; k <= 2; k++)
+    {
+        const s32 d = bNext ? (cur + k) % 3 : (cur + 3 - k) % 3;
+        if ((mask & (1 << d)) && d != cur)
+        {
+            return Tethys_SaveDeviceSet(d) != 0;
+        }
+    }
+    return false;
+}
+#endif
+
 ALIVE_VAR(1, 0x5ca4d8, s8, sQuicksave_SaveNextFrame_5CA4D8, 0);
 ALIVE_VAR(1, 0x5ca4d9, s8, sQuicksave_LoadNextFrame_5CA4D9, 0);
 
@@ -51,6 +167,9 @@ ALIVE_ARY(1, 0x554474, u8, 32, pal_554474, {0x00, 0x00, 0x21, 0x84, 0x42, 0x88, 
 
 // Menu Text Data
 
+#if TETHYS_AE_PAUSE_FR
+PauseMenuPageEntry PauseMenu__PageEntryList_Main_55E1C8[TETHYS_AE_PM_MAIN_COUNT] = {TETHYS_AE_PM_MAIN_ROWS};
+#else
 PauseMenuPageEntry PauseMenu__PageEntryList_Main_55E1C8[11] = {
     {2, 184, 48, 0, "continue", 128u, 16u, 255u, 1u},
     {2, 184, 70, 0, "quiksave", 128u, 16u, 255u, 1u},
@@ -67,8 +186,12 @@ PauseMenuPageEntry PauseMenu__PageEntryList_Main_55E1C8[11] = {
     {1, 184, 16, 0, "paused", 128u, 16u, 255u, 1u},
     {1, 280, 16, 0, sScreenStringBuffer_5C92F0, 128u, 16u, 255u, 0u},
     {0, 0, 0, 0, nullptr, 0u, 0u, 0u, 0u}};
+#endif
 
 
+#if TETHYS_AE_PAUSE_FR
+PauseMenuPageEntry PauseMenu__PageEntryList_ControlActions_55d820[TETHYS_AE_PM_CONTROLACTIONS_COUNT] = {TETHYS_AE_PM_CONTROLACTIONS_ROWS};
+#else
 PauseMenuPageEntry PauseMenu__PageEntryList_ControlActions_55d820[17] = {
     {2, 184, 205, 0, "more", 128, 16, 255, Centre},
     {1, 184, 20, 0, "Actions", 127, 127, 127, Centre},
@@ -87,7 +210,11 @@ PauseMenuPageEntry PauseMenu__PageEntryList_ControlActions_55d820[17] = {
     {1, 200, 150, 0, "action", 128, 16, 255, Left},
     {1, 200, 170, 0, "hoist " kHoistZTurn " zturn", 128, 16, 255, Left},
     {1, 0, 0, 0, nullptr, 0u, 0u, 0u, 0u}};
+#endif
 
+#if TETHYS_AE_PAUSE_FR
+PauseMenuPageEntry PauseMenu__PageEntryList_GameSpeak_55d930[TETHYS_AE_PM_GAMESPEAK_COUNT] = {TETHYS_AE_PM_GAMESPEAK_ROWS};
+#else
 PauseMenuPageEntry PauseMenu__PageEntryList_GameSpeak_55d930[21] = {
     {2, 184, 205, 0, "more", 128, 16, 255, Centre},
     {1, 184, 20, 0, "GameSpeak", 127, 127, 127, Centre},
@@ -110,7 +237,11 @@ PauseMenuPageEntry PauseMenu__PageEntryList_GameSpeak_55d930[21] = {
     {1, 260, 148, 0, kSorry, 160, 160, 160, Right},
     {1, 260, 170, 0, kStopIt, 160, 160, 160, Right},
     {1, 0, 0, 0, nullptr, 0u, 0u, 0u, 0u}};
+#endif
 
+#if TETHYS_AE_PAUSE_FR
+PauseMenuPageEntry PauseMenu__PageEntryList_SligSpeak_55da80[TETHYS_AE_PM_SLIGSPEAK_COUNT] = {TETHYS_AE_PM_SLIGSPEAK_ROWS};
+#else
 PauseMenuPageEntry PauseMenu__PageEntryList_SligSpeak_55da80[19] = {
     {2, 184, 205, 0, "more", 128, 16, 255, Centre},
     {1, 184, 20, 0, "SligSpeak", 127, 127, 127, Centre},
@@ -131,7 +262,11 @@ PauseMenuPageEntry PauseMenu__PageEntryList_SligSpeak_55da80[19] = {
     {1, 260, 148, 0, kSorry, 160, 160, 160, Right},
     {1, 260, 170, 0, kStopIt, 160, 160, 160, Right},
     {1, 0, 0, 0, nullptr, 0u, 0u, 0u, 0u}};
+#endif
 
+#if TETHYS_AE_PAUSE_FR
+PauseMenuPageEntry PauseMenu__PageEntryList_GlukkonSpeak_55dbb0[TETHYS_AE_PM_GLUKKONSPEAK_COUNT] = {TETHYS_AE_PM_GLUKKONSPEAK_ROWS};
+#else
 PauseMenuPageEntry PauseMenu__PageEntryList_GlukkonSpeak_55dbb0[19] = {
     {2, 184, 205, 0, "more", 128, 16, 255, Centre},
     {1, 184, 20, 0, "GlukkonSpeak", 127, 127, 127, Centre},
@@ -152,7 +287,11 @@ PauseMenuPageEntry PauseMenu__PageEntryList_GlukkonSpeak_55dbb0[19] = {
     {1, 260, 148, 0, kSorry, 160, 160, 160, Right},
     {1, 260, 170, 0, kStopIt, 160, 160, 160, Right},
     {1, 0, 0, 0, nullptr, 0u, 0u, 0u, 0u}};
+#endif
 
+#if TETHYS_AE_PAUSE_FR
+PauseMenuPageEntry PauseMenu__PageEntryList_ParamiteSpeak_55dce0[TETHYS_AE_PM_PARAMITESPEAK_COUNT] = {TETHYS_AE_PM_PARAMITESPEAK_ROWS};
+#else
 PauseMenuPageEntry PauseMenu__PageEntryList_ParamiteSpeak_55dce0[15] = {
     {2, 184, 205, 0, "more", 128, 16, 255, Centre},
     {1, 184, 20, 0, "ParamiteSpeak", 127, 127, 127, Centre},
@@ -169,7 +308,11 @@ PauseMenuPageEntry PauseMenu__PageEntryList_ParamiteSpeak_55dce0[15] = {
     {1, 260, 104, 0, kAnger, 160, 160, 160, Right},
     {1, 260, 126, 0, kAllYa, 160, 160, 160, Right},
     {1, 0, 0, 0, nullptr, 0u, 0u, 0u, 0u}};
+#endif
 
+#if TETHYS_AE_PAUSE_FR
+PauseMenuPageEntry PauseMenu__PageEntryList_ScrabSpeak_55ddd0[TETHYS_AE_PM_SCRABSPEAK_COUNT] = {TETHYS_AE_PM_SCRABSPEAK_ROWS};
+#else
 PauseMenuPageEntry PauseMenu__PageEntryList_ScrabSpeak_55ddd0[7] = {
     {2, 184, 205, 0, "exit", 128, 16, 255, Centre},
     {1, 184, 20, 0, "ScrabSpeak", 127, 127, 127, Centre},
@@ -178,6 +321,7 @@ PauseMenuPageEntry PauseMenu__PageEntryList_ScrabSpeak_55ddd0[7] = {
     {1, 90, 104, 0, kHello, 160, 160, 160, Right},
     {1, 90, 126, 0, kFollowMe, 160, 160, 160, Right},
     {1, 0, 0, 0, nullptr, 0u, 0u, 0u, 0u}};
+#endif
 
 PauseMenuPageEntry PauseMenu__PageEntryList_Save_55e4c8[4] = {
     {1, 184, 120, 0, sSaveString_5C931C, 128, 16, 255, Centre},
@@ -185,14 +329,21 @@ PauseMenuPageEntry PauseMenu__PageEntryList_Save_55e4c8[4] = {
     {1, 184, 205, 0, "Esc   Cancel", 128, 16, 255, Centre},
     {1, 0, 0, 0, nullptr, 0u, 0u, 0u, 0u}};
 
+#if TETHYS_AE_PAUSE_FR
+PauseMenuPageEntry PauseMenu__PageEntryList_ReallyQuit_55e278[TETHYS_AE_PM_REALLYQUIT_COUNT] = {TETHYS_AE_PM_REALLYQUIT_ROWS};
+#else
 PauseMenuPageEntry PauseMenu__PageEntryList_ReallyQuit_55e278[3] = {
     {1, 184, 110, 0, "REALLY QUIT?", 128, 16, 255, Centre},
     {1, 184, 135, 0, "Enter yes   Esc no", 160, 160, 160, Centre},
     {1, 0, 0, 0, nullptr, 0u, 0u, 0u, 0u}};
+#endif
 
 PauseMenuPageEntry PauseMenu__PageEntryList_Status_55e738[1] = {
     {1, 0, 0, 0, nullptr, 0u, 0u, 0u, 0u}};
 
+#if TETHYS_AE_PAUSE_FR
+PauseMenuPageEntry PauseMenu__PageEntryList_Load_55e3a0[TETHYS_AE_PM_LOAD_COUNT] = {TETHYS_AE_PM_LOAD_ROWS};
+#else
 PauseMenuPageEntry PauseMenu__PageEntryList_Load_55e3a0[9] = {
     {1, 184, 5, 0, "", 128, 16, 255, Centre},
     {1, 184, 30, 0, "", 128, 16, 255, Centre},
@@ -203,6 +354,7 @@ PauseMenuPageEntry PauseMenu__PageEntryList_Load_55e3a0[9] = {
     {1, 184, 188, 0, "", 128, 16, 255, Centre},
     {1, 184, 213, 0, "Esc  Cancel        F6  Load QuikSave", 128, 16, 255, Centre},
     {1, 0, 0, 0, nullptr, 0u, 0u, 0u, 0u}};
+#endif
 
 
 // Menu Pages
@@ -255,15 +407,23 @@ PauseMenu::PauseMenuPage sPM_Page_Load_546628 = {
     0u,
     0u};
 
+#if TETHYS_AE_PAUSE_FR
+PauseMenuPageEntry PauseMenu__PageEntryList_Save_55E4C8[TETHYS_AE_PM_SAVE_COUNT] = {TETHYS_AE_PM_SAVE_ROWS};
+#else
 PauseMenuPageEntry PauseMenu__PageEntryList_Save_55E4C8[4] = {
     {1, 184, 120, 0, sSaveString_5C931C, 128u, 16u, 255u, 1u},
     {1, 184, 180, 0, "Enter   Save", 128u, 16u, 255u, 1u},
     {1, 184, 205, 0, "Esc   Cancel", 128u, 16u, 255u, 1u},
     {1, 0, 0, 0, nullptr, 0u, 0u, 0u, 0u}};
+#endif
 
+#if TETHYS_AE_PAUSE_FR
+PauseMenuPageEntry PauseMenu__PageEntryList_Save_Overwrite_Confirm_55E508[TETHYS_AE_PM_SAVEOVERWRITE_COUNT] = {TETHYS_AE_PM_SAVEOVERWRITE_ROWS};
+#else
 PauseMenuPageEntry PauseMenu__PageEntryList_Save_Overwrite_Confirm_55E508[2] = {
     {1, 184, 180, 0, "Enter Overwrite  Esc Cancel", 160u, 160u, 160u, 1u},
     {1, 0, 0, 0, nullptr, 0u, 0u, 0u, 0u}};
+#endif
 
 PauseMenu::PauseMenuPage sPM_Page_Save_5465C8 = {
     &PauseMenu::Page_Save_Update_491210,
@@ -280,6 +440,9 @@ PauseMenu::PauseMenuPage sPM_Page_Save_5465C8 = {
 ALIVE_ARY(1, 0x55e718, char_type, 32, sPauseMenu_Of300Mudokons_55E718, {});
 ALIVE_ARY(1, 0x55e738, char_type, 56, sHasBeenTerminated_55E738, {});
 
+#if TETHYS_AE_PAUSE_FR
+PauseMenuPageEntry sStatusEntries_55E758[TETHYS_AE_PM_STATUS_COUNT] = {TETHYS_AE_PM_STATUS_ROWS};
+#else
 PauseMenuPageEntry sStatusEntries_55E758[6] = {
     {2, 184, 205, 0, "EXIT", 128u, 16u, 255u, 1u},
     {1, 184, 20, 0, "ABE'S STATUS", 127u, 127u, 127u, 1u},
@@ -287,6 +450,7 @@ PauseMenuPageEntry sStatusEntries_55E758[6] = {
     {1, 184, 170, 0, sHasBeenTerminated_55E738, 128u, 16u, 255u, 1u},
     {1, 184, 120, 0, "YOU HAVE RESCUED", 128u, 16u, 255u, 1u},
     {0, 0, 0, 0, nullptr, 0u, 0u, 0u, 0u}};
+#endif
 
 PauseMenu::PauseMenuPage sPM_Page_Status_5465F8 = {
     &PauseMenu::Page_Status_Update_4916A0,
@@ -308,6 +472,7 @@ ALIVE_ARY(1, 0x55DE40, PauseMenuPageEntry*, 6, sControlActionsPages_55DE40,
            PauseMenu__PageEntryList_ParamiteSpeak_55dce0,
            PauseMenu__PageEntryList_ScrabSpeak_55ddd0});
 
+#ifndef TETHYS_SATURN // SATURN (U1c A4): a PC dump tool (string streams, ofstream), dead on the console
 struct DumpEntry final
 {
     void* address;
@@ -394,6 +559,7 @@ void DumpMenus()
     fileOut << output.rdbuf() << "\n\n"
             << output_override.rdbuf();
 }
+#endif // !TETHYS_SATURN: DumpMenus
 
 EXPORT s16 sub_4A2BC0()
 {
@@ -421,9 +587,11 @@ void PauseMenu::VScreenChanged()
     Remove_At_Credits_Screen_490D30();
 }
 
+#ifndef TETHYS_SATURN // SATURN: defaulted in PauseMenu.hpp (review RV1)
 PauseMenu::PauseMenu()
 {
 }
+#endif
 
 PauseMenu* PauseMenu::ctor_48FB80()
 {
@@ -454,6 +622,11 @@ PauseMenu* PauseMenu::ctor_48FB80()
 
     field_F4_font.ctor_433590(256, pal_554474, &sFont1Context_5BC5C8);
 
+#ifdef TETHYS_SATURN
+    // SATURN (U1c PM15): the quit question named Enter and Esc.
+    PauseMenu__PageEntryList_ReallyQuit_55e278[1].field_8_text = TETHYS_AE_PM_QUIT_YESNO;
+#endif
+
     Init_491760();
     sub_4A2BC0();
 
@@ -471,6 +644,16 @@ void PauseMenu::dtor_48FCE0()
     gObjList_drawables_5C1124->Remove_Item(this);
     field_158_animation.vCleanUp_40C630();
     field_F4_font.dtor_433540();
+#ifdef TETHYS_SATURN
+    // SATURN (review RV1): the credits path (Remove_At_Credits_Screen_490D30,
+    // reachable through the level-select cheat) kills the menu without nulling
+    // the global, unlike the quit page: Tethys_PauseHidesText then read freed
+    // memory and the next New Game made no pause menu.
+    if (pPauseMenu_5C9300 == this)
+    {
+        pPauseMenu_5C9300 = nullptr;
+    }
+#endif
     BaseAnimatedWithPhysicsGameObject_dtor_424AD0();
 }
 
@@ -513,6 +696,13 @@ void PauseMenu::Render_490BD0(PrimHeader** ot)
     field_142_poly_offset = 0;
 
     // Render the page
+#ifdef TETHYS_SATURN
+    // SATURN (U1c PM17, AO twin): the menu sheet is uploaded by the main menu
+    // (sFont1Context_5BC5C8, loaded once and kept), which every way into a game
+    // goes through. Should a pause menu ever exist without it, its atlas is null
+    // and the first measure would read through it: the page is skipped instead.
+    if (field_F4_font.field_34_font_context && field_F4_font.field_34_font_context->field_8_atlas_array)
+#endif
     (this->*field_144_active_menu.field_4_fn_render)(ot, &field_144_active_menu);
 
     // Draw a full screen polygon that "dims" out the screen while paused
@@ -1101,8 +1291,26 @@ void PauseMenu::Page_Main_Update_4903E0()
                     gMap_5C3030.field_4_current_camera);
                 // Null terminate it
                 sSaveString_5C931C[8] = 0;
+#ifdef TETHYS_SATURN
+                // SATURN (U1c T07): no keyboard, so no text cursor: the name is
+                // the camera code, AE's own default. The page picks a SLOT
+                // instead, opening on the first free one, as the device left it.
+                Tethys_SnapshotSlots();
+                sTethysSlot = 0;
+                for (s16 i = 0; i < 4; i++)
+                {
+                    if (!(sTethysSlotMask & (1 << i)))
+                    {
+                        sTethysSlot = i;
+                        break;
+                    }
+                }
+                sTethysMsg = 0;
+                sTethysMsgHold = 0;
+#else
                 // Append the editor arrow s8
                 strcat(sSaveString_5C931C, sArrowStr_55E398);
+#endif
 
 #if ORIGINAL_PS1_BEHAVIOR // OG Change - Allow for exiting save menu using controller
                 setSaveMenuOpen(true); // Sets saveMenuOpen bool to true, instead of disabling input
@@ -1112,6 +1320,11 @@ void PauseMenu::Page_Main_Update_4903E0()
                 return;
 
             case MainPages::ePage_Load_5:
+#ifdef TETHYS_SATURN
+                sTethysMsg = 0;
+                sTethysMsgHold = 0;
+                sTethysDeleteAsk = 0;
+#endif
                 Quicksave_FindSaves_4D4150();
                 field_136_unused = 4;
                 field_144_active_menu = sPM_Page_Load_546628;
@@ -1200,6 +1413,113 @@ void PauseMenu::Page_ReallyQuit_Update_490930()
 
 void PauseMenu::Page_Save_Update_491210()
 {
+#ifdef TETHYS_SATURN
+    // SATURN (U1c T07, decision D-T2): THE SAVE PAGE ON BACKUP RAM. The PC typed
+    // a file name and fopen()ed it; here the instant AE took when this page
+    // opened (Quicksave_4C90D0, the original's own quirk kept: opening SAVE and
+    // cancelling still moves the respawn point) goes into one of four slots:
+    // up / down picks the slot, left / right the device (the player chooses
+    // where to save, the owner's rule), confirm writes, and an occupied slot
+    // takes AE's own overwrite question first. The result stays on screen about
+    // three seconds (any confirm / back cuts it short): a console's failure is
+    // the ordinary case (no device, unformatted, full), never silent.
+    if (sTethysMsg)
+    {
+        if (sTethysMsgHold > 0 && !sInputObject_5BD4E0.isHeld(InputCommands::Enum::eBack | InputCommands::Enum::eUnPause_OrConfirm))
+        {
+            sTethysMsgHold--;
+            return;
+        }
+        const bool bSaved = (sTethysMsg == 1);
+        sTethysMsg = 0;
+        sTethysMsgHold = 0;
+        if (bSaved)
+        {
+            // As the PC after its fwrite: the pause menu closes.
+            word12C_flags &= ~1u;
+            SFX_Play_46FBA0(SoundEffect::PossessEffect_17, 40, 2400);
+            GetSoundAPI().SND_Restart();
+        }
+        return;
+    }
+
+    if (field_13C_save_state == SaveState::DoSave_4)
+    {
+        field_13C_save_state = SaveState::ReadingInput_0;
+        Tethys_SaveSlotRequest(sTethysSlot);
+        const bool bSaved = Quicksave_WriteSlot_Saturn(sSaveString_5C931C);
+        sTethysMsg = bSaved ? 1 : 2;
+        sTethysMsgHold = 90;
+        if (!bSaved)
+        {
+            SFX_Play_46FA90(SoundEffect::ElectricZap_39, 0);
+        }
+        Tethys_SnapshotSlots(); // the slot the player chose now shows the save
+        return;
+    }
+
+    if (field_13C_save_state == SaveState::SaveConfirmOverwrite_8)
+    {
+        if (sInputObject_5BD4E0.isHeld(InputCommands::Enum::eUnPause_OrConfirm))
+        {
+            SFX_Play_46FBA0(SoundEffect::PossessEffect_17, 40, 2400);
+            field_13C_save_state = SaveState::DoSave_4;
+        }
+        else if (sInputObject_5BD4E0.isHeld(InputCommands::Enum::eBack))
+        {
+            SFX_Play_46FA90(SoundEffect::IngameTransition_84, 90);
+            field_13C_save_state = SaveState::ReadingInput_0;
+        }
+        return;
+    }
+
+    if (sInputObject_5BD4E0.isHeld(InputCommands::Enum::eDown))
+    {
+        sTethysSlot = static_cast<s16>((sTethysSlot + 1) % 4);
+        SFX_Play_46FBA0(SoundEffect::MenuNavigation_52, 45, 400);
+    }
+    if (sInputObject_5BD4E0.isHeld(InputCommands::Enum::eUp))
+    {
+        sTethysSlot = static_cast<s16>((sTethysSlot + 3) % 4);
+        SFX_Play_46FBA0(SoundEffect::MenuNavigation_52, 45, 400);
+    }
+    if (sInputObject_5BD4E0.isHeld(InputCommands::Enum::eLeft | InputCommands::Enum::eRight))
+    {
+        if (Tethys_DeviceToggle(sInputObject_5BD4E0.isHeld(InputCommands::Enum::eRight)))
+        {
+            Tethys_SnapshotSlots();
+            SFX_Play_46FBA0(SoundEffect::MenuNavigation_52, 45, 400);
+        }
+    }
+    if (sInputObject_5BD4E0.isHeld(InputCommands::Enum::eBack))
+    {
+        // The PC's Escape.
+        SFX_Play_46FBA0(SoundEffect::PossessEffect_17, 40, 2400);
+        field_136_unused = 0;
+        field_144_active_menu = sPM_Page_Main_5465B0;
+        Input_Reset_492660();
+        return;
+    }
+    if (sInputObject_5BD4E0.isHeld(InputCommands::Enum::eUnPause_OrConfirm))
+    {
+        // The PC's Enter: an existing file took the overwrite question first.
+        // An unread device is read again first; still unread, the save fails
+        // with its banner instead of a blind write (review RV1).
+        if (!sTethysSlotsRead)
+        {
+            Tethys_SnapshotSlots();
+        }
+        if (!sTethysSlotsRead)
+        {
+            SFX_Play_46FA90(SoundEffect::ElectricZap_39, 0);
+            sTethysMsg = 2;
+            sTethysMsgHold = 90;
+            return;
+        }
+        SFX_Play_46FA90(SoundEffect::IngameTransition_84, 90);
+        field_13C_save_state = (sTethysSlotMask & (1 << sTethysSlot)) ? SaveState::SaveConfirmOverwrite_8 : SaveState::DoSave_4;
+    }
+#else
     static bool bWriteSaveFile_5C937C = false;
 
     char_type newInput[2] = {};
@@ -1350,6 +1670,7 @@ void PauseMenu::Page_Save_Update_491210()
             SFX_Play_46FBA0(SoundEffect::PossessEffect_17, 70, 2200);
         }
     }
+#endif // TETHYS_SATURN: Page_Save_Update_491210
 }
 
 PauseMenu::PauseMenuPage sOverwriteSaveConfirmPage_55E560 = {
@@ -1367,6 +1688,62 @@ PauseMenu::PauseMenuPage sOverwriteSaveConfirmPage_55E560 = {
 
 void PauseMenu::Page_Save_Render_491660(PrimHeader** ot, PauseMenuPage* pPage)
 {
+#ifdef TETHYS_SATURN
+    // SATURN (U1c T07, PM18): one composed page drawn through
+    // Page_Base_Render_490A50 like every other (its centring on 184, the
+    // formatter that turns kConfirm into the pad's letter, the glow on the
+    // selected row): the device (or the result banner) at 16, the four slots,
+    // the name the slot will carry (AE's camera code) at 150 as AO moved it,
+    // the pad hints, or AE's overwrite question in their place.
+    s32 row = 0;
+    auto add = [&row](s16 y, const char_type* pText, u8 r, u8 g, u8 b)
+    {
+        sTethysPage[row++] = {1, 184, y, 0, pText, r, g, b, Centre};
+    };
+    if (sTethysMsg == 1)
+    {
+        add(16, TETHYS_AE_PM_SAVED, 96u, 255u, 96u);
+    }
+    else if (sTethysMsg == 2)
+    {
+        const s32 missing = Tethys_SaveNeedBlocks() - Tethys_SaveFreeBlocks();
+        if (missing > 0)
+        {
+            snprintf(sTethysLine[0], sizeof(sTethysLine[0]), TETHYS_AE_PM_FREE_FMT, static_cast<int>(missing));
+            add(16, sTethysLine[0], 255u, 64u, 64u);
+        }
+        else
+        {
+            add(16, TETHYS_AE_PM_SAVE_FAILED, 255u, 64u, 64u);
+        }
+    }
+    else
+    {
+        Tethys_DeviceLine(sTethysLine[0], sizeof(sTethysLine[0]), "");
+        add(16, sTethysLine[0], 128u, 128u, 128u);
+    }
+    for (s32 i = 0; i < 4; i++)
+    {
+        snprintf(sTethysLine[1 + i], sizeof(sTethysLine[1 + i]), "%d %s", static_cast<int>(i + 1),
+                 (sTethysSlotMask & (1 << i)) ? &sTethysSlotTitle[i * 16] : TETHYS_AE_PM_SLOT_FREE);
+        add(static_cast<s16>(45 + (25 * i)), sTethysLine[1 + i], 128u, 16u, 255u);
+    }
+    add(150, sSaveString_5C931C, 128u, 16u, 255u);
+    if (field_13C_save_state == SaveState::SaveConfirmOverwrite_8)
+    {
+        add(180, TETHYS_AE_PM_OVERWRITE, 160u, 160u, 160u);
+    }
+    else
+    {
+        add(180, TETHYS_AE_PM_SAVE_GO, 128u, 16u, 255u);
+        add(205, TETHYS_AE_PM_SAVE_BACK, 128u, 16u, 255u);
+    }
+    sTethysPage[row] = {0, 0, 0, 0, nullptr, 0u, 0u, 0u, 0u};
+    PauseMenuPage page = *pPage;
+    page.field_8_menu_items = sTethysPage;
+    page.field_C_selected_index = static_cast<s16>(1 + sTethysSlot);
+    Page_Base_Render_490A50(ot, &page);
+#else
     PauseMenuPage* pPageToRender = &sOverwriteSaveConfirmPage_55E560;
     if (field_13C_save_state != SaveState::SaveConfirmOverwrite_8)
     {
@@ -1374,6 +1751,7 @@ void PauseMenu::Page_Save_Render_491660(PrimHeader** ot, PauseMenuPage* pPage)
     }
 
     Page_Base_Render_490A50(ot, pPageToRender);
+#endif // TETHYS_SATURN: Page_Save_Render_491660
 }
 
 void PauseMenu::Page_Status_Update_4916A0()
@@ -1399,6 +1777,114 @@ void PauseMenu::Page_Status_Render_491710(PrimHeader** ot, PauseMenuPage* pPage)
 
 void PauseMenu::Page_Load_Update_490D50()
 {
+#ifdef TETHYS_SATURN
+    // SATURN (U1c T07, D6): THE LOAD PAGE ON BACKUP RAM. AE's own list (newest
+    // first, Quicksave_FindSaves_4D4150, the four slots of the device through
+    // IO_EnumerateDirectory) and its own navigation; confirm reads the slot the
+    // entry's digit names (checksummed before it reaches the live quicksave, so
+    // a bad slot changes nothing and says so), left / right switch the device,
+    // jump (the pad's Y by default) deletes after a question. The F6 quicksave
+    // line and the page keys have no pad meaning and are gone.
+    if (sTethysMsg)
+    {
+        if (sTethysMsgHold > 0 && !sInputObject_5BD4E0.isHeld(InputCommands::Enum::eBack | InputCommands::Enum::eUnPause_OrConfirm))
+        {
+            sTethysMsgHold--;
+            return;
+        }
+        sTethysMsg = 0;
+        sTethysMsgHold = 0;
+        return;
+    }
+
+    const u32 inputHeld = sInputObject_5BD4E0.field_0_pads[sCurrentControllerIndex_5C1BBE].field_C_held;
+    const bool bAny = sTotalSaveFilesCount_BB43E0 > 0 && sSavedGameToLoadIdx_BB43FC >= 0;
+    const s32 slot = bAny ? (sSaveFileRecords_BB31D8[sSavedGameToLoadIdx_BB43FC].field_0_fileName[0] - '1') : -1;
+
+    if (sTethysDeleteAsk)
+    {
+        if (inputHeld & InputCommands::Enum::eUnPause_OrConfirm)
+        {
+            sTethysDeleteAsk = 0;
+            if (slot >= 0)
+            {
+                Tethys_AeSaveDelete(slot);
+                Quicksave_FindSaves_4D4150();
+            }
+            SFX_Play_46FA90(SoundEffect::IngameTransition_84, 90);
+        }
+        else if (inputHeld & InputCommands::Enum::eBack)
+        {
+            sTethysDeleteAsk = 0;
+            SFX_Play_46FBA0(SoundEffect::PossessEffect_17, 40, 2400);
+        }
+        return;
+    }
+
+    if (inputHeld & InputCommands::Enum::eUp)
+    {
+        if (sSavedGameToLoadIdx_BB43FC > 0)
+        {
+            sSavedGameToLoadIdx_BB43FC--;
+        }
+        SFX_Play_46FBA0(SoundEffect::MenuNavigation_52, 35, 400);
+        return;
+    }
+    if (inputHeld & InputCommands::Enum::eDown)
+    {
+        if (sSavedGameToLoadIdx_BB43FC < sTotalSaveFilesCount_BB43E0 - 1)
+        {
+            sSavedGameToLoadIdx_BB43FC++;
+        }
+        SFX_Play_46FBA0(SoundEffect::MenuNavigation_52, 35, 400);
+        return;
+    }
+    if (inputHeld & (InputCommands::Enum::eLeft | InputCommands::Enum::eRight))
+    {
+        if (Tethys_DeviceToggle((inputHeld & InputCommands::Enum::eRight) != 0))
+        {
+            Quicksave_FindSaves_4D4150();
+            SFX_Play_46FBA0(SoundEffect::MenuNavigation_52, 35, 400);
+        }
+        return;
+    }
+    if (inputHeld & InputCommands::Enum::eUnPause_OrConfirm)
+    {
+        if (slot >= 0)
+        {
+            if (Quicksave_ReadSlot_Saturn(slot))
+            {
+                // As the PC after its fread.
+                field_136_unused = 0;
+                field_144_active_menu = sPM_Page_Main_5465B0;
+                sActiveHero_5C1B68->field_B8_xpos = FP_FromInteger(0);
+                sActiveHero_5C1B68->field_BC_ypos = FP_FromInteger(0);
+                Quicksave_LoadActive_4C9170();
+                word12C_flags &= ~1u;
+                SFX_Play_46FA90(SoundEffect::IngameTransition_84, 90);
+            }
+            else
+            {
+                sTethysMsg = 3;
+                sTethysMsgHold = 90;
+                SFX_Play_46FA90(SoundEffect::ElectricZap_39, 0);
+            }
+        }
+        return;
+    }
+    if (inputHeld & InputCommands::Enum::eBack)
+    {
+        field_136_unused = 0;
+        field_144_active_menu = sPM_Page_Main_5465B0;
+        SFX_Play_46FBA0(SoundEffect::PossessEffect_17, 40, 2400);
+        return;
+    }
+    if ((inputHeld & InputCommands::Enum::eHop) && slot >= 0)
+    {
+        sTethysDeleteAsk = 1;
+        SFX_Play_46FA90(SoundEffect::IngameTransition_84, 90);
+    }
+#else
     char_type saveFileName[40] = {};
 
     // When F6 is pressed
@@ -1506,6 +1992,7 @@ void PauseMenu::Page_Load_Update_490D50()
             Quicksave_FindSaves_4D4150();
         }
     }
+#endif // TETHYS_SATURN: Page_Load_Update_490D50
 }
 
 void PauseMenu::Page_Load_Render_4910A0(PrimHeader** ot, PauseMenuPage* mp)
@@ -1530,15 +2017,52 @@ void PauseMenu::Page_Load_Render_4910A0(PrimHeader** ot, PauseMenuPage* mp)
     {
         // This has to be set every time there is at least one save,
         // otherwise a call to this function with no saves hides this row forever
+#if TETHYS_AE_PAUSE_FR
+        // SATURN (D-T1): the French page splits the hint over rows 6 and 7
+        // (its table has 10 rows; Exoddus.exe.bak Page_Load_Render 0x491070).
+        PauseMenu__PageEntryList_Load_55e3a0[6].field_8_text = TETHYS_AE_PM_LOAD_HINT_0;
+        PauseMenu__PageEntryList_Load_55e3a0[7].field_8_text = TETHYS_AE_PM_LOAD_HINT_1;
+#else
         PauseMenu__PageEntryList_Load_55e3a0[6].field_8_text = kUp " " kDown " Select    Enter Load    Del Delete";
+#endif
     }
     else
     {
-        PauseMenu__PageEntryList_Load_55e3a0[4].field_8_text = "No Saved Games";
+        PauseMenu__PageEntryList_Load_55e3a0[4].field_8_text = TETHYS_AE_PM_TEXT(TETHYS_AE_PM_NO_SAVED_GAMES, "No Saved Games");
 
         // hide row that displays hotkeys for selecting/loading/deleting saves, since there are no saves
         PauseMenu__PageEntryList_Load_55e3a0[6].field_8_text = "";
+#if TETHYS_AE_PAUSE_FR
+        PauseMenu__PageEntryList_Load_55e3a0[7].field_8_text = "";
+#endif
     }
+
+#ifdef TETHYS_SATURN
+    // SATURN (U1c T07, PM15): the pad's rows instead of the PC keys: the load /
+    // delete hint (or the delete question, or the failure banner), then the
+    // back hint beside the device, which left / right switch.
+#if TETHYS_AE_PAUSE_FR
+    const s32 kGoRow = 7;   // [6] keeps the image's "up down select"
+    const s32 kBackRow = 8; // was "Echap  Annuler     F6  Charger QuikSave"
+#else
+    const s32 kGoRow = 6;
+    const s32 kBackRow = 7; // was "Esc  Cancel        F6  Load QuikSave"
+#endif
+    if (sTethysMsg == 3)
+    {
+        PauseMenu__PageEntryList_Load_55e3a0[kGoRow].field_8_text = TETHYS_AE_PM_LOAD_FAILED;
+    }
+    else if (sTethysDeleteAsk)
+    {
+        PauseMenu__PageEntryList_Load_55e3a0[kGoRow].field_8_text = TETHYS_AE_PM_DELETE_ASK;
+    }
+    else if (sTotalSaveFilesCount_BB43E0 > 0)
+    {
+        PauseMenu__PageEntryList_Load_55e3a0[kGoRow].field_8_text = TETHYS_AE_PM_LOAD_GO;
+    }
+    Tethys_DeviceLine(sTethysLine[5], sizeof(sTethysLine[5]), TETHYS_AE_PM_LOAD_BACK "   ");
+    PauseMenu__PageEntryList_Load_55e3a0[kBackRow].field_8_text = sTethysLine[5];
+#endif
 
     mp->field_C_selected_index = 2;
 
@@ -1667,8 +2191,8 @@ void PauseMenu::Update_48FD80()
                     }
                 }
 
-                sprintf(sPauseMenu_Of300Mudokons_55E718, "%d OF %d MUDOKONS", sRescuedMudokons_5C1BC2, Path_GetTotalMuds(gMap_5C3030.field_0_current_level, gMap_5C3030.field_2_current_path));
-                sprintf(sHasBeenTerminated_55E738, "%d HA%s BEEN TERMINATED", sKilledMudokons_5C1BC0, (sKilledMudokons_5C1BC0 != 1) ? "VE" : "S");
+                sprintf(sPauseMenu_Of300Mudokons_55E718, TETHYS_AE_PM_TEXT(TETHYS_AE_PM_FMT_RESCUED, "%d OF %d MUDOKONS"), sRescuedMudokons_5C1BC2, Path_GetTotalMuds(gMap_5C3030.field_0_current_level, gMap_5C3030.field_2_current_path));
+                sprintf(sHasBeenTerminated_55E738, TETHYS_AE_PM_TEXT(TETHYS_AE_PM_FMT_KILLED, "%d HA%s BEEN TERMINATED"), sKilledMudokons_5C1BC0, (sKilledMudokons_5C1BC0 != 1) ? "VE" : "S");
 
                 if (sActiveHero_5C1B68->field_128.field_12_mood == Mud_Emotion::eNormal_0)
                 {
@@ -1764,3 +2288,16 @@ void PauseMenu::Update_48FD80()
 }
 
 ALIVE_VAR(1, 0x5C9300, PauseMenu*, pPauseMenu_5C9300, nullptr);
+
+#ifdef TETHYS_SATURN
+// SATURN (U1c L1/L5b/T15, AO 442.ao.7 twin): declared in Font.hpp, read by the
+// in-world texts (LCDScreen, LCDStatusBoard, GasCountDown, ColourfulMeter,
+// BrewMachine). Bit 0 of word12C_flags is the pause loop's own condition
+// (Update_48FD80 sets it, every page that leaves clears it): while it is set
+// the loop above renders the drawables under the veil, which the renderer's
+// text compositor does not walk, so a text drawn then would stay bright.
+bool Tethys_PauseHidesText()
+{
+    return pPauseMenu_5C9300 && (pPauseMenu_5C9300->word12C_flags & 1);
+}
+#endif

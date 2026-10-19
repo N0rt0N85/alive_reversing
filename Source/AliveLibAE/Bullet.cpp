@@ -13,6 +13,34 @@
 #include "ScreenManager.hpp"
 #include "Grid.hpp"
 
+#ifdef TETHYS_SATURN
+// SATURN (U1d T10, AO 383.ao.1 / 448.ao.7 twin): ONE SMOKE PUFF PER IMPACT, NOT
+// THREE. SQBSMK is the largest particle cel (61x44 on the PC), additive, and
+// every bullet impact spawned three of them at all eight impact sites of this
+// file. Each puff draws exactly three random numbers (Particle.cpp:146-189:
+// two ranges under 256 and one Math_NextRandom; the (50, 50) range draws
+// none), and its first puff is the same whatever the count, so the left-out
+// puffs' draws are burnt here and every number drawn afterwards is the PC's.
+// An attract demo (a replay of recorded input) spawns them all. The other
+// callers of the helper (GasEmitter, Abe, Mudokon, Slig, Teleporter) are left
+// as they are, as AO left its own.
+static void Tethys_BulletSmoke(FP xpos, FP ypos, FP scale, s16 count, u8 r, u8 g, u8 b)
+{
+    if (gAttract_5C1BA0 || count <= 1)
+    {
+        New_Smoke_Particles_426C70(xpos, ypos, scale, count, r, g, b);
+        return;
+    }
+    New_Smoke_Particles_426C70(xpos, ypos, scale, 1, r, g, b);
+    for (s32 burn = 0; burn < 3 * (count - 1); burn++)
+    {
+        Math_NextRandom();
+    }
+}
+// Every impact site below calls it under the upstream name (8 sites, verbatim).
+#define New_Smoke_Particles_426C70 Tethys_BulletSmoke
+#endif
+
 Bullet* Bullet::ctor_414540(BaseAliveGameObject* pParent, BulletType type, FP xpos, FP ypos, FP xDist, s32 unused, FP scale, s16 numberOfBullets)
 {
     BaseGameObject_ctor_4DBFA0(TRUE, 0);

@@ -51,6 +51,8 @@ EXPORT void CC Event_Broadcast_422BC0(s32 eventType, BaseGameObject* pObject)
 {
     sEventPtrs_5BC124.field_0_events[!sEventsToUse_5BC1D4].field_0_event_ptrs[eventType] = pObject;
 
+#ifndef TETHYS_SATURN // SATURN (L0, decision D-B3): the PC developer console's verbose
+                      // events build a std::string (DebugHelpers.cpp is not in the image)
     if (sDebugEnabled_VerboseEvents)
     {
         switch (eventType)
@@ -62,6 +64,7 @@ EXPORT void CC Event_Broadcast_422BC0(s32 eventType, BaseGameObject* pObject)
         }
         DEV_CONSOLE_MESSAGE_C("Event: " + std::string(sEventEnumString[eventType]), 5, 0, 0, 127);
     }
+#endif
 }
 
 EXPORT BaseGameObject* CC Event_Get_422C00(s16 eventType)

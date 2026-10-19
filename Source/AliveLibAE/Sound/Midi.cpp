@@ -185,6 +185,219 @@ EXPORT void SND_Reset_4C9FB0()
 }
 
 
+#if defined(TETHYS_GAME_AE)
+// SATURN (Exoddus, stream R4): THE LEVEL'S SOUND BANK ON THE SATURN (decisions
+// D-So2, D-So4; U6 F4, S5, S8; U1b T9, T10). AO's 449.ao.6 loader
+// (AliveLibAO/Midi.cpp SND_VAB_Load_476CB0 and its reload) on Exoddus's names:
+//   - the VH in a locked block that is refused softly, null-tested (the PC
+//     dereferenced an unchecked allocation);
+//   - the VB never whole in the heap: a window, the whole bank when the heap
+//     can hold it (one CD read), else 128, 64, 32 KB, walked forward by
+//     src/snd_vb_stream_ae.cxx, each record becoming a sample in
+//     Tethys_SsVabTransBody_Streamed (Sound/PsxSpuApi.cpp): PCM8 at the
+//     record's base rate, no short-sound doubling, the reverb bit kept;
+//   - under 32 KB of heap the level plays mute (soft, counted) instead of
+//     the PC's free-Abe-and-retry, which dereferenced a null sActiveHero at
+//     the menu (sSnd_ReloadAbeResources is never set);
+//   - MONK is not loaded (D-So2): its VH declares id 0 like every level bank,
+//     which evicts it at once (U6 2.3); 4 KB of locked heap and one CD
+//     command saved per level and per film exit.
+#include "Psx.hpp" // the CD seam: PSX_Pos_To_CdLoc_4FADD0, PSX_CD_File_Seek/Read/FileIOWait
+#include "TethysVbStream.hpp"
+
+// SATURN (Exoddus, U1b T9): a sound-less disc, for a hardware test that must
+// rule the sound out. 1 = no bank is ever read (no CD time, no window): every
+// note and effect fails soft at the sSoundDatIsNull gate, the SEQs still load.
+// Off by default; `make TETHYS_GAME=AE` passes it once the Makefile carries the
+// knob (requests.md, R4 -> lead).
+#ifndef TETHYS_AE_MUTE
+#define TETHYS_AE_MUTE 0
+#endif
+
+bool Tethys_SsVabTransBody_Streamed(const TethysVbSource& src, s16 vabId, u8* pWin, s32 winBytes); // Sound/PsxSpuApi.cpp
+u32 Tethys_ResHeapSize();                    // ResourceManager.cpp: the bound heap's capacity
+extern "C" u32 Tethys_gSnd[10];              // src/sound_saturn.cxx: [8] banks streamed whole, [9] partly
+
+// SATURN (Exoddus, U6 S10): the last bank load, level or film exit, for the
+// overlay's sound row: [0] its milliseconds (CD reads and uploads), [1] the
+// window in KB (0 = refused, the level plays mute), [2] the heap's free KB when
+// the window was asked, [3] bank loads since boot. With Tethys_gSnd[5] (a note
+// on a record that has no sample: must stay 0 through play, the condition of
+// the converter's emptied unreachable records, C4 D5) this is the survey.
+extern "C" u32 Tethys_gSndBank[4] = {};
+
+namespace {
+
+// The window ladder (AO 449.ao.6 Tethys_VbWindowAlloc): firstAsk, then 128, 64
+// and 32 KB. A rung the heap cannot hold is skipped by arithmetic, never by a
+// failed allocation (a refusal with reclaim compacts the heap for nothing);
+// the 32 KB floor is always tried. Id 127 is outside kMaxVabs: scratch.
+u8** Tethys_VbWindowAlloc(s32 firstAsk, s32* pWinBytes)
+{
+    s32 winBytes = firstAsk;
+    {
+        const u32 cap = Tethys_ResHeapSize();
+        const u32 used = sManagedMemoryUsedSize_AB4A04;
+        Tethys_gSndBank[2] = cap >= used ? (cap - used) >> 10 : 0;
+    }
+    for (;;)
+    {
+        const u32 cap = Tethys_ResHeapSize();
+        const u32 used = sManagedMemoryUsedSize_AB4A04;
+        const bool affordable = cap >= used && (cap - used) >= static_cast<u32>(winBytes) + 16u;
+        u8** ppWin = nullptr;
+        if (affordable || winBytes <= 32768)
+        {
+            ppWin = ResourceManager::Alloc_New_Resource_ImplEx(ResourceManager::Resource_VabBody, 127, winBytes,
+                                                              false, ResourceManager::BlockAllocMethod::eFirstMatching,
+                                                              true /*bReclaimOnFail*/, false /*bFatalOnFail*/);
+        }
+        if (ppWin || winBytes <= 32768)
+        {
+            *pWinBytes = winBytes;
+            Tethys_gSndBank[1] = ppWin ? static_cast<u32>(winBytes) >> 10 : 0;
+            return ppWin;
+        }
+        winBytes = winBytes > 131072 ? 131072 : (winBytes > 65536 ? 65536 : 32768);
+    }
+}
+
+// The streamer's byte source: whole sectors of one LVL record, through the
+// same seam LvlArchive::Read_File_4330A0 uses. The read's RESULT is checked
+// (Read_File only asks FileIOWait, which on the Saturn tests that a handle
+// exists): a failed read must not upload the previous window's bytes.
+bool Tethys_VbReadSectors(void* ctx, s32 first, s32 sectors, u8* pDst)
+{
+    const LvlFileRecord* pRec = static_cast<const LvlFileRecord*>(ctx);
+    CdlLOC loc = {};
+    PSX_Pos_To_CdLoc_4FADD0(static_cast<s32>(sLvlArchive_5BC520.field_4_cd_pos) + pRec->field_C_start_sector + first, &loc);
+    PSX_CD_File_Seek_4FB1E0(2, &loc);
+    return PSX_CD_File_Read_4FB210(sectors, pDst) > 0 && PSX_CD_FileIOWait_4FB260(0) != -1;
+}
+
+// One bank's samples through the window: counted [8] whole, [9] partial (the
+// samples that landed play, the others are silent: SND_LoadChunk keys every
+// entry to what arrived).
+void Tethys_VbStream(LvlFileRecord* pVabBodyFile, s16 vabId, u8* pWin, s32 winBytes)
+{
+    const u32 t0 = SYS_GetTicks();
+    const TethysVbSource src = {&Tethys_VbReadSectors, pVabBodyFile, pVabBodyFile->field_10_num_sectors << 11};
+    if (Tethys_SsVabTransBody_Streamed(src, vabId, pWin, winBytes))
+    {
+        Tethys_gSnd[8]++;
+    }
+    else
+    {
+        Tethys_gSnd[9]++;
+    }
+    SsVabTransCompleted_4FE060(SS_WAIT_COMPLETED);
+    Tethys_gSndBank[0] = SYS_GetTicks() - t0;
+    Tethys_gSndBank[3]++;
+}
+
+} // namespace
+
+EXPORT s16 CC SND_VAB_Load_4C9FE0(SoundBlockInfo* pSoundBlockInfo, s16 vabId)
+{
+    if (!pSoundBlockInfo->field_0_vab_header_name)
+    {
+        return 0;
+    }
+    LvlFileRecord* pVabHeaderFile = sLvlArchive_5BC520.Find_File_Record_433160(pSoundBlockInfo->field_0_vab_header_name);
+    if (!pVabHeaderFile)
+    {
+        return 0; // the PC dereferenced it
+    }
+    const s32 headerSize = pVabHeaderFile->field_10_num_sectors << 11;
+    // Allocate_New_Locked_Resource_49BF40's block (locked, last fit, compaction
+    // first), refused softly: the guard below could never run behind the fatal.
+    u8** ppVabHeader = ResourceManager::Alloc_New_Resource_ImplEx(ResourceManager::Resource_VabHeader, vabId, headerSize,
+                                                                  true, ResourceManager::BlockAllocMethod::eLastMatching,
+                                                                  true /*bReclaimOnFail*/, false /*bFatalOnFail*/);
+    if (!ppVabHeader)
+    {
+        return 0;
+    }
+    pSoundBlockInfo->field_C_pVabHeader = *ppVabHeader;
+    sLvlArchive_5BC520.Read_File_4330A0(pVabHeaderFile, *ppVabHeader);
+    GetMidiVars()->LoadingLoop(0);
+
+    LvlFileRecord* pVabBodyFile = sLvlArchive_5BC520.Find_File_Record_433160(pSoundBlockInfo->field_4_vab_body_name);
+    if (!pVabBodyFile)
+    {
+        return 0; // a VH without a VB: the PC's own tolerance
+    }
+    // The window comes BEFORE SsVabOpenHead, as the bank did: a refusal leaves
+    // no open head without samples. The whole bank first: one CD read.
+    const s32 vabBodySize = pVabBodyFile->field_10_num_sectors << 11;
+    s32 winBytes = 0;
+    u8** ppWin = Tethys_VbWindowAlloc(vabBodySize > 32768 ? vabBodySize : 32768, &winBytes);
+    if (!ppWin)
+    {
+        return 0; // under 32 KB free: this level plays mute (counted on the rn row)
+    }
+    pSoundBlockInfo->field_8_vab_id = SsVabOpenHead_4FC620(reinterpret_cast<VabHeader*>(pSoundBlockInfo->field_C_pVabHeader));
+    if (pSoundBlockInfo->field_8_vab_id < 0 || pSoundBlockInfo->field_8_vab_id >= kMaxVabs)
+    {
+        ResourceManager::FreeResource_49C330(ppWin);
+        return 0;
+    }
+    Tethys_VbStream(pVabBodyFile, static_cast<s16>(pSoundBlockInfo->field_8_vab_id), *ppWin, winBytes);
+    ResourceManager::FreeResource_49C330(ppWin);
+    return 1;
+}
+
+// After a Cinepak film the SGL 68K driver owned sound RAM (src/movie_cinepak.cxx
+// RestoreScspBackend): every sample of the level's bank goes back up through the
+// re-opened backend. AO's Tethys_SND_VAB_Reload_Saturn (373.ao.1, 420.ao.1,
+// 449.ao.6) on Exoddus's chain: the still-RESIDENT locked VH is reused (a second
+// Allocate_New_Locked would leak one per film), SsVabOpenHead refills the tables
+// (its close and SND_Free sweep are inert on the fresh backend, its sequencer
+// tick gated off: the caller holds sbDisableSeqs), then the window streams the
+// VB again. One window for the chain, 128 KB first (4 reads for a 249-sector
+// bank instead of 16 at 32 KB, measured cost per read 78.6 ms + 6.6 ms/sector),
+// the ladder skipping what the heap cannot hold; the film's borrowed block is
+// back before this runs. No MONK (D-So2). sLastLoadedSoundBlockInfo is left as
+// it is, so SND_Load_VABS_4CA350 keeps refusing a duplicate full load.
+void Tethys_SND_VAB_Reload_Saturn()
+{
+#if TETHYS_AE_MUTE
+    return;
+#else
+    SoundBlockInfo* pIter = GetMidiVars()->sLastLoadedSoundBlockInfo();
+    if (!pIter)
+    {
+        return; // a film before any level (the boot logos): nothing was resident
+    }
+    s32 winBytes = 0;
+    u8** ppWin = Tethys_VbWindowAlloc(131072, &winBytes);
+    if (!ppWin)
+    {
+        return; // counted on the rn row; the level stays mute until it reloads
+    }
+    for (; pIter->field_0_vab_header_name; pIter++)
+    {
+        if (!pIter->field_C_pVabHeader || !pIter->field_4_vab_body_name
+            || pIter->field_8_vab_id < 0 || pIter->field_8_vab_id >= kMaxVabs)
+        {
+            continue; // never loaded: nothing to restore
+        }
+        LvlFileRecord* pVabBodyFile = sLvlArchive_5BC520.Find_File_Record_433160(pIter->field_4_vab_body_name);
+        if (!pVabBodyFile)
+        {
+            continue;
+        }
+        pIter->field_8_vab_id = SsVabOpenHead_4FC620(reinterpret_cast<VabHeader*>(pIter->field_C_pVabHeader));
+        if (pIter->field_8_vab_id < 0 || pIter->field_8_vab_id >= kMaxVabs)
+        {
+            continue;
+        }
+        Tethys_VbStream(pVabBodyFile, static_cast<s16>(pIter->field_8_vab_id), *ppWin, winBytes);
+    }
+    ResourceManager::FreeResource_49C330(ppWin);
+#endif
+}
+#else
 EXPORT s16 CC SND_VAB_Load_4C9FE0(SoundBlockInfo* pSoundBlockInfo, s16 vabId)
 {
     // Fail if no file name
@@ -267,6 +480,7 @@ EXPORT s16 CC SND_VAB_Load_4C9FE0(SoundBlockInfo* pSoundBlockInfo, s16 vabId)
     GetMidiVars()->FreeResource(ppVabBody);
     return 1;
 }
+#endif
 
 // TODO: PSX has VSyncCallback here 0x800592dc
 
@@ -322,6 +536,35 @@ EXPORT void SND_Shutdown_4CA280()
 }
 
 
+#if defined(TETHYS_GAME_AE)
+// SATURN (Exoddus, stream R4): the PC's flow minus MONK (D-So2) and minus the
+// Abe-resources dance (the window loader never frees them, see SND_VAB_Load
+// above). With the mute knob no bank is read at all; the block list is still
+// recorded, because every effect looks its vab id up through it.
+EXPORT void CC SND_Load_VABS_4CA350(SoundBlockInfo* pSoundBlockInfo, s32 reverb)
+{
+    SoundBlockInfo* pSoundBlockInfoIter = pSoundBlockInfo;
+    GetMidiVars()->sSnd_ReloadAbeResources() = FALSE;
+    if (GetMidiVars()->sLastLoadedSoundBlockInfo() != pSoundBlockInfo)
+    {
+        SsUtReverbOff_4FE350();
+        SsUtSetReverbDepth_4FE380(0, 0);
+        SpuClearReverbWorkArea_4FA690(4);
+
+        GetMidiVars()->sLastLoadedSoundBlockInfo() = pSoundBlockInfo;
+#if !TETHYS_AE_MUTE
+        s16 vabId = 0;
+        while (SND_VAB_Load_4C9FE0(pSoundBlockInfoIter, vabId))
+        {
+            ++vabId;
+            ++pSoundBlockInfoIter;
+        }
+#endif
+        SsUtSetReverbDepth_4FE380(reverb, reverb);
+        SsUtReverbOn_4FE340();
+    }
+}
+#else
 EXPORT void CC SND_Load_VABS_4CA350(SoundBlockInfo* pSoundBlockInfo, s32 reverb)
 {
     SoundBlockInfo* pSoundBlockInfoIter = pSoundBlockInfo;
@@ -357,6 +600,7 @@ EXPORT void CC SND_Load_VABS_4CA350(SoundBlockInfo* pSoundBlockInfo, s32 reverb)
         SsUtReverbOn_4FE340();
     }
 }
+#endif
 
 
 s32 CC SFX_SfxDefinition_Play_4CA420(const SfxDefinition* sfxDef, s16 volume, s16 pitch_min, s16 pitch_max)

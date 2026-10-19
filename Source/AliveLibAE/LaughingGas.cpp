@@ -13,6 +13,17 @@
 ALIVE_VAR(1, 0x5BC214, s32, gGasInstanceCount_5BC214, 0);
 ALIVE_VAR(1, 0x5C1BA4, s16, gLaughingGasOn_5C1BA4, FALSE);
 
+#if defined(TETHYS_SATURN)
+// SATURN: the PC's FP_FromDouble constants folded by hand, bit-identical (the PC
+// truncates v * 65536): no double operation reaches the image (D-B4 floats).
+#define TETHYS_GAS_FP_001 FP_FromRaw(655)   // FP_FromDouble(0.01)
+#define TETHYS_GAS_FP_010 FP_FromRaw(6553)  // FP_FromDouble(0.1)
+#define TETHYS_GAS_FP_030 FP_FromRaw(19660) // FP_FromDouble(0.3)
+#else
+#define TETHYS_GAS_FP_001 FP_FromDouble(0.01)
+#define TETHYS_GAS_FP_010 FP_FromDouble(0.1)
+#define TETHYS_GAS_FP_030 FP_FromDouble(0.3)
+
 // On linux not using this random algorithm produces much bigger numbers
 // which causes flickering in the gas rendering. Apparently this is the MSVC algorithm.
 static s32 random_seed = 0;
@@ -21,6 +32,7 @@ static s32 gas_rand()
     random_seed = (random_seed * 214013 + 2531011) & 0xFFFFFFFF;
     return (random_seed >> 16) & 0x7FFF;
 }
+#endif // SATURN: gas_rand and its session seed live in src/gas_ae.cxx (GasRand, sSeed)
 
 LaughingGas* LaughingGas::ctor_432400(Layer layer, s32 /*notUsed*/, Path_LaughingGas* pTlv, s32 tlvInfo)
 {
@@ -71,10 +83,12 @@ LaughingGas* LaughingGas::ctor_432400(Layer layer, s32 /*notUsed*/, Path_Laughin
     field_2C_h = FP_GetExponent(FP_FromInteger(pTlv->field_C_bottom_right.field_2_y) - pScreenManager_5BB5F4->field_20_pCamPos->field_4_y);
     field_2E_w = FP_GetExponent(PsxToPCX(FP_FromInteger(pTlv->field_C_bottom_right.field_0_x) - pScreenManager_5BB5F4->field_20_pCamPos->field_0_x));
 
+#if !defined(TETHYS_SATURN) // SATURN: no 2 * wc * hc pixel buffer (up to 39,930 B of pool): src/gas_ae.cxx draws into VDP2 VRAM
     field_31F8_w_count = (field_2E_w - field_2A_x) / 4;
     field_31FC_h_count = (field_2C_h - field_28_y + 2) / 2;
 
     field_19C_pMem = static_cast<u16*>(ae_malloc_non_zero_4954F0(sizeof(s16) * field_31FC_h_count * field_31F8_w_count));
+#endif
 
     Init_432980();
     VUpdate();
@@ -89,7 +103,13 @@ void LaughingGas::dtor_432B80()
     gObjList_drawables_5C1124->Remove_Item(this);
     gLaughingGasOn_5C1BA4 = FALSE;
     gGasInstanceCount_5BC214--;
+#if defined(TETHYS_SATURN)
+#if defined(TETHYS_AE_GAS)
+    Tethys_GasEnd(); // SATURN: the DSP's run ends, its block and the plane go (D-G2)
+#endif
+#else
     ae_delete_free_495540(field_19C_pMem);
+#endif
     BaseGameObject_dtor_4DBEC0();
 }
 
@@ -118,6 +138,24 @@ void LaughingGas::vScreenChanged_432DE0()
     field_6_flags.Set(BaseGameObject::eDead_Bit3);
 }
 
+#if defined(TETHYS_SATURN)
+void LaughingGas::Init_432980()
+{
+    // SATURN: no float tables (the 36 phase draws and the zone's bases are
+    // Tethys_GasBegin's, in fixed point, D-G2). The prim stays, with no pixels:
+    // walked, it tells the renderer that vRender's gate passed this frame.
+    field_5C_prim.mPrimHeader.rgb_code.code_or_pad = PrimTypeCodes::eLaughingGas;
+    field_5C_prim.x = field_2A_x;
+    field_5C_prim.y = field_28_y;
+    field_5C_prim.w = field_2E_w;
+    field_5C_prim.h = field_2C_h;
+    field_5C_prim.pData = nullptr;
+#if defined(TETHYS_AE_GAS)
+    Tethys_GasBegin(field_2A_x, field_28_y, field_2E_w, field_2C_h,
+                    field_36_bLaughing_gas == Choice_short::eNo_0 ? 1 : 0, field_54_amount_on.fpValue);
+#endif
+}
+#else
 const f32 dword_551C58[7] = {1.0, 5.0, 10.0, 10.0, 5.0, 1.0, 0.0};
 
 void LaughingGas::Init_432980()
@@ -181,6 +219,7 @@ void LaughingGas::Init_432980()
     field_5C_prim.h = field_2C_h;
     field_5C_prim.pData = field_19C_pMem;
 }
+#endif
 
 LaughingGas* LaughingGas::vdtor_432670(s32 flags)
 {
@@ -194,7 +233,19 @@ LaughingGas* LaughingGas::vdtor_432670(s32 flags)
 
 void LaughingGas::vRender_432D10(PrimHeader** ppOt)
 {
-    if (field_54_amount_on > FP_FromDouble(0.1) || field_36_bLaughing_gas == Choice_short::eNo_0)
+#if defined(TETHYS_SATURN)
+    // SATURN: the PC's gate; the field itself is drawn by src/gas_ae.cxx at the
+    // start of the walk, and the walked prim makes the renderer call
+    // Tethys_GasDrawn (D-G2). No InvalidateRect: the Saturn CAM is a VDP2 plane,
+    // the PC's dirty tiles do not exist (L5). A build without the gas adds no prim.
+    if (field_54_amount_on > TETHYS_GAS_FP_010 || field_36_bLaughing_gas == Choice_short::eNo_0)
+    {
+#if defined(TETHYS_AE_GAS)
+        OrderingTable_Add_4F8AA0(OtLayer(ppOt, field_58_layer), &field_5C_prim.mPrimHeader);
+#endif
+    }
+#else
+    if (field_54_amount_on > TETHYS_GAS_FP_010 || field_36_bLaughing_gas == Choice_short::eNo_0)
     {
         if (field_19C_pMem)
         {
@@ -206,8 +257,10 @@ void LaughingGas::vRender_432D10(PrimHeader** ppOt)
         }
         pScreenManager_5BB5F4->InvalidateRect_40EC10(0, 0, gPsxDisplay_5C1130.field_0_width, gPsxDisplay_5C1130.field_2_height);
     }
+#endif
 }
 
+#if !defined(TETHYS_SATURN) // SATURN: the field is src/gas_ae.cxx's, fixed point (D-G2)
 void LaughingGas::DoRender_432740()
 {
     f32 local_array[6];
@@ -254,10 +307,11 @@ void LaughingGas::DoRender_432740()
         }
     }
 }
+#endif // !TETHYS_SATURN
 
 s16 LaughingGas::CounterOver_432DA0()
 {
-    return field_54_amount_on >= FP_FromDouble(0.3);
+    return field_54_amount_on >= TETHYS_GAS_FP_030; // SATURN: folded constant (head of the file)
 }
 
 void LaughingGas::vUpdate_432C40()
@@ -282,14 +336,14 @@ void LaughingGas::vUpdate_432C40()
         {
             if (field_54_amount_on < FP_FromInteger(1))
             {
-                field_54_amount_on += FP_FromDouble(0.01);
+                field_54_amount_on += TETHYS_GAS_FP_001; // SATURN: folded constant (head of the file)
             }
         }
         else
         {
             if (field_54_amount_on > FP_FromInteger(0))
             {
-                field_54_amount_on -= FP_FromDouble(0.01);
+                field_54_amount_on -= TETHYS_GAS_FP_001; // SATURN: folded constant (head of the file)
             }
         }
     }
@@ -308,6 +362,16 @@ void LaughingGas::vUpdate_432C40()
     sub_4328A0();
 }
 
+#if defined(TETHYS_SATURN)
+void LaughingGas::sub_4328A0()
+{
+    // SATURN: the 16 draws and controls of :341-352 in fixed point, with the
+    // amount this update left, in src/gas_ae.cxx (D-G2): no sin(), no float.
+#if defined(TETHYS_AE_GAS)
+    Tethys_GasTick(field_54_amount_on.fpValue);
+#endif
+}
+#else
 f32 LaughingGas::Calc_X_4326A0(f32* a2, s32 xIndex)
 {
     f32 result = 0.0;
@@ -350,3 +414,4 @@ void LaughingGas::sub_4328A0()
         }
     }
 }
+#endif // TETHYS_SATURN

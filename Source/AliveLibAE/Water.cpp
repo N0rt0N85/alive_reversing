@@ -1,4 +1,7 @@
 #include "stdafx.h"
+#ifdef TETHYS_SATURN
+#include "TethysObjectHooks.hpp"
+#endif
 #include "Water.hpp"
 #include "Function.hpp"
 #include "ScreenManager.hpp"
@@ -56,7 +59,13 @@ Water* Water::ctor_4E02C0(Path_Water* pTlv, s32 tlvInfo)
 
         field_138_splash_time = 0;
 
+#ifdef TETHYS_SATURN
+        // SATURN (U1d T2): the `else` of this test (no buffer) is the recovery:
+        // a soft refusal, so it can run under the default fatal policy (D-B4).
+        field_F4_ppWaterRes = Tethys_ResAllocSoft(ResourceManager::Resource_Water, 0, field_124_tlv_data.field_10_max_drops * sizeof(Water_Res), true /*locked*/, true /*reclaim*/);
+#else
         field_F4_ppWaterRes = ResourceManager::Allocate_New_Locked_Resource_49BF40(ResourceManager::Resource_Water, 0, field_124_tlv_data.field_10_max_drops * sizeof(Water_Res));
+#endif
         if (field_F4_ppWaterRes)
         {
             field_F8_pWaterRes = reinterpret_cast<Water_Res*>(*field_F4_ppWaterRes);
@@ -557,6 +566,24 @@ void Water::vRender_4E1440(PrimHeader** ppOt)
         s16 yMin = 32767;
         s16 hMax = -32767;
 
+#ifdef TETHYS_SATURN
+        // SATURN (U1d T16, decision D10 (a)): A DRAW-ONLY CAP. Up to 128 drops are
+        // alive (the TLVs ask 300, upstream caps 128), each one Poly_FT4 at layer
+        // 39, against a frame of 128 VDP1 commands: a full stream alone fills the
+        // frame and the renderer's rank shed would drop Abe (32) before the drops.
+        // Exactly min(live, kWaterDrawCap) drops are DRAWN, spread evenly over the
+        // live ones in slot order (a Bresenham accumulator, no division), so the
+        // stream keeps its shape, only sparser. The simulation, the splashes, the
+        // sounds and the random numbers are untouched: this loop only chooses
+        // which polys go in the table.
+        static const s32 kWaterDrawCap = 32;
+        s32 tethysLive = 0;
+        for (s32 i = 0; i < field_124_tlv_data.field_10_max_drops; i++)
+        {
+            tethysLive += field_F8_pWaterRes[i].field_18_enabled ? 1 : 0;
+        }
+        s32 tethysAcc = 0;
+#endif
         for (s32 i = 0; i < field_124_tlv_data.field_10_max_drops; i++)
         {
             Water_Res* pWaterRes = &field_F8_pWaterRes[i];
@@ -608,7 +635,19 @@ void Water::vRender_4E1440(PrimHeader** ppOt)
                 pPoly->mVerts[2].mUv.tpage_clut_pad = 0;
 
                 SetXYWH(pPoly, polyX, polyY, width, height);
+#ifdef TETHYS_SATURN
+                tethysAcc += kWaterDrawCap; // SATURN (U1d T16): see the cap above
+                if (tethysLive <= kWaterDrawCap || tethysAcc >= tethysLive)
+                {
+                    if (tethysLive > kWaterDrawCap)
+                    {
+                        tethysAcc -= tethysLive;
+                    }
+                    OrderingTable_Add_4F8AA0(OtLayer(ppOt, Layer::eLayer_Above_FG1_39), &pPoly->mBase.header);
+                }
+#else
                 OrderingTable_Add_4F8AA0(OtLayer(ppOt, Layer::eLayer_Above_FG1_39), &pPoly->mBase.header);
+#endif
 
                 if (polyX < xMin)
                 {

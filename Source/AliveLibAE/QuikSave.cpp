@@ -321,7 +321,11 @@ void QuikSave_RestoreBlyData_D481890_4C9BE0(const u8* pSaveData)
 
 ALIVE_VAR(1, 0xBAF7F8, Quicksave, sActiveQuicksaveData_BAF7F8, {});
 ALIVE_VAR(1, 0x5C1BF4, s32, sAccumulatedObjectCount_5C1BF4, 0);
+#ifdef TETHYS_SATURN
+ALIVE_ARY(1, 0xBB31D8, SaveFileRec, 4, sSaveFileRecords_BB31D8, {}); // SATURN: four slots, QuikSave.hpp
+#else
 ALIVE_ARY(1, 0xBB31D8, SaveFileRec, 128, sSaveFileRecords_BB31D8, {});
+#endif
 ALIVE_VAR(1, 0xBB43FC, s32, sSavedGameToLoadIdx_BB43FC, 0);
 ALIVE_VAR(1, 0xBB43E0, s32, sTotalSaveFilesCount_BB43E0, 0);
 
@@ -368,8 +372,28 @@ static void WriteFlags(u8*& pSaveBuffer, const Path_TLV* pTlv, const BitField8<T
     pSaveBuffer++;
 }
 
+#ifdef TETHYS_SATURN
+// SATURN (stream R1, U1a A22, AO bt1071 twin): what this function really wrote,
+// published for the save side (stream R3) so the backup image can be cut to
+// the bytes in use instead of all 8,192 B of the Quicksave (D-T2): the flag
+// block's length, and the first byte past it (the used length of the Quicksave
+// is Tethys_gSaveBlyEnd - (u8*) pSave). This site only measures.
+extern "C" volatile u32 Tethys_gSaveBlobLen = 0;
+extern "C" u8* volatile Tethys_gSaveBlyEnd = nullptr;
+#endif
+
+#ifdef TETHYS_SATURN
+// SATURN (stream R3, U1c T04/SG4): the end of the Quicksave being written, set
+// by Quicksave_SaveToMemory_4C91A0 around its call: the flag block is written
+// only while it fits (the PC wrote unbounded). Null = unbounded.
+static const u8* sTethysQsEnd = nullptr;
+#endif
+
 EXPORT void CCSTD Quicksave_SaveBlyData_4C9660(u8* pSaveBuffer)
 {
+#ifdef TETHYS_SATURN
+    u8* const pTethysBlyStart = pSaveBuffer;
+#endif
     for (s16 i = 1; i < Path_Get_Num_Paths(gMap_5C3030.field_0_current_level); i++)
     {
         const PathBlyRec* pPathRec = Path_Get_Bly_Record_460F30(gMap_5C3030.field_0_current_level, i);
@@ -392,6 +416,14 @@ EXPORT void CCSTD Quicksave_SaveBlyData_4C9660(u8* pSaveBuffer)
                         Path_TLV* pTlv = reinterpret_cast<Path_TLV*>(ptr);
                         while (pTlv)
                         {
+#ifdef TETHYS_SATURN
+                            // SATURN (R3): never past the Quicksave (sTethysQsEnd above).
+                            if (sTethysQsEnd && pSaveBuffer + 2 > sTethysQsEnd)
+                            {
+                                pTlv = Path::Next_TLV_4DB6A0(pTlv);
+                                continue;
+                            }
+#endif
                             if (kObjectTypeAttributesTable_byte_547794.mTypes[static_cast<s16>(pTlv->field_4_type.mType)] == 1)
                             {
                                 BitField8<TLV_Flags> flags = pTlv->field_0_flags;
@@ -420,6 +452,10 @@ EXPORT void CCSTD Quicksave_SaveBlyData_4C9660(u8* pSaveBuffer)
     }
 
     // NOTE: Some values with things like total save size written here, but they are never used
+#ifdef TETHYS_SATURN
+    Tethys_gSaveBlobLen = static_cast<u32>(pSaveBuffer - pTethysBlyStart);
+    Tethys_gSaveBlyEnd = pSaveBuffer;
+#endif
 }
 
 struct SaveFlagsAndData final
@@ -602,8 +638,10 @@ EXPORT void CC MEMCARD_Write_Timestamp_SJISC_String_4A2290(char_type* dst)
         }
     }
 }
+#ifndef TETHYS_SATURN // SATURN (U1c T04): the PSX card headers are never written here (-1,024 B)
 ALIVE_VAR(1, 0xBB19F8, Quicksave_PSX_Header, sSaveHeader2_BB19F8, {});
 ALIVE_VAR(1, 0xBB17F8, Quicksave_PSX_Header, sSaveHeader1_BB17F8, {});
+#endif
 
 EXPORT void CC Quicksave_SaveToMemory_4C91A0(Quicksave* pSave)
 {
@@ -611,6 +649,7 @@ EXPORT void CC Quicksave_SaveToMemory_4C91A0(Quicksave* pSave)
     {
         pSave->field_200_accumulated_obj_count = sAccumulatedObjectCount_5C1BF4;
 
+#ifndef TETHYS_SATURN // SATURN (U1c T04/A13): the PSX memory-card header (SJIS title, play time) is never stored or read here
         // Don't really know what the point of doing this is? Might as well just memset the pSave header?
         Quicksave_PSX_Header* pHeaderToUse = nullptr;
         if (bUseAltSaveHeader_5C1BBC == 0)
@@ -631,10 +670,26 @@ EXPORT void CC Quicksave_SaveToMemory_4C91A0(Quicksave* pSave)
                 gMap_5C3030.field_2_current_path,
                 gMap_5C3030.field_4_current_camera);
         MEMCARD_Write_SJISC_String_4A2770(src, &pSave->field_0_header.field_0_frame_1_name[32], 8);
+#endif // !TETHYS_SATURN: the PSX card header
         Quicksave_SaveWorldInfo_4C9310(&pSave->field_204_world_info);
         pSave->field_45C_switch_states = sSwitchStates_5C1A28;
 
         u8* pDataIter = pSave->field_55C_objects_state_data;
+#ifdef TETHYS_SATURN
+        // SATURN (U1c T04/SG4): nothing is written past the Quicksave. Each object
+        // record is at most kTethysMaxObjState bytes (Abe_SaveState, the largest
+        // of the 36 save types, measured by tools/ae/ae_save_schema.py; the
+        // asserts keep the bound honest), and a u32 0 must follow the last one.
+        // An object that would not fit is not saved: a crowded room loses a
+        // record on reload instead of the Quicksave overrunning its 8 KB into
+        // whatever .bss follows it. The 134 shipped saves end their objects at
+        // 0x0EA8 and their flag blocks at 4,716 of 8,192 bytes.
+        constexpr s32 kTethysMaxObjState = 216;
+        static_assert(sizeof(Abe_SaveState) <= kTethysMaxObjState && sizeof(Fleech_State) <= kTethysMaxObjState
+                          && sizeof(FlyingSlig_State) <= kTethysMaxObjState && sizeof(Slig_State) <= kTethysMaxObjState,
+                      "a save state outgrew the quicksave writer's bound");
+        u8* const pTethysEnd = reinterpret_cast<u8*>(pSave) + sizeof(Quicksave);
+#endif
         for (s32 idx = 0; idx < gBaseGameObject_list_BB47C4->Size(); idx++)
         {
             BaseGameObject* pObj = gBaseGameObject_list_BB47C4->ItemAt(idx);
@@ -645,6 +700,12 @@ EXPORT void CC Quicksave_SaveToMemory_4C91A0(Quicksave* pSave)
 
             if (!(pObj->field_6_flags.Get(BaseGameObject::eDead_Bit3)))
             {
+#ifdef TETHYS_SATURN
+                if (pDataIter + kTethysMaxObjState + 4 > pTethysEnd)
+                {
+                    break; // see the bound above
+                }
+#endif
                 pDataIter += pObj->VGetSaveState(pDataIter);
             }
         }
@@ -655,7 +716,21 @@ EXPORT void CC Quicksave_SaveToMemory_4C91A0(Quicksave* pSave)
         pDataIter[2] = 0;
         pDataIter[3] = 0;
 
+#ifdef TETHYS_SATURN
+        sTethysQsEnd = pTethysEnd;
         Quicksave_SaveBlyData_4C9660(pDataIter + 4);
+        sTethysQsEnd = nullptr;
+        // SATURN (U1c T04/SG4): zero the stale tail behind the flag block (R1's
+        // Tethys_gSaveBlyEnd marks where it ended), so what follows is zeros the
+        // backup-RAM codec stores as one run per 128 bytes, and a slot never
+        // carries bytes of an older game.
+        for (u8* p = Tethys_gSaveBlyEnd; p && p < pTethysEnd; p++)
+        {
+            *p = 0;
+        }
+#else
+        Quicksave_SaveBlyData_4C9660(pDataIter + 4);
+#endif
     }
 }
 
@@ -731,6 +806,44 @@ void CC Quicksave_SaveWorldInfo_4C9310(Quicksave_WorldInfo* pInfo)
     pInfo->field_10_controlled_scale = sControlledCharacter_5C1B8C->field_CC_sprite_scale == FP_FromDouble(1.0);
 }
 
+#ifdef TETHYS_SATURN
+// SATURN (stream R3): see QuikSave.hpp. src/save_saturn.cxx codes, checksums
+// and stores; this side only frames the bytes.
+extern "C" s32 Tethys_AeSaveWrite(const u8* raw, s32 rawLen, const char* title, u32 playFrames);
+extern "C" s32 Tethys_AeSaveRead(s32 slot, u8* out, s32 outMax);
+
+bool Quicksave_WriteSlot_Saturn(const char_type* pTitle)
+{
+    const u8* pRaw = reinterpret_cast<const u8*>(&sActiveQuicksaveData_BAF7F8) + sizeof(Quicksave_PSX_Header);
+    s32 n = static_cast<s32>(sizeof(Quicksave) - sizeof(Quicksave_PSX_Header));
+    while (n > 0 && pRaw[n - 1] == 0)
+    {
+        n--; // Quicksave_SaveToMemory_4C91A0 zeroed everything past the flag block
+    }
+    if (n <= 0)
+    {
+        return false;
+    }
+    // The play time the PSX card header carried (MEMCARD_Generate_Timestamp_String_4A21F0).
+    const u32 playFrames = sGnFrame_5C1B84 - static_cast<u32>(sGameStartedFrame_5C1B88);
+    return Tethys_AeSaveWrite(pRaw, n, pTitle, playFrames) != 0;
+}
+
+bool Quicksave_ReadSlot_Saturn(s32 slot)
+{
+    u8* pRaw = reinterpret_cast<u8*>(&sActiveQuicksaveData_BAF7F8) + sizeof(Quicksave_PSX_Header);
+    const s32 room = static_cast<s32>(sizeof(Quicksave) - sizeof(Quicksave_PSX_Header));
+    const s32 n = Tethys_AeSaveRead(slot, pRaw, room);
+    if (n <= 0)
+    {
+        return false;
+    }
+    memset(&sActiveQuicksaveData_BAF7F8.field_0_header, 0, sizeof(Quicksave_PSX_Header));
+    memset(pRaw + n, 0, static_cast<size_t>(room - n));
+    return true;
+}
+#endif
+
 EXPORT s32 CC Sort_comparitor_4D42C0(const void* pSaveRecLeft, const void* pSaveRecRight)
 {
     const s32 leftTime = reinterpret_cast<const SaveFileRec*>(pSaveRecLeft)->field_20_lastWriteTimeStamp;
@@ -752,7 +865,12 @@ void CC Quicksave_FindSaves_4D4150()
 
     IO_EnumerateDirectory("*.sav", [](const char_type* fileName, u32 lastWriteTime)
                           {
+#ifdef TETHYS_SATURN
+                              // SATURN: the array's own length (4 slots here)
+                              if (sTotalSaveFilesCount_BB43E0 < static_cast<s32>(ALIVE_COUNTOF(sSaveFileRecords_BB31D8)))
+#else
                               if (sTotalSaveFilesCount_BB43E0 < 128)
+#endif
                               {
                                   size_t fileNameLen = strlen(fileName) - 4;
                                   if (fileNameLen > 0)

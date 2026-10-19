@@ -97,7 +97,20 @@ void ElectricWall::dtor_421FA0()
 
 void ElectricWall::vScreenChanged_422530()
 {
+#ifdef TETHYS_SATURN
+    // SATURN (U1d T12, AO 448.ao.3 twin): a wall dies on a screen change unless
+    // it stands on the screen being left, as it did before the neighbour
+    // screens came back (D-R3). Upstream lets a wall next door live one change
+    // longer: off screen and out of earshot, its ELECWALL animation (15,524 B
+    // raw) stays on the heap through the next screen's load. Walking back
+    // re-creates it from its TLV. AO 448.ao.7: the upstream rule in an attract
+    // demo, where a wall that lives draws a random frame and a random sound
+    // delay that the recorded input's replay needs where the recording had them.
+    const CameraPos tethysDir = gMap_5C3030.GetDirection_4811A0(field_C2_lvl_number, field_C0_path_number, field_B8_xpos, field_BC_ypos);
+    if (gMap_5C3030.field_0_current_level != gMap_5C3030.field_A_level || gMap_5C3030.field_2_current_path != gMap_5C3030.field_C_path || (gAttract_5C1BA0 ? tethysDir == CameraPos::eCamInvalid_m1 : tethysDir != CameraPos::eCamCurrent_0))
+#else
     if (gMap_5C3030.field_0_current_level != gMap_5C3030.field_A_level || gMap_5C3030.field_2_current_path != gMap_5C3030.field_C_path || gMap_5C3030.GetDirection_4811A0(field_C2_lvl_number, field_C0_path_number, field_B8_xpos, field_BC_ypos) == CameraPos::eCamInvalid_m1)
+#endif
     {
         field_6_flags.Set(BaseGameObject::eDead_Bit3);
     }

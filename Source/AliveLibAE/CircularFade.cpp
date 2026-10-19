@@ -5,6 +5,9 @@
 #include "PsxDisplay.hpp"
 #include "Game.hpp"
 #include "stdlib.hpp"
+#ifdef TETHYS_SATURN
+#include "TethysObjectHooks.hpp" // Tethys_IrisDraw: one declaration for both sides
+#endif
 
 CircularFade* CircularFade::ctor_4CE100(FP xpos, FP ypos, FP scale, s16 direction, s8 destroyOnDone)
 {
@@ -95,6 +98,62 @@ void CircularFade::vRender_4CE3F0(PrimHeader** ppOt)
     field_20_animation.field_9_g = fade_rgb;
     field_20_animation.field_A_b = fade_rgb;
 
+#ifdef TETHYS_SATURN
+    // SATURN (U1d T7 / U10 R12, AO 449.ao.4 twin): THE IRIS IS A VDP2 PLANE, THE
+    // CEL IS NEVER DRAWN. The PC effect is the SPOTLITE cel over the focus point
+    // plus four eBlend_2 tiles around its frame rect: B - F, a subtraction the
+    // Saturn cannot do between VDP1 quads and the VDP2 camera (unported, a
+    // partial tile becomes a flat VDP1 quad: "black screen, white square, black
+    // circle"). Exoddus uses it on EVERY death respawn (Abe.cpp, Motion_57) and
+    // at the 74 hand stones, so it matters more than in Oddysee. The renderer
+    // (src/renderer_saturn.cxx, Tethys_IrisDraw / IrisApply) draws a black plane
+    // above everything, shown OUTSIDE a line window cut to this cel's 50 %
+    // contour, added to what lies under it and offset by -fade: the PSX's B - F
+    // around the hole, sprites included. Its contour table was cut from AO's
+    // SPOTLITE and is bit-identical to Exoddus's (U10, all 32 rows). When the
+    // plane cannot be had (another fade, the pause veil, a film, the gas
+    // holding NBG0, no CRAM, no cycle) it falls back to a full-screen fade.
+    //   The rect is Exoddus's Animation::vRender_40B820, step for step
+    // (Animation.cpp: PC pixels and lines, widths already in PC space), since
+    // the cel is never drawn and nothing else computes it.
+    {
+        const FrameInfoHeader* pFrameInfoHeader = field_20_animation.Get_FrameHeader_40B730(-1);
+        const FrameHeader* pFrameHeader = reinterpret_cast<const FrameHeader*>(
+            &(*field_20_animation.field_20_ppBlock)[pFrameInfoHeader->field_0_frame_header_offset]);
+        FP frameW = FP_FromInteger(pFrameHeader->field_4_width);
+        FP frameH = FP_FromInteger(pFrameHeader->field_5_height);
+        FP xOff = {};
+        FP yOff = {};
+        if (!field_20_animation.field_4_flags.Get(AnimFlags::eBit20_use_xy_offset))
+        {
+            xOff = FP_FromInteger(pFrameInfoHeader->field_8_data.offsetAndRect.mOffset.x);
+            yOff = FP_FromInteger(pFrameInfoHeader->field_8_data.offsetAndRect.mOffset.y);
+        }
+        const FP scale = field_20_animation.field_14_scale;
+        if (scale != FP_FromInteger(1))
+        {
+            frameH = frameH * scale;
+            frameW = frameW * scale;
+            if (scale == FP_FromDouble(0.5))
+            {
+                frameH += FP_FromInteger(1);
+                frameW += FP_FromInteger(1);
+            }
+            xOff = xOff * scale;
+            yOff = (yOff * scale) - FP_FromInteger(1);
+        }
+        const s32 xpos = FP_GetExponent(FP_FromInteger(field_DA_xOffset) + field_B8_xpos - pScreenManager_5BB5F4->field_20_pCamPos->field_0_x);
+        const s32 ypos = FP_GetExponent(FP_FromInteger(field_D8_yOffset) + field_BC_ypos - pScreenManager_5BB5F4->field_20_pCamPos->field_4_y);
+        const s32 xPc = static_cast<s16>(PsxToPCX(xpos));
+        const bool bFlip = field_20_animation.field_4_flags.Get(AnimFlags::eBit5_FlipX);
+        const s32 polyX = bFlip ? xPc - FP_GetExponent(xOff + FP_FromDouble(0.499)) - FP_GetExponent(frameW + FP_FromDouble(0.499))
+                                : xPc + FP_GetExponent(xOff + FP_FromDouble(0.499));
+        const s32 polyY = ypos + FP_GetExponent(yOff + FP_FromDouble(0.499));
+        const s32 x1 = polyX + FP_GetExponent(frameW - FP_FromDouble(0.501));
+        const s32 y1 = polyY + FP_GetExponent(frameH - FP_FromDouble(0.501));
+        Tethys_IrisDraw(polyX, polyY, x1, y1, bFlip ? 1 : 0, field_1B8_fade_colour);
+    }
+#else
     field_20_animation.vRender_40B820(
         FP_GetExponent(FP_FromInteger(field_DA_xOffset) + field_B8_xpos - pScreenManager_5BB5F4->field_20_pCamPos->field_0_x),
         FP_GetExponent(FP_FromInteger(field_D8_yOffset) + field_BC_ypos - pScreenManager_5BB5F4->field_20_pCamPos->field_4_y),
@@ -192,7 +251,9 @@ void CircularFade::vRender_4CE3F0(PrimHeader** ppOt)
             gPsxDisplay_5C1130.field_0_width,
             gPsxDisplay_5C1130.field_2_height);
     }
+#endif // TETHYS_SATURN
 
+    // SHARED: the done detection reads field_1B8_fade_colour only.
     if ((field_1B8_fade_colour == 255 && field_F4_flags.Get(Flags::eBit1_FadeIn)) || (field_1B8_fade_colour == 0 && !(field_F4_flags.Get(Flags::eBit1_FadeIn))))
     {
         if (!(field_F4_flags.Get(Flags::eBit2_Done)))
