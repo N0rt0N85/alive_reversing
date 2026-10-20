@@ -33,7 +33,17 @@
 // .inc files are written together, a text arm also requires the French atlas
 // (RELIVE's US rects draw the French sheets' accents wrong or blank), and
 // TETHYS_LANG_EN keeps RELIVE's English.
-#if defined(TETHYS_SATURN) && !defined(TETHYS_LANG_EN) && __has_include("ae/tethys_ae_mainmenu_fr.inc") && __has_include("ae/tethys_ae_font_atlas_fr.inc")
+// SATURN (11.14, the language discs): TETHYS_LANG_ES compiles the Spanish set
+// (ae_text.py --lang es: tethys_ae_*_es.inc, the same macros), under the same
+// rule; TETHYS_AE_MAINMENU_FR then means "localized tables", and the `fr`
+// argument of TETHYS_AE_MM_TEXT the localized text.
+#if defined(TETHYS_SATURN) && defined(TETHYS_LANG_ES) && __has_include("ae/tethys_ae_mainmenu_es.inc") && __has_include("ae/tethys_ae_font_atlas_es.inc")
+#include "ae/tethys_ae_mainmenu_es.inc"
+#define TETHYS_AE_MAINMENU_FR 1
+#define TETHYS_AE_MM_TEXT(fr, en) fr
+// The Saturn-only prompt of the remap page, in the Spanish disc's words.
+#define TETHYS_AE_MM_START_CANCEL "o Start para cancelar"
+#elif defined(TETHYS_SATURN) && !defined(TETHYS_LANG_EN) && !defined(TETHYS_LANG_ES) && __has_include("ae/tethys_ae_mainmenu_fr.inc") && __has_include("ae/tethys_ae_font_atlas_fr.inc")
 #include "ae/tethys_ae_mainmenu_fr.inc"
 #define TETHYS_AE_MAINMENU_FR 1
 #define TETHYS_AE_MM_TEXT(fr, en) fr
@@ -41,9 +51,13 @@
 #define TETHYS_AE_MAINMENU_FR 0
 #define TETHYS_AE_MM_TEXT(fr, en) en
 #endif
+#ifndef TETHYS_AE_MM_START_CANCEL
+#define TETHYS_AE_MM_START_CANCEL "ou Start pour annuler"
+#endif
 
 #ifdef TETHYS_SATURN
 extern "C" [[noreturn]] void Tethys_Fatal(const char_type* msg); // SATURN: src/main.cxx
+#include "TethysObjectHooks.hpp" // SATURN: the chant glow's arm and disarm (src/glow_ae.cxx)
 #endif
 
 #if defined(TETHYS_AE_START_CAM) && TETHYS_AE_START_CAM > 0
@@ -827,6 +841,9 @@ BaseGameObject* MainMenuController::vdtor_4CEF00(s32 flags)
 void MainMenuController::dtor_4CEF30()
 {
     SetVTable(this, 0x547958);
+#ifdef TETHYS_SATURN
+    Tethys_GlowChantDisarmAE(); // SATURN: the chant glow and its CRAM pin leave with the menu
+#endif
 
     Path::TLV_Reset_4DB8E0(field_1F0_tlvOffsetLevelIdPathId, -1, 0, 0);
     field_158_animation.vCleanUp_40C630();
@@ -3073,7 +3090,7 @@ void MainMenuController::RemapInput_Render_4D2A10(PrimHeader** ppOt)
         // SATURN (U1c MM21, AO 307.ao.1 twin): the pad remap swaps two buttons
         // and START cancels (src/sys_saturn.cxx Input_Remap_492680): there is no
         // BackSpace, no Esc, and no unbound state. The Oddysee disc's words.
-        field_234_pStr = TETHYS_AE_MM_TEXT("ou Start pour annuler", "or Start to cancel");
+        field_234_pStr = TETHYS_AE_MM_TEXT(TETHYS_AE_MM_START_CANCEL, "or Start to cancel");
 #else
         field_234_pStr = TETHYS_AE_MM_TEXT(TETHYS_AE_MM_BACKSPACE_ESC, "Press BackSpace for none, Esc to exit");
 #endif
@@ -4295,6 +4312,20 @@ void MainMenuController::AnimationAndSoundLogic_4CFE80()
                         }
 
                         field_20_animation.SetFrame_409D50(field_22A_anim_frame_num);
+#ifdef TETHYS_SATURN
+                        // SATURN (Exoddus, AO 387.ao.1's route 3): the chant glow
+                        // (src/glow_ae.cxx) arms with the chant and drops with any other
+                        // animation of the controller; the orbs are the Particles
+                        // AbeSpeak_Update spawns from the eOptionFlare block.
+                        if (field_228_res_idx == eAbe_Chant)
+                        {
+                            Tethys_GlowChantArmAE(&field_20_animation, field_F4_resources.field_0_resources[MenuResIds::eOptionFlare]);
+                        }
+                        else
+                        {
+                            Tethys_GlowChantDisarmAE();
+                        }
+#endif
 
                         if (field_228_res_idx != eAbe_Chant && field_23C_T80.Get(Flags::eBit24_Chant_Seq_Playing))
                         {

@@ -10,6 +10,21 @@
 #include "ScreenManager.hpp"
 #include <math.h>
 
+#ifdef TETHYS_SATURN
+// SATURN (2026-10-19, as Exoddus U3 T10): the blink pattern's digit extraction
+// raised 10 to an integer power through libm's double pow at every blink, and it
+// was the last libm caller of the image once the sound seam lost its pow. The
+// exponent is pattern_length - index - 1 with pattern_length 1..4 and index <
+// pattern_length, so 0..3, where pow(10, k) is exact: a table gives the same
+// integers (out-of-range exponents keep pow's integer cast: 0 for a negative one,
+// which upstream never produces).
+static s32 Tethys_Pow10(s32 k)
+{
+    static const s32 kPow10[5] = {1, 10, 100, 1000, 10000};
+    return (k >= 0 && k < 5) ? kPow10[k] : 0;
+}
+#endif
+
 namespace AO {
 
 UXB* UXB::ctor_488C80(Path_UXB* pTlv, s32 tlvInfo)
@@ -46,7 +61,11 @@ UXB* UXB::ctor_488C80(Path_UXB* pTlv, s32 tlvInfo)
     field_1B6_pattern_index = 0;
 
     // Single out a single digit, and use that digit as the new amount of red blinks before a green one.
+#ifdef TETHYS_SATURN
+    field_1BA_red_blink_count = (field_1B8_pattern / Tethys_Pow10(field_1B4_pattern_length - 1)) % 10;
+#else
     field_1BA_red_blink_count = (field_1B8_pattern / static_cast<s32>(pow(10, field_1B4_pattern_length - 1))) % 10;
+#endif
 
     if (pTlv->field_1C_scale == Scale_short::eHalf_1)
     {
@@ -462,7 +481,11 @@ void UXB::VUpdate_489380()
                     }
 
                     // Single out a single digit, and use that digit as the new amount of red blinks before a green one.
+#ifdef TETHYS_SATURN
+                    field_1BA_red_blink_count = (field_1B8_pattern / Tethys_Pow10(field_1B4_pattern_length - field_1B6_pattern_index - 1)) % 10;
+#else
                     field_1BA_red_blink_count = (field_1B8_pattern / static_cast<s32>(pow(10, field_1B4_pattern_length - field_1B6_pattern_index - 1))) % 10;
+#endif
                 }
 
                 const AnimRecord& rec = AO::AnimRec(AnimId::Bomb_RedGreenTick);

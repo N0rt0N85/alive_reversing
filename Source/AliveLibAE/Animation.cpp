@@ -59,13 +59,26 @@ extern "C" unsigned char Tethys_gProbeOn;
 extern "C" unsigned int Tethys_gVramFail;
 extern "C" unsigned int Tethys_gPalFail;
 
-// AE has no clustered blood cels (the AE converter's CLUSTER_CELS is empty) and
-// no GameSpeak chant glow, so nothing is refused by the cache or the prefetch.
+// AE has no clustered blood cels (the AE converter's CLUSTER_CELS is empty), so
+// nothing is refused by the cache or the prefetch. The light laid on Abe
+// (src/glow_ae.cxx) needs no refusal either, unlike AO's chant glow: it never
+// writes a cache entry (a cached cel is copied before it is lit) and only
+// reads them, through Tethys_CelPeekAE below, when no slave batch is in flight.
 #define TETHYS_CEL_ANIM_LIST gObjList_animations_5C1A24
 #define TETHYS_CEL_REFUSE_BLOCK(pBlock) false
 #define TETHYS_CEL_PREFETCH_OFF() 0
 #include "TethysCelCache.hpp"
 #include "TethysObjectHooks.hpp" // the exported translation hooks, checked against their callers
+
+// SATURN (src/glow_ae.cxx): the cache's decoded copy of a particle's cel, read
+// without settling anything. Its callers run in AnimateAll and right after it,
+// before Tethys_CelPrefetch posts a batch; a batch in flight answers nullptr
+// (the caller decodes into its own buffer instead).
+extern "C" const u8* Tethys_CelPeekAE(const u8* pSrc, u32 len)
+{
+    const long i = Tethys_gSlzActive ? -1 : TethysCelLookup(pSrc, len);
+    return i < 0 ? nullptr : Tethys_gDbufScratch + sTethysCel[i].off;
+}
 
 // bt863/bt955: firewall gauges (declared by src/sys_saturn.cxx).
 extern "C" volatile s32 Tethys_gAnimBadBlock = 0; // garbage blocks and compression types skipped
@@ -259,6 +272,13 @@ EXPORT s32 CC Animation_OnFrame_Common_4561B0(void* pObjPtr, s16* pData)
                 pPartical->field_CC_sprite_scale = FP_FromDouble(0.6) * pObj->field_CC_sprite_scale;
                 break;
         }
+#ifdef TETHYS_SATURN
+        // SATURN (Exoddus; Romain, 2026-10-20: "Elle devrait etre devant comme sur
+        // pc, et s'ajouter a Abe"): the puff stays one layer under Abe (above), and
+        // the share of its light that falls on him is laid into his cel by
+        // src/glow_ae.cxx, at the PC's own tint: this reports the puff.
+        Tethys_GlowDustAE(ppAnimData);
+#endif
     }
     return 1;
 }
@@ -478,6 +498,16 @@ void Animation::UploadTexture(const FrameHeader* pFrameHeader, const PSX_RECT& v
     {
         Tethys_gAnimBadBlock++;
         return;
+    }
+    // SATURN (Exoddus, AO 387.ao.1's route 3): the additive light that falls on
+    // Abe (the chant's orbs, his dust), laid into the cel before the upload, the
+    // one point where it exists as writable indices (src/glow_ae.cxx). Everywhere
+    // else this costs one load and a branch. The composite answers what to
+    // upload: this cel untouched, or its lit copy (a cache entry is never
+    // written, so nothing is forgotten).
+    if (Tethys_gGlowOn && !bWider && field_4_flags.Get(AnimFlags::eBit13_Is8Bit))
+    {
+        pPixels = Tethys_GlowCompositeAE(this, pPixels, pFrameHeader->field_4_width, pFrameHeader->field_5_height);
     }
     if (bWider)
     {

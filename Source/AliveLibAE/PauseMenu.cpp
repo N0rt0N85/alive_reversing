@@ -24,7 +24,16 @@
 // .inc files are written together, a text arm also requires the French atlas
 // (RELIVE's US rects draw the French sheets' accents wrong or blank), and
 // TETHYS_LANG_EN keeps RELIVE's English.
-#if defined(TETHYS_SATURN) && !defined(TETHYS_LANG_EN) && __has_include("ae/tethys_ae_pause_fr.inc") && __has_include("ae/tethys_ae_font_atlas_fr.inc")
+// SATURN (11.14, the language discs): TETHYS_LANG_ES compiles the Spanish set
+// (ae_text.py --lang es: tethys_ae_*_es.inc, the same macros), under the same
+// rule; TETHYS_AE_PAUSE_FR then means "localized tables". The Spanish image
+// lays the load page out as the French one (10 rows, hints on [6] and [7],
+// "No Hay Juego Guardado" on [4]: its clear .text writes exactly those).
+#if defined(TETHYS_SATURN) && defined(TETHYS_LANG_ES) && __has_include("ae/tethys_ae_pause_es.inc") && __has_include("ae/tethys_ae_font_atlas_es.inc")
+#include "ae/tethys_ae_pause_es.inc"
+#define TETHYS_AE_PAUSE_FR 1
+#define TETHYS_AE_PM_TEXT(fr, en) fr
+#elif defined(TETHYS_SATURN) && !defined(TETHYS_LANG_EN) && !defined(TETHYS_LANG_ES) && __has_include("ae/tethys_ae_pause_fr.inc") && __has_include("ae/tethys_ae_font_atlas_fr.inc")
 #include "ae/tethys_ae_pause_fr.inc"
 #define TETHYS_AE_PAUSE_FR 1
 #define TETHYS_AE_PM_TEXT(fr, en) fr
@@ -43,7 +52,25 @@
 // "Charger", "Supprimer", "oui", "non"); the banners and the free-slot mark are
 // the Oddysee disc's (425.ao.2), "LIBEREZ" ours. Octal escapes: one byte per
 // glyph in the atlas.
-#if TETHYS_AE_PAUSE_FR
+// The Spanish words are the Spanish image's own ("Guardar", "Cancelar",
+// "Sobreescribir", "Cargar", "borrar", "no"), "s\241" with the acute the
+// Oddysee Spanish disc writes (the image's quit row has "s\215", i-grave),
+// the banners and the free-slot mark the Oddysee Spanish disc's, "LIBERA"
+// ours.
+#if TETHYS_AE_PAUSE_FR && defined(TETHYS_LANG_ES)
+#define TETHYS_AE_PM_QUIT_YESNO kConfirm " s\241   " kBack " no"
+#define TETHYS_AE_PM_SAVE_GO kConfirm "     Guardar"
+#define TETHYS_AE_PM_SAVE_BACK kBack "     Cancelar"
+#define TETHYS_AE_PM_OVERWRITE kConfirm " Sobreescribir   " kBack " Cancelar"
+#define TETHYS_AE_PM_LOAD_GO kConfirm "  Cargar    " kJump "  Borrar"
+#define TETHYS_AE_PM_LOAD_BACK kBack "  Cancelar"
+#define TETHYS_AE_PM_DELETE_ASK "\250Borrar?   " kConfirm " s\241   " kBack " no"
+#define TETHYS_AE_PM_SAVED "GUARDADO"
+#define TETHYS_AE_PM_SAVE_FAILED "FALLO"
+#define TETHYS_AE_PM_LOAD_FAILED "FALLO"
+#define TETHYS_AE_PM_FREE_FMT "FALLO: LIBERA %d BLOQUES"
+#define TETHYS_AE_PM_SLOT_FREE "-- LIBRE --"
+#elif TETHYS_AE_PAUSE_FR
 #define TETHYS_AE_PM_QUIT_YESNO kConfirm " oui   " kBack " non"
 #define TETHYS_AE_PM_SAVE_GO kConfirm "     Sauver"
 #define TETHYS_AE_PM_SAVE_BACK kBack "     Quitter"

@@ -92,3 +92,22 @@ extern "C" void Tethys_ActorHide(s32 clut, s32 hide);
 // 2, or clears the seeds when the level has none (inert today). Call where no
 // CD file is mid-read and no camera streams (the level change).
 extern "C" void Tethys_ActorPackForLevel(const char* lvl2);
+
+// ---------------------------------------------------------- src/glow_ae.cxx
+// The additive light laid on Abe (AO's route 3, src/chant_glow.cxx, ported):
+// the GameSpeak chant's orbs (the menu arms it where eBit24_Chant_Seq_Playing is
+// set, and disarms it when another animation replaces the chant or the menu
+// goes) and his dust (Animation_OnFrame_Common_4561B0 reports each puff). While
+// the gate is up, Animation::UploadTexture hands each cel to the composite
+// before the upload, and Game.cpp calls the tick right after AnimateAll. TWO
+// arguments to the arm, ONE to the dust, FOUR to the composite on both sides:
+// grep the names before changing any.
+extern "C" volatile s32 Tethys_gGlowOn;
+extern "C" void Tethys_GlowChantArmAE(void* pHeadAnim, u8** ppOrb);
+extern "C" void Tethys_GlowChantDisarmAE();
+extern "C" void Tethys_GlowDustAE(u8** ppDust);
+extern "C" const u8* Tethys_GlowCompositeAE(void* pAnim, const u8* pPix, s32 psxW, s32 psxH);
+extern "C" void Tethys_GlowTickAE();
+// AE Animation.cpp: the cel cache's decoded copy of (src, len), or nullptr; never
+// while a slave batch is in flight.
+extern "C" const u8* Tethys_CelPeekAE(const u8* pSrc, u32 len);

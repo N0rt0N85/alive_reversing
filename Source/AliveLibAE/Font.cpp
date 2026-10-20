@@ -12,7 +12,13 @@
 // (tools/ae/ae_text.py reads them out of Exoddus.exe; the index rule is
 // unchanged). Without them the French accents draw wrong (font1) or blank
 // (font2); TETHYS_LANG_EN keeps RELIVE's US rects.
-#if defined(TETHYS_SATURN) && !defined(TETHYS_LANG_EN) && __has_include("ae/tethys_ae_font_atlas_fr.inc")
+// SATURN (11.14, the language discs): TETHYS_LANG_ES takes the Spanish rects
+// out of the Spanish EXODDUS.EXE (ae_text.py --lang es), the same macros in
+// tethys_ae_font_atlas_es.inc; TETHYS_AE_FONT_FR then means "localized rects".
+#if defined(TETHYS_SATURN) && defined(TETHYS_LANG_ES) && __has_include("ae/tethys_ae_font_atlas_es.inc")
+#include "ae/tethys_ae_font_atlas_es.inc"
+#define TETHYS_AE_FONT_FR 1
+#elif defined(TETHYS_SATURN) && !defined(TETHYS_LANG_EN) && !defined(TETHYS_LANG_ES) && __has_include("ae/tethys_ae_font_atlas_fr.inc")
 #include "ae/tethys_ae_font_atlas_fr.inc"
 #define TETHYS_AE_FONT_FR 1
 #else

@@ -263,7 +263,9 @@ public:
 
     virtual u32& sMidi_WaitUntil() override
     {
-        // Always 0 in AO cause it dont exist
+        // Upstream says "always 0 in AO": not so, AO's effects reach AE's note-on,
+        // which armed it. On Saturn nothing arms or waits on it any more
+        // (PsxSpuApi.cpp, MIDI_PlayMidiNote_4FCB30, 2026-10-19).
         return mMidi_WaitUntil;
     }
 
@@ -411,6 +413,10 @@ EXPORT s32 CC MIDI_Allocate_Channel_49D660(s32 not_used, s32 priority)
 //     NoteOff_80 case is dead code here.  Under AO's own matching key the data
 //     is perfectly balanced: no orphan off, nothing left sounding at any
 //     end-of-track.  The scored note-offs ARE reaching the voices.
+//     [2026-10-19: NOT on the SH-2. The note byte they are matched against
+//     was stored through BYTE1, which reads 0 on a big-endian CPU, so no
+//     key-off ever matched; fixed at the store in
+//     MIDI_PlayerPlayMidiNote_49D730. What follows stays true of the PC.]
 //   * They just do not silence them.  49 of RFSNDFX.VH's live tones carry
 //     release rate 30 (exponential mode on 48 of them), and PsxSpuApi.cpp:423
 //     models that as pow(2, 30) * 0.045 ms clamped to 32767 -- a THIRTY-TWO
@@ -614,7 +620,13 @@ EXPORT s32 CC MIDI_PlayerPlayMidiNote_49D730(s32 vabId, s32 program, s32 note, s
                         pChannel->field_1C_adsr.field_0_seq_idx = (u8) vabId;
                         pChannel->field_1C_adsr.field_1_program = (u8) program;
                         auto v29 = pVagOff->field_A_shift_cen;
-                        pChannel->field_1C_adsr.field_2_note_byte1 = BYTE1(note) & 0x7F;
+                        // SATURN (2026-10-19): by value, as noteKeyNumber above. BYTE1 is
+                        // the byte at memory offset 1 (FunctionFwd.hpp): bits 8-15 on the
+                        // little-endian PC, bits 16-23 on the SH-2, where note = key << 8
+                        // leaves them 0. Every key-off then compared 0 with the key and
+                        // matched nothing: a looped tone sang on until its sequence
+                        // ended or its voice was stolen.
+                        pChannel->field_1C_adsr.field_2_note_byte1 = static_cast<u8>((note >> 8) & 0x7F);
 #ifdef TETHYS_SATURN
                         // SATURN: exponent was (note-v29)/256 semitones --
                         // x256 = note-v29 directly (AUDIO_VIDEO_PLAN §2.5,

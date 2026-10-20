@@ -18,7 +18,13 @@
 // .inc files are written together, a text arm also requires the French atlas
 // (RELIVE's US rects draw the French sheets' accents wrong or blank), and
 // TETHYS_LANG_EN keeps RELIVE's English.
-#if defined(TETHYS_SATURN) && !defined(TETHYS_LANG_EN) && __has_include("ae/tethys_ae_lcd_fr.inc") && __has_include("ae/tethys_ae_font_atlas_fr.inc")
+// SATURN (11.14, the language discs): TETHYS_LANG_ES compiles the Spanish set
+// (ae_text.py --lang es: tethys_ae_*_es.inc, the same macros), under the same
+// rule; TETHYS_AE_LCD_FR then means "localized table".
+#if defined(TETHYS_SATURN) && defined(TETHYS_LANG_ES) && __has_include("ae/tethys_ae_lcd_es.inc") && __has_include("ae/tethys_ae_font_atlas_es.inc")
+#include "ae/tethys_ae_lcd_es.inc"
+#define TETHYS_AE_LCD_FR 1
+#elif defined(TETHYS_SATURN) && !defined(TETHYS_LANG_EN) && !defined(TETHYS_LANG_ES) && __has_include("ae/tethys_ae_lcd_fr.inc") && __has_include("ae/tethys_ae_font_atlas_fr.inc")
 #include "ae/tethys_ae_lcd_fr.inc"
 #define TETHYS_AE_LCD_FR 1
 #else

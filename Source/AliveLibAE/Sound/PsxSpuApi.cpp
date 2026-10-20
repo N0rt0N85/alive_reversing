@@ -380,11 +380,12 @@ EXPORT void CC SsVabClose_4FC5B0(s32 vabId)
 }
 
 
-#if defined(TETHYS_GAME_AE)
-// SATURN (Exoddus): trunc(mant * 2^-shift) for a 24-bit float mantissa, then
-// the original's std::min(static_cast<u16>(x), 32767): the u16 conversion
-// keeps the low 16 bits of the truncated value on the PC and on the SH-2 alike
-// (U6 F6), so the wrap is reproduced, not saturated.
+#if defined(TETHYS_SATURN)
+// SATURN (Exoddus R4, U6 R12/F6; Oddysee too since 2026-10-19): trunc(mant *
+// 2^-shift) for a 24-bit float mantissa, then the original's
+// std::min(static_cast<u16>(x), 32767): the u16 conversion keeps the low 16 bits
+// of the truncated value on the PC and on the SH-2 alike (U6 F6), so the wrap is
+// reproduced, not saturated.
 static u16 Tethys_AdsrFromMantissa(u32 mant, s32 shift)
 {
     const u32 v = shift >= 0 ? (mant >> shift) : (mant << -shift);
@@ -476,12 +477,12 @@ EXPORT s16 CC SsVabOpenHead_4FC620(VabHeader* pVabHeader)
                 const s16 centre = pVagAttr->field_4_centre;
                 pData->field_A_shift_cen = 2 * (pVagAttr->field_5_shift + (centre << 7));
 
-#if defined(TETHYS_GAME_AE)
-                // SATURN (Exoddus, U6 R12/F6): the four values below, in integers,
-                // equal to what the float code computes, u16 wrap and clamp
-                // included (release 30 = 18,352 ms, 29 = 32,767). No powf/pow at
-                // bank load. Proof: obj/R4 adsr_tables.py (IEEE model, every index)
-                // and the host test (the float code compiled verbatim).
+#if defined(TETHYS_SATURN)
+                // SATURN (Exoddus R4, U6 R12/F6; Oddysee since 2026-10-19): the four
+                // values below, in integers, equal to what the float code computes,
+                // u16 wrap and clamp included (release 30 = 18,352 ms, 29 = 32,767).
+                // No powf/pow at bank load. Proof: obj/R4 adsr_tables.py (IEEE model,
+                // every index) and the host test (the float code compiled verbatim).
                 pData->field_0_adsr_attack = Tethys_AdsrAttack((pVagAttr->field_10_adsr1 >> 8) & 0x7F);
                 pData->field_4_adsr_decay = static_cast<u16>((16 * ((pVagAttr->field_10_adsr1 >> 4) & 0xF)) / 15);
                 pData->field_2_adsr_sustain_level = static_cast<u16>(80 * (~(u8) pVagAttr->field_10_adsr1 & 0xF));
@@ -878,6 +879,13 @@ EXPORT s32 CC MIDI_PlayMidiNote_4FCB30(s32 vabId, s32 program, s32 note, s32 lef
                     // ORIGINAL_PS1_BEHAVIOR formula, without the soft-double pow
                     // every effect and every music note paid. Error < 0.7 cent.
                     pChannel->field_10_freq = Tethys_Pow12Fx_Saturn(note - pVagIter->field_A_shift_cen);
+#elif defined(TETHYS_SATURN)
+                    // SATURN (Oddysee, 2026-10-19): the same table pitch as AO's own
+                    // music note-on (AO/Midi.cpp, Tethys_Pow12_Saturn), in f32 for this
+                    // seam: (note - shift_cen) / 256 semitones, the ORIGINAL_PS1_BEHAVIOR
+                    // exponent, without the soft-double pow every effect tone paid
+                    // (0.1-0.3 ms each). Error < 0.7 cent.
+                    pChannel->field_10_freq = Tethys_Pow12_Saturn(note - pVagIter->field_A_shift_cen);
 #elif ORIGINAL_PS1_BEHAVIOR
 
                     // Note: 1.059463094359 is the 12th root of 2.
@@ -894,15 +902,20 @@ EXPORT s32 CC MIDI_PlayMidiNote_4FCB30(s32 vabId, s32 program, s32 note, s32 lef
                     pChannel->field_10_freq = static_cast<f32>(pow(1.059463094359, (f64)(note - pVagIter->field_A_shift_cen) * 0.00390625));
 #endif
 
-#if defined(TETHYS_GAME_AE)
-                    // SATURN (Exoddus, U6 F3): no 10 ms busy-wait between two notes.
-                    // The PC armed it after any note on programs 4, 5, 8, 23-25 and
-                    // spun at the next note-on, inside the sequencer tick, i.e. inside
-                    // PSX_VSync: up to 140 ms per chant and 1.76 s per pass of one
-                    // Paramonia tune of master SH-2 (811 waits over one pass of the
-                    // 367 Exoddus SEQs, measured by obj/R4/seqtest). The SCSP needs no
-                    // stagger (KeyOnSlot owns the key-on discipline): chords start
-                    // together, as libsnd's did on the PSX. Neither armed nor waited.
+#if defined(TETHYS_SATURN)
+                    // SATURN (Exoddus U6 F3; Oddysee since 2026-10-19): no 10 ms busy-wait
+                    // between two notes. The PC armed it after any note on programs 4, 5,
+                    // 8, 23-25 and spun at the next note-on, inside the sequencer tick,
+                    // i.e. inside PSX_VSync: up to 140 ms per chant and 1.76 s per pass of
+                    // one Paramonia tune of master SH-2 (811 waits over one pass of the
+                    // 367 Exoddus SEQs, measured by obj/R4/seqtest). In Oddysee those
+                    // program numbers are effects (Abe's and Elum's steps, zaps,
+                    // possession, wells, levers: 36 of the 231 rows of its effect tables)
+                    // that reached AE's note-on through RELIVE: up to 10 ms of a 33 ms tick
+                    // each time another effect followed, about 30 ms when a Slig shot Abe.
+                    // The SCSP needs no stagger (KeyOnSlot owns the key-on discipline):
+                    // chords start together, as libsnd's did on the PSX. Neither armed nor
+                    // waited.
 #else
                     if (gSpuVars->sMidi_WaitUntil())
                     {
@@ -924,7 +937,7 @@ EXPORT s32 CC MIDI_PlayMidiNote_4FCB30(s32 vabId, s32 program, s32 note, s32 lef
 #endif
                         pVagIter->field_E_priority);
 
-#if !defined(TETHYS_GAME_AE) // SATURN (Exoddus, U6 F3): never armed, see above
+#if !defined(TETHYS_SATURN) // SATURN (U6 F3): never armed, see above
                     if (program == 4 || program == 5 || program == 8 || program == 23 || program == 24 || program == 25)
                     {
                         gSpuVars->sMidi_WaitUntil() = SYS_GetTicks() + 10;
