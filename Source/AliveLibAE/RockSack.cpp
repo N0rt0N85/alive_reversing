@@ -8,6 +8,9 @@
 #include "Sfx.hpp"
 #include "Events.hpp"
 #include "Abe.hpp"
+#ifdef TETHYS_SATURN
+#include "TethysObjectHooks.hpp"
+#endif
 
 RockSack* RockSack::ctor_49F100(Path_RockSack* pTlv, s32 tlvInfo)
 {
@@ -20,8 +23,21 @@ RockSack* RockSack::ctor_49F100(Path_RockSack* pTlv, s32 tlvInfo)
     u8** ppRes = Add_Resource_4DC130(ResourceManager::Resource_Animation, rec.mResourceId);
 
     // Set RockSack idle animation speed.
+#ifdef TETHYS_SATURN
+    // SATURN (D-A1, AO 448.ao.4 twin): the converter compacted resource 1002
+    // (ROCKBAG.BAN and the five Mines cameras that embed it, all TSAT), so the
+    // idle table is no longer at its compiled offset: address it through the
+    // block's own record, or the write lands inside the cels. A missing block
+    // (the PC would crash) skips the write instead of dereferencing ROM bytes.
+    if (ppRes && *ppRes)
+    {
+        auto pAnimationHeader = reinterpret_cast<AnimationHeader*>(*ppRes + Tethys_TranslateFrameTable(ppRes, rec.mFrameTableOffset));
+        pAnimationHeader->field_0_fps = 0;
+    }
+#else
     auto pAnimationHeader = reinterpret_cast<AnimationHeader*>(*ppRes + rec.mFrameTableOffset);
     pAnimationHeader->field_0_fps = 0;
+#endif
 
     Animation_Init_424E10(rec.mFrameTableOffset, rec.mMaxW, rec.mMaxH, ppRes, 1, 1);
 

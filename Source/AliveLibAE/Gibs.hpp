@@ -66,3 +66,9 @@ private:
     s16 field_5D6_bMakeSmaller;
 };
 ALIVE_ASSERT_SIZEOF(Gibs, 0x5D8);
+
+#ifdef TETHYS_SATURN
+#include "TethysObjectHooks.hpp"
+// SATURN (U1d T1): every ae_new<Gibs> site null-tests its result: soft OOM.
+TETHYS_AE_SOFT_OOM_TYPE(Gibs);
+#endif

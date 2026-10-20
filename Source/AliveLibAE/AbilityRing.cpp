@@ -11,6 +11,9 @@
 #include "ObjectIds.hpp"
 #include "PossessionFlicker.hpp"
 #include "stdlib.hpp"
+#ifdef TETHYS_SATURN
+#include "TethysObjectHooks.hpp"
+#endif
 
 AbilityRing* CC AbilityRing::Factory_482F80(FP xpos, FP ypos, RingTypes type, FP scale)
 {
@@ -50,7 +53,14 @@ AbilityRing* AbilityRing::ctor_49C730(FP xpos, FP ypos, RingTypes ringType, FP s
     field_6_flags.Set(BaseGameObject::eDrawable_Bit4);
 
     // TODO: OG issue - using frame counter as res id again
+#ifdef TETHYS_SATURN
+    // SATURN (U1d T2, AO 383.ao.1 twin): the `else` at the bottom of this ctor
+    // (no buffer, the ring dies) is the recovery: ask for a soft refusal so it
+    // can run under the default fatal allocator policy (D-B4).
+    field_28_ppRes = Tethys_ResAllocSoft(ResourceManager::Resource_Wave, sGnFrame_5C1B84, sizeof(AbilityRing_PolyBuffer) * 64, true /*locked*/, true /*reclaim*/);
+#else
     field_28_ppRes = ResourceManager::Allocate_New_Locked_Resource_49BF40(ResourceManager::Resource_Wave, sGnFrame_5C1B84, sizeof(AbilityRing_PolyBuffer) * 64);
+#endif
 
     if (field_28_ppRes)
     {
@@ -317,6 +327,24 @@ void AbilityRing::vRender_49D790(PrimHeader** ppOt)
         }
 
         u8 ang = angIncrement;
+#ifdef TETHYS_SATURN
+        // SATURN (U1d T9, AO 418.ao.1 / 431.ao.1 twin): A RING PAST 150 UNITS
+        // DRAWS ONE QUAD PER TWO SEGMENTS. Exoddus already sizes the ring by its
+        // radius (16, 32 or 64 segments); the 64 case is 64 VDP1 commands for one
+        // ring against a 128-command frame and the renderer's 64-quad ring
+        // allowance, and the Emit rings (explosive, healing) never fade and grow
+        // to the screen corner. Every segment is still computed, so the collision
+        // rects the explosive ring reads are untouched; only the drawing merges:
+        // each quad spans from the edge where its pair began to the edge where it
+        // ends, a 32-gon (AO's measured choice: same coverage, no visible facet).
+        // The 16 and 32 cases are drawn as upstream (one quad a segment).
+        const s32 kSegPerPoly = (field_28C_count == 64) ? 2 : 1;
+        s16 gx3 = x3;
+        s16 gy3 = y3;
+        s16 gx4 = x4;
+        s16 gy4 = y4;
+        bool bGroupVisible = false;
+#endif
         for (s32 i = 0; i < field_28C_count; i++)
         {
             const s16 x1 = (s16) PsxToPCX(field_272_screenXPos + FP_GetExponent(field_254_left * Math_Sine_496DD0(ang) * field_260_scaleX), 11);
@@ -341,6 +369,9 @@ void AbilityRing::vRender_49D790(PrimHeader** ppOt)
             }
             else
             {
+#ifdef TETHYS_SATURN
+                bGroupVisible = true; // SATURN (U1d T9): drawn once per group, below
+#else
                 Poly_F4* pPoly = &field_24_pRes[i].mPolys[gPsxDisplay_5C1130.field_C_buffer_index];
                 SetXY0(pPoly, x1, y1);
                 SetXY1(pPoly, x2, y2);
@@ -348,6 +379,7 @@ void AbilityRing::vRender_49D790(PrimHeader** ppOt)
                 SetXY3(pPoly, x4, y4);
 
                 OrderingTable_Add_4F8AA0(OtLayer(ppOt, field_20_layer), &pPoly->mBase.header);
+#endif
 
                 pScreenManager_5BB5F4->InvalidateRect_40EC90(
                     rect.x,
@@ -361,6 +393,26 @@ void AbilityRing::vRender_49D790(PrimHeader** ppOt)
                 field_4C_collide_rects[i].w = PCToPsxX(field_4C_collide_rects[i].w, 20);
             }
 
+#ifdef TETHYS_SATURN
+            // SATURN (U1d T9): the group's last segment closes its polygon.
+            if ((i % kSegPerPoly) == kSegPerPoly - 1)
+            {
+                if (bGroupVisible)
+                {
+                    Poly_F4* pPoly = &field_24_pRes[i].mPolys[gPsxDisplay_5C1130.field_C_buffer_index];
+                    SetXY0(pPoly, x1, y1);
+                    SetXY1(pPoly, x2, y2);
+                    SetXY2(pPoly, gx3, gy3);
+                    SetXY3(pPoly, gx4, gy4);
+                    OrderingTable_Add_4F8AA0(OtLayer(ppOt, field_20_layer), &pPoly->mBase.header);
+                }
+                gx3 = x1;
+                gy3 = y1;
+                gx4 = x2;
+                gy4 = y2;
+                bGroupVisible = false;
+            }
+#endif
             x3 = x1;
             y3 = y1;
             x4 = x2;

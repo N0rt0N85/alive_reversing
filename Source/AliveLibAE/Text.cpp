@@ -161,8 +161,33 @@ EXPORT void Text::Render_46AFD0(PrimHeader** ppOt)
 // MainMenuController::ChangeScreenAndIntroLogic_4CF640 will call with type 3 (Shown on boot, says Abe's Exoddus).
 
 // TODO: When above functions are reversed clean up this function to remove strange dead cases..
+#if defined(TETHYS_SATURN)
+extern "C" [[noreturn]] void Tethys_Fatal(const char_type* msg); // src/main.cxx
+#endif
+
 EXPORT s8 CC Display_Full_Screen_Message_Blocking_465820(s32 /*not_used*/, MessageType messageType)
 {
+#if defined(TETHYS_SATURN)
+    // SATURN (U1c T17): this is the PC's "insert the disc" screen. It shows the
+    // title, waits a second or two for Enter or Esc (keyboard keys: none here,
+    // Input_IsVKPressed is always false) and returns 1 = "try again", so both
+    // callers would spin forever on a one-disc console:
+    //  - eLongTitle_0, Map.cpp: the next level's archive did not open. Every
+    //    level is on this disc, so that is a broken disc, not a disc swap:
+    //    named instead of an endless title screen.
+    //  - eSkipDemo_2, MainMenu.cpp: the PC looked for the level files of an
+    //    attract demo on its CD. The Saturn answers that probe itself (every
+    //    level is on the disc, checkIfDemoFileExists_4D1430), so this is not
+    //    reached; if it were, 0 = skip the demo, what Esc did on the PC.
+    if (messageType == MessageType::eLongTitle_0)
+    {
+        Tethys_Fatal("AE level archive not on the disc");
+    }
+    if (messageType == MessageType::eSkipDemo_2)
+    {
+        return 0;
+    }
+#endif
     if (messageType == MessageType::eSkipMovie_1)
     {
         return 0;

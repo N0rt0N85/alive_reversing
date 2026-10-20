@@ -517,6 +517,101 @@ EXPORT s16 CC SsVabOpenHead_4FC620(VabHeader* pVabHeader)
     return static_cast<s16>(vab_id);
 }
 
+#if defined(TETHYS_SATURN) && defined(TETHYS_GAME_AE)
+// SATURN (Exoddus, stream R4, U6 F4/R4, D-So4): SsVabTransBody_4FC840's Saturn
+// twin. The PC read every sample from sounds.dat as 44.1 kHz PCM16, doubled
+// each short one-shot and erased the reverb bit; the converted level bank
+// carries its samples itself (tools/ae/ae_bank.py), PCM8 at each record's own
+// base rate, and arrives through the window streamer (TethysVbStream.hpp): its
+// records become samples here, the bytes reaching sound RAM straight from the
+// window (Tethys_SND_LoadChunk). Per record, as the PC: entry cleared, the
+// sequencer tick every 8 records, SND_New at the record's length and |rate|;
+// no doubling. The tone fixup (loop flag into field_C, the release of an
+// attack-less one-shot zeroed) is the PC's, applied in ONE pass over the 2,048
+// tones after the walk instead of one pass per record (U6 F7: 362,000 reads of
+// a table that lives in VDP1 VRAM without a cartridge, down to 2,048); every
+// tone is touched by its own record only, so the tables come out identical
+// (host test obj/R4/seqtest --vb). The reverb bit SsVabOpenHead set is kept.
+#include "TethysVbStream.hpp"
+extern "C" s32 Tethys_SND_LoadChunk(void* pEntry, const void* pWaveData, s32 byteOffset, s32 byteLen); // src/sound_saturn.cxx
+
+namespace {
+struct TethysVbTrans final
+{
+    s16 vabId;
+    u32 hasSample[256 / 32]; // record i carried a payload (the PC's sampleLen > 0)
+    u32 loops[256 / 32];     // record i loops (negative rate)
+};
+
+bool TethysVbTransRecord(void* ctx, s32 i, s32 lengthBytes, s32 rateRaw)
+{
+    TethysVbTrans* pT = static_cast<TethysVbTrans*>(ctx);
+    if (i >= 256)
+    {
+        return false; // sVagCounts is a u8: never reached
+    }
+    SoundEntry* pEntry = &gSpuVars->sSoundEntryTable16().table[pT->vabId][i];
+    memset(pEntry, 0, sizeof(SoundEntry));
+    if (!(i & 7))
+    {
+        SsSeqCalledTbyT_4FDC80();
+    }
+    if (lengthBytes <= 0)
+    {
+        return false;
+    }
+    pT->hasSample[i >> 5] |= 1u << (i & 31);
+    if (rateRaw < 0)
+    {
+        pT->loops[i >> 5] |= 1u << (i & 31);
+    }
+    const s32 rate = rateRaw >= 0 ? rateRaw : -rateRaw;
+    return GetSoundAPI().SND_New(pEntry, lengthBytes, rate, 8, 0) == 0; // full sound RAM: soft, silent
+}
+
+bool TethysVbTransChunk(void* ctx, s32 i, const u8* pData, s32 offset, s32 len)
+{
+    TethysVbTrans* pT = static_cast<TethysVbTrans*>(ctx);
+    return Tethys_SND_LoadChunk(&gSpuVars->sSoundEntryTable16().table[pT->vabId][i], pData, offset, len) == 0;
+}
+} // namespace
+
+bool Tethys_SsVabTransBody_Streamed(const TethysVbSource& src, s16 vabId, u8* pWin, s32 winBytes)
+{
+    if (vabId < 0 || vabId >= kMaxVabs || !gSpuVars->spVabHeaders()[vabId])
+    {
+        return false;
+    }
+    // The PC's sounds.dat open said "there are samples" (sSoundDatIsNull, the
+    // gate of every note-on): here the level's own bank is the sample file.
+    gSpuVars->sSoundDatIsNull() = 0;
+
+    TethysVbTrans trans = {};
+    trans.vabId = vabId;
+    const TethysVbSink sink = {&TethysVbTransRecord, &TethysVbTransChunk, &trans};
+    const bool bWhole = Tethys_VbStreamWalk(src, sink, gSpuVars->sVagCounts()[vabId], pWin, winBytes);
+
+    for (s32 prog = 0; prog < 128; prog++)
+    {
+        for (s32 tone = 0; tone < 16; tone++)
+        {
+            Converted_Vag* pVag = &gSpuVars->sConvertedVagTable().table[vabId][prog][tone];
+            const u32 v = pVag->field_10_vag;
+            if (!(trans.hasSample[v >> 5] & (1u << (v & 31))))
+            {
+                continue;
+            }
+            const u8 loopFlag = (trans.loops[v >> 5] & (1u << (v & 31))) ? 4 : 0;
+            pVag->field_C = static_cast<u8>((pVag->field_C & kTethysToneReverb) | loopFlag);
+            if (!(loopFlag & 4) && !pVag->field_0_adsr_attack && pVag->field_6_adsr_release)
+            {
+                pVag->field_6_adsr_release = 0;
+            }
+        }
+    }
+    return bWhole;
+}
+#else
 // Loads sounds dat to memory
 EXPORT void CC SsVabTransBody_4FC840(VabBodyRecord* pVabBody, s16 vabId)
 {
@@ -599,6 +694,7 @@ EXPORT void CC SsVabTransBody_4FC840(VabBodyRecord* pVabBody, s16 vabId)
         gSpuVars->sSoundDatFileHandle() = nullptr;
     }
 }
+#endif
 
 EXPORT s32 CC MIDI_Invert_4FCA40(s32 /*not_used*/, s32 value)
 {
@@ -776,7 +872,14 @@ EXPORT s32 CC MIDI_PlayMidiNote_4FCB30(s32 vabId, s32 program, s32 note, s32 lef
                     pChannel->field_1C_adsr.field_1_program = static_cast<u8>(program);
                     pChannel->field_1C_adsr.field_2_note_byte1 = static_cast<u8>(noteKeyNumber);
 
-#if defined(TETHYS_SATURN)
+#if defined(TETHYS_GAME_AE)
+                    // SATURN (Exoddus, U6 F2): AO's identity for its own note-on
+                    // (AO/Midi.cpp, Tethys_Pow12_Saturn), in 16.16 fixed point: the
+                    // exponent below is (note - shift_cen) / 256 semitones, the
+                    // ORIGINAL_PS1_BEHAVIOR formula, without the soft-double pow
+                    // every effect and every music note paid. Error < 0.7 cent.
+                    pChannel->field_10_freq = Tethys_Pow12Fx_Saturn(note - pVagIter->field_A_shift_cen);
+#elif defined(TETHYS_SATURN)
                     // SATURN (Oddysee, 2026-10-19): the same table pitch as AO's own
                     // music note-on (AO/Midi.cpp, Tethys_Pow12_Saturn), in f32 for this
                     // seam: (note - shift_cen) / 256 semitones, the ORIGINAL_PS1_BEHAVIOR
@@ -950,6 +1053,26 @@ EXPORT s32 CC MIDI_Read_Var_Len_4FD0D0(MIDI_SeqSong* pMidiStru)
 }
 
 
+// SATURN (Exoddus, U6 F1): THE PACKED EVENT WORD IS READ BY VALUE.
+// v16/v42/cmd below pack a MIDI event as status | p1 << 8 | p2 << 16, built by
+// arithmetic, but the decompiled reads go through BYTE1/BYTE2
+// (AliveLibCommon/FunctionFwd.hpp), which take the byte at a MEMORY offset:
+// bits 8..15 / 16..23 on the little-endian PC only. On the big-endian SH-2,
+// BYTE1(v16) is bits 16..23, the velocity (0 for a program change): every
+// program change set program 0 and no note-off ever matched its note
+// (PsxSpuApi.o, shlr16 at MIDI_ParseMidiMessage_4FD100+0x544). The AE build
+// reads the values the PC read. The Oddysee build never runs this parser (its
+// own is AO/Midi.cpp), and its spelling stays the original's.
+#if defined(TETHYS_GAME_AE)
+#define TETHYS_SEQ_BYTE1(x) ((static_cast<u32>(x) >> 8) & 0xFFu)
+#define TETHYS_SEQ_BYTE2(x) ((static_cast<u32>(x) >> 16) & 0xFFu)
+#define TETHYS_SEQ_SET_BYTE1(dst, src) ((dst) = ((dst) & ~0xFF00u) | (static_cast<u32>(src) & 0xFF00u))
+#else
+#define TETHYS_SEQ_BYTE1(x) BYTE1(x)
+#define TETHYS_SEQ_BYTE2(x) BYTE2(x)
+#define TETHYS_SEQ_SET_BYTE1(dst, src) BYTE1(dst) = BYTE1(src)
+#endif
+
 // TODO: Complete tests so this can be rewritten
 EXPORT s32 CC MIDI_ParseMidiMessage_4FD100(s32 idx)
 {
@@ -1100,14 +1223,14 @@ EXPORT s32 CC MIDI_ParseMidiMessage_4FD100(s32 idx)
                         if (pAdsr->field_0_seq_idx == gSpuVars->sMidiSeqSongs(idx).field_seq_idx
                             && pAdsr->field_1_program == v32->field_0_program // or field_2_not_inited ??
                             && pAdsr->field_C == v29 + 16 * idx
-                            && pAdsr->field_2_note_byte1 == BYTE1(v16))
+                            && pAdsr->field_2_note_byte1 == TETHYS_SEQ_BYTE1(v16))
                         {
                             v33 = pAdsr->field_E_ref_count - 1;
                             pAdsr->field_E_ref_count = v33;
                             if (!v33)
                             {
                                 gSpuVars->SsUtKeyOffV(v31);
-                                BYTE1(v16) = BYTE1(v42);
+                                TETHYS_SEQ_SET_BYTE1(v16, v42);
                                 pAdsr->field_C = 0;
                             }
                         }
@@ -1133,7 +1256,7 @@ EXPORT s32 CC MIDI_ParseMidiMessage_4FD100(s32 idx)
                             && pSubChan2->field_1_program == v18->field_0_program
                             && pSubChan2->field_C == v45 + 16 * idx)
                         {
-                            if (pSubChan2->field_2_note_byte1 == BYTE1(v16) && pSubChan2->field_E_ref_count > v19)
+                            if (pSubChan2->field_2_note_byte1 == TETHYS_SEQ_BYTE1(v16) && pSubChan2->field_E_ref_count > v19)
                             {
                                 v19 = pSubChan2->field_E_ref_count;
                             }
@@ -1171,14 +1294,14 @@ EXPORT s32 CC MIDI_ParseMidiMessage_4FD100(s32 idx)
                             if (pSubChan1->field_0_seq_idx == gSpuVars->sMidiSeqSongs(idx2).field_seq_idx
                                 && pSubChan1->field_1_program == v18->field_0_program
                                 && pSubChan1->field_C == v45 + 16 * idx
-                                && pSubChan1->field_2_note_byte1 == BYTE1(v16))
+                                && pSubChan1->field_2_note_byte1 == TETHYS_SEQ_BYTE1(v16))
                             {
                                 refCount1 = pSubChan1->field_E_ref_count - 1;
                                 pSubChan1->field_E_ref_count = refCount1;
                                 if (!refCount1)
                                 {
                                     gSpuVars->SsUtKeyOffV(i);
-                                    BYTE1(v16) = BYTE1(v42);
+                                    TETHYS_SEQ_SET_BYTE1(v16, v42);
                                     v18 = v43;
                                     pSubChan1->field_C = 0;
                                 }
@@ -1193,7 +1316,7 @@ EXPORT s32 CC MIDI_ParseMidiMessage_4FD100(s32 idx)
                 {
                     if (v34 == 0x63)
                     {
-                        gSpuVars->sControllerValue() = BYTE2(cmd);
+                        gSpuVars->sControllerValue() = TETHYS_SEQ_BYTE2(cmd);
                     }
                     break;
                 }
@@ -1202,7 +1325,7 @@ EXPORT s32 CC MIDI_ParseMidiMessage_4FD100(s32 idx)
                 {
                     case 20: // Set loop
                         gSpuVars->sMidiSeqSongs(idx2).field_24_loop_start = pCtx->field_0_seq_data;
-                        gSpuVars->sMidiSeqSongs(idx2).field_2C_loop_count = BYTE2(cmd);
+                        gSpuVars->sMidiSeqSongs(idx2).field_2C_loop_count = TETHYS_SEQ_BYTE2(cmd);
                         break;
                     case 30: // Loop
                         v36 = gSpuVars->sMidiSeqSongs(idx2).field_24_loop_start;
@@ -1225,7 +1348,7 @@ EXPORT s32 CC MIDI_ParseMidiMessage_4FD100(s32 idx)
                         pFn = (void(CC*)(s32, u32, u32)) gSpuVars->sMidiSeqSongs(idx2).field_20_fn_ptr;
                         if (pFn)
                         {
-                            pFn(idx, 0, BYTE2(cmd));
+                            pFn(idx, 0, TETHYS_SEQ_BYTE2(cmd));
                             gSpuVars->sControllerValue() = 0;
                             goto next_time_stamp;
                         }
@@ -1236,7 +1359,7 @@ EXPORT s32 CC MIDI_ParseMidiMessage_4FD100(s32 idx)
 
             case 0xC0u: // Program change
             {
-                gSpuVars->sMidiSeqSongs(idx2).field_32_progVols[v16 & 0xF].field_0_program = BYTE1(v16);
+                gSpuVars->sMidiSeqSongs(idx2).field_32_progVols[v16 & 0xF].field_0_program = TETHYS_SEQ_BYTE1(v16);
             }
             break;
 
@@ -1518,6 +1641,55 @@ EXPORT void CC SsSeqCalledTbyT_4FDC80()
     }
 }
 
+#if defined(TETHYS_GAME_AE)
+// SATURN (Exoddus, U6 R13): the attack ramp's (2x - x*x) * vol with x = t / a,
+// in integers: floor(vol * t * (2a - t) / (a * a)) exactly (truncated toward
+// zero like the original's (s64) cast). The PC's f64 can come out one lower
+// where its rounding lands just under an integer: an inaudible step of one
+// volume unit for one tick. Shift-subtract over 32 bits: no divide, no libgcc
+// call; 0 <= t < a <= 65535, so t * (2a - t) < a * a < 2^32.
+static s32 Tethys_AdsrAttackLevel(s32 t, u32 a, s32 vol)
+{
+    const u32 ut = static_cast<u32>(t);
+    const u32 n = ut * (2u * a - ut);
+    const u32 d = a * a;
+    const u32 u = static_cast<u32>(vol < 0 ? -vol : vol);
+    u32 q = 0;
+    u32 r = 0; // (high bits of u taken so far) * n == q * d + r, r < d
+    u32 bit = 0x80000000u;
+    while (bit > u)
+    {
+        bit >>= 1;
+    }
+    for (; bit; bit >>= 1)
+    {
+        q <<= 1;
+        if (r >= d - r)
+        {
+            r -= d - r;
+            q++;
+        }
+        else
+        {
+            r += r;
+        }
+        if (u & bit)
+        {
+            if (r >= d - n)
+            {
+                r -= d - n;
+                q++;
+            }
+            else
+            {
+                r += n;
+            }
+        }
+    }
+    return vol < 0 ? -static_cast<s32>(q) : static_cast<s32>(q);
+}
+#endif
+
 EXPORT void CC MIDI_ADSR_Update_4FDCE0()
 {
     for (s32 i = 0; i < kNumChannels; i++)
@@ -1546,12 +1718,17 @@ EXPORT void CC MIDI_ADSR_Update_4FDCE0()
                 case 2:
                     if (timeDiff1 < pChannel->field_1C_adsr.field_4_attack)
                     {
+#if defined(TETHYS_GAME_AE)
+                        // SATURN (Exoddus, U6 R13): the f64 ramp below, in integers
+                        MIDI_Set_Volume_4FDE80(pChannel, Tethys_AdsrAttackLevel(timeDiff2, pChannel->field_1C_adsr.field_4_attack, pChannel->field_C_vol));
+#else
                         MIDI_Set_Volume_4FDE80(
                             pChannel,
                             (s64)(((f64) timeDiff2 / (f64) pChannel->field_1C_adsr.field_4_attack
                                    + (f64) timeDiff2 / (f64) pChannel->field_1C_adsr.field_4_attack
                                    - (f64) timeDiff2 / (f64) pChannel->field_1C_adsr.field_4_attack * ((f64) timeDiff2 / (f64) pChannel->field_1C_adsr.field_4_attack))
                                   * (f64) pChannel->field_C_vol));
+#endif
                         break;
                     }
 
@@ -1624,7 +1801,33 @@ EXPORT s32 CC MIDI_Set_Volume_4FDE80(MIDI_Channel* pData, s32 vol)
 }
 
 
-#ifdef TETHYS_SATURN
+#if defined(TETHYS_SATURN) && defined(TETHYS_GAME_AE)
+// SATURN (Exoddus): Tethys_Pow12_Saturn's arithmetic (the AO version below,
+// same anchors, same interpolation, same clamp), returned as the 16.16 integer
+// it computes before converting: the Exoddus seam takes 16.16 (Sound.hpp), so
+// no float is ever made. x256 = exponent in 1/256-semitone units.
+EXPORT u32 CC Tethys_Pow12Fx_Saturn(s32 x256)
+{
+    static const u32 kSemi16[13] = {
+        65536u, 69433u, 73562u, 77936u, 82570u, 87480u, 92682u,
+        98193u, 104032u, 110218u, 116772u, 123716u, 131072u};
+    s32 oct = x256 / 3072; // 12 * 256
+    s32 rem = x256 - oct * 3072;
+    if (rem < 0)
+    {
+        rem += 3072;
+        oct--;
+    }
+    const u32 a = kSemi16[rem >> 8];
+    const u32 b = kSemi16[(rem >> 8) + 1];
+    const u32 v = a + (((b - a) * (u32) (rem & 255)) >> 8);
+    if (oct > 14)
+        oct = 14;
+    else if (oct < -16)
+        oct = -16;
+    return oct >= 0 ? (v << oct) : (v >> -oct);
+}
+#elif defined(TETHYS_SATURN)
 // SATURN: fixed-point 2^(x/12) (AUDIO_VIDEO_PLAN §2.5) -- replaces the
 // soft-double pow() at every note-on (AO/Midi.cpp:541), pitch-bend (AO
 // :780, MIDI_PitchBend below) and SsUtChangePitch.  12 exact 16.16
@@ -1660,6 +1863,21 @@ EXPORT f32 CC Tethys_Pow12_Saturn(s32 x256)
 
 EXPORT s16 CC MIDI_PitchBend_4FDEC0(s16 program, s16 pitch)
 {
+#if defined(TETHYS_SATURN) && defined(TETHYS_GAME_AE)
+    // SATURN (Exoddus): the bend and the product in 16.16 fixed point. The
+    // first argument stays the original's field_C_vol (not a handle): the
+    // seam's handle check makes it the no-op it is on the PC.
+    const u32 pitcha = Tethys_Pow12Fx_Saturn((s32) pitch * 2);
+    for (s32 i = 0; i < kNumChannels; i++)
+    {
+        if (gSpuVars->sMidi_Channels().channels[i].field_1C_adsr.field_1_program == program)
+        {
+            const u32 freq = Tethys_SndMulFx16(pitcha, gSpuVars->sMidi_Channels().channels[i].field_10_freq);
+            GetSoundAPI().SND_Buffer_Set_Frequency2(gSpuVars->sMidi_Channels().channels[i].field_C_vol, freq);
+        }
+    }
+    return 0;
+#else
 #ifdef TETHYS_SATURN
     // SATURN: exponent was pitch/128 semitones (x256 = pitch*2)
     const f32 pitcha = Tethys_Pow12_Saturn((s32) pitch * 2);
@@ -1675,12 +1893,16 @@ EXPORT s16 CC MIDI_PitchBend_4FDEC0(s16 program, s16 pitch)
         }
     }
     return 0;
+#endif
 }
 
 
 EXPORT s16 CC SsUtChangePitch_4FDF70(s16 voice, s32 /*vabId*/, s32 /*prog*/, s16 old_note, s16 old_fine, s16 new_note, s16 new_fine)
 {
-#ifdef TETHYS_SATURN
+#if defined(TETHYS_SATURN) && defined(TETHYS_GAME_AE)
+    // SATURN (Exoddus): the SFX pitch variation in 16.16 fixed point.
+    const u32 freq = Tethys_Pow12Fx_Saturn((new_fine + ((new_note - (s32) old_note) << 7) - old_fine) * 2);
+#elif defined(TETHYS_SATURN)
     // SATURN: exponent was delta/128 semitones (x256 = delta*2)
     const f32 freq = Tethys_Pow12_Saturn((new_fine + ((new_note - (s32) old_note) << 7) - old_fine) * 2);
 #else

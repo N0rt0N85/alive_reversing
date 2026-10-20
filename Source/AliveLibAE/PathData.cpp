@@ -9,183 +9,192 @@
 // Forward declare to avoid bringing in all of Sys_common.hpp (todo: should prob go in its own header)
 [[noreturn]] void ALIVE_FATAL(const char_type*);
 
-const u32 kMaxPaths = 99;
+// SATURN (U1a A2, decision D-B4, AO's bt1082 twin): 99 -> 32. Every [kMaxPaths]
+// array below lands in HWRAM .data because its initializers are non-zero; with
+// the factory table by value they were 12 x 104,148 B. The highest path index
+// any AE level uses is 29 (BR, measured in the PC data; every array is dense to
+// its count), so 32 keeps three spare, as AO's 24 kept three over its 21.
+// PathData and CollisionInfo are never indexed by a runtime path number except
+// through Path_Get_Bly_Record_460F30, which now names an index past the bound.
+// Every {..., kObjectFactory} initializer is {..., &kObjectFactory}: the
+// table is a pointer (PathData.hpp).
+const u32 kMaxPaths = 32;
 
 const PathData kNullPathEntry = {};
 
 static PathData ST_PathData[kMaxPaths] = {
     kNullPathEntry,
-    {0, 0, 2625, 2340, 375, 260, 375, 260, 504, 660, 375, 260, kObjectFactory},
+    {0, 0, 2625, 2340, 375, 260, 375, 260, 504, 660, 375, 260, &kObjectFactory},
 };
 
 static PathData MI_PathData[kMaxPaths] = {
     kNullPathEntry,
-    {0, 0, 5625, 2340, 375, 260, 375, 260, 2980, 11796, 1875, 0, kObjectFactory},
-    {0, 0, 4125, 2600, 375, 260, 375, 260, 3860, 8772, 0, 0, kObjectFactory},
-    {0, 0, 4500, 1820, 375, 260, 375, 260, 1752, 3652, 375, 1300, kObjectFactory},
-    {0, 0, 4500, 3640, 375, 260, 375, 260, 4404, 15424, 0, 260, kObjectFactory},
-    {0, 0, 4500, 1040, 375, 260, 375, 260, 1384, 5584, 0, 0, kObjectFactory},
-    {0, 0, 4875, 1820, 375, 260, 375, 260, 2048, 5212, 375, 1300, kObjectFactory},
-    {0, 0, 2250, 1300, 375, 260, 375, 260, 1320, 3320, 1125, 1300, kObjectFactory},
-    {0, 0, 3375, 1300, 375, 260, 375, 260, 1280, 6580, 3000, 520, kObjectFactory},
-    {0, 0, 2625, 1560, 375, 260, 375, 260, 1536, 3760, 1500, 520, kObjectFactory},
-    {0, 0, 3375, 1040, 375, 260, 375, 260, 1588, 4792, 2250, 1040, kObjectFactory},
-    {0, 0, 1500, 1300, 375, 260, 375, 260, 460, 2160, 2625, 2600, kObjectFactory},
-    {0, 0, 3750, 780, 375, 260, 375, 260, 1160, 4816, 375, 0, kObjectFactory},
+    {0, 0, 5625, 2340, 375, 260, 375, 260, 2980, 11796, 1875, 0, &kObjectFactory},
+    {0, 0, 4125, 2600, 375, 260, 375, 260, 3860, 8772, 0, 0, &kObjectFactory},
+    {0, 0, 4500, 1820, 375, 260, 375, 260, 1752, 3652, 375, 1300, &kObjectFactory},
+    {0, 0, 4500, 3640, 375, 260, 375, 260, 4404, 15424, 0, 260, &kObjectFactory},
+    {0, 0, 4500, 1040, 375, 260, 375, 260, 1384, 5584, 0, 0, &kObjectFactory},
+    {0, 0, 4875, 1820, 375, 260, 375, 260, 2048, 5212, 375, 1300, &kObjectFactory},
+    {0, 0, 2250, 1300, 375, 260, 375, 260, 1320, 3320, 1125, 1300, &kObjectFactory},
+    {0, 0, 3375, 1300, 375, 260, 375, 260, 1280, 6580, 3000, 520, &kObjectFactory},
+    {0, 0, 2625, 1560, 375, 260, 375, 260, 1536, 3760, 1500, 520, &kObjectFactory},
+    {0, 0, 3375, 1040, 375, 260, 375, 260, 1588, 4792, 2250, 1040, &kObjectFactory},
+    {0, 0, 1500, 1300, 375, 260, 375, 260, 460, 2160, 2625, 2600, &kObjectFactory},
+    {0, 0, 3750, 780, 375, 260, 375, 260, 1160, 4816, 375, 0, &kObjectFactory},
 };
 
 static PathData NE_PathData[kMaxPaths] = {
     kNullPathEntry,
-    {0, 0, 1875, 1300, 375, 260, 375, 260, 740, 2268, 0, 0, kObjectFactory},
-    {0, 0, 2250, 2080, 375, 260, 375, 260, 2404, 5496, 1875, 520, kObjectFactory},
-    {0, 0, 4500, 2600, 375, 260, 375, 260, 1700, 4628, 0, 0, kObjectFactory},
-    {0, 0, 1875, 2080, 375, 260, 375, 260, 1020, 3016, 0, 260, kObjectFactory},
-    {0, 0, 3375, 1820, 375, 260, 375, 260, 1444, 3852, 0, 0, kObjectFactory},
-    {0, 0, 3000, 1040, 375, 260, 375, 260, 676, 3448, 375, 260, kObjectFactory},
-    {0, 0, 2625, 780, 375, 260, 375, 260, 588, 3356, 750, 520, kObjectFactory},
+    {0, 0, 1875, 1300, 375, 260, 375, 260, 740, 2268, 0, 0, &kObjectFactory},
+    {0, 0, 2250, 2080, 375, 260, 375, 260, 2404, 5496, 1875, 520, &kObjectFactory},
+    {0, 0, 4500, 2600, 375, 260, 375, 260, 1700, 4628, 0, 0, &kObjectFactory},
+    {0, 0, 1875, 2080, 375, 260, 375, 260, 1020, 3016, 0, 260, &kObjectFactory},
+    {0, 0, 3375, 1820, 375, 260, 375, 260, 1444, 3852, 0, 0, &kObjectFactory},
+    {0, 0, 3000, 1040, 375, 260, 375, 260, 676, 3448, 375, 260, &kObjectFactory},
+    {0, 0, 2625, 780, 375, 260, 375, 260, 588, 3356, 750, 520, &kObjectFactory},
 };
 
 static PathData PV_PathData[kMaxPaths] = {
     kNullPathEntry,
-    {0, 0, 5250, 1560, 375, 260, 375, 260, 3192, 6548, 0, 520, kObjectFactory},
-    {0, 0, 1500, 260, 375, 260, 375, 260, 212, 772, 3375, 1820, kObjectFactory},
-    {0, 0, 3000, 1560, 375, 260, 375, 260, 1384, 3492, 0, 0, kObjectFactory},
-    {0, 0, 1875, 1040, 375, 260, 375, 260, 1540, 3488, 0, 0, kObjectFactory},
-    {0, 0, 2625, 780, 375, 260, 375, 260, 1568, 3376, 0, 520, kObjectFactory},
-    {0, 0, 1875, 520, 375, 260, 375, 260, 560, 2200, 1125, 520, kObjectFactory},
-    {0, 0, 2250, 1560, 375, 260, 375, 260, 1108, 3568, 750, 260, kObjectFactory},
-    {0, 0, 1500, 780, 375, 260, 375, 260, 736, 2032, 0, 0, kObjectFactory},
-    {0, 0, 2250, 1040, 375, 260, 375, 260, 932, 3256, 0, 260, kObjectFactory},
-    {0, 0, 3375, 1300, 375, 260, 375, 260, 1580, 3408, 375, 1040, kObjectFactory},
-    {0, 0, 2250, 520, 375, 260, 375, 260, 576, 2696, 0, 260, kObjectFactory},
-    {0, 0, 1125, 1560, 375, 260, 375, 260, 1104, 3444, 750, 0, kObjectFactory},
-    {0, 0, 4500, 2600, 375, 260, 375, 260, 3060, 6696, 0, 0, kObjectFactory},
-    {0, 0, 1125, 1040, 375, 260, 375, 260, 656, 3084, 0, 0, kObjectFactory},
-    {0, 0, 1500, 1040, 375, 260, 375, 260, 648, 2128, 1125, 520, kObjectFactory},
+    {0, 0, 5250, 1560, 375, 260, 375, 260, 3192, 6548, 0, 520, &kObjectFactory},
+    {0, 0, 1500, 260, 375, 260, 375, 260, 212, 772, 3375, 1820, &kObjectFactory},
+    {0, 0, 3000, 1560, 375, 260, 375, 260, 1384, 3492, 0, 0, &kObjectFactory},
+    {0, 0, 1875, 1040, 375, 260, 375, 260, 1540, 3488, 0, 0, &kObjectFactory},
+    {0, 0, 2625, 780, 375, 260, 375, 260, 1568, 3376, 0, 520, &kObjectFactory},
+    {0, 0, 1875, 520, 375, 260, 375, 260, 560, 2200, 1125, 520, &kObjectFactory},
+    {0, 0, 2250, 1560, 375, 260, 375, 260, 1108, 3568, 750, 260, &kObjectFactory},
+    {0, 0, 1500, 780, 375, 260, 375, 260, 736, 2032, 0, 0, &kObjectFactory},
+    {0, 0, 2250, 1040, 375, 260, 375, 260, 932, 3256, 0, 260, &kObjectFactory},
+    {0, 0, 3375, 1300, 375, 260, 375, 260, 1580, 3408, 375, 1040, &kObjectFactory},
+    {0, 0, 2250, 520, 375, 260, 375, 260, 576, 2696, 0, 260, &kObjectFactory},
+    {0, 0, 1125, 1560, 375, 260, 375, 260, 1104, 3444, 750, 0, &kObjectFactory},
+    {0, 0, 4500, 2600, 375, 260, 375, 260, 3060, 6696, 0, 0, &kObjectFactory},
+    {0, 0, 1125, 1040, 375, 260, 375, 260, 656, 3084, 0, 0, &kObjectFactory},
+    {0, 0, 1500, 1040, 375, 260, 375, 260, 648, 2128, 1125, 520, &kObjectFactory},
 };
 
 static PathData SV_PathData[kMaxPaths] = {
     kNullPathEntry,
-    {0, 0, 3000, 520, 375, 260, 375, 260, 768, 3076, 375, 0, kObjectFactory},
-    {0, 0, 1500, 1560, 375, 260, 375, 260, 1872, 5068, 375, 0, kObjectFactory},
-    {0, 0, 1875, 780, 375, 260, 375, 260, 960, 3544, 375, 260, kObjectFactory},
-    {0, 0, 2250, 520, 375, 260, 375, 260, 776, 3052, 750, 0, kObjectFactory},
-    {0, 0, 1500, 1300, 375, 260, 375, 260, 1720, 5440, 375, 260, kObjectFactory},
-    {0, 0, 4500, 1820, 375, 260, 375, 260, 2532, 8392, 0, 260, kObjectFactory},
-    {0, 0, 2250, 1300, 375, 260, 375, 260, 1200, 4808, 0, 0, kObjectFactory},
-    {0, 0, 1500, 1300, 375, 260, 375, 260, 1420, 4316, 375, 260, kObjectFactory},
-    {0, 0, 2250, 1300, 375, 260, 375, 260, 1300, 3172, 375, 260, kObjectFactory},
-    {0, 0, 1875, 780, 375, 260, 375, 260, 800, 3584, 375, 260, kObjectFactory},
-    {0, 0, 750, 260, 375, 260, 375, 260, 156, 1024, 375, 260, kObjectFactory},
-    {0, 0, 750, 520, 375, 260, 375, 260, 332, 1324, 750, 0, kObjectFactory},
-    {0, 0, 1875, 520, 375, 260, 375, 260, 520, 1700, 2250, 520, kObjectFactory},
-    {0, 0, 2250, 780, 375, 260, 375, 260, 1204, 3024, 375, 520, kObjectFactory},
+    {0, 0, 3000, 520, 375, 260, 375, 260, 768, 3076, 375, 0, &kObjectFactory},
+    {0, 0, 1500, 1560, 375, 260, 375, 260, 1872, 5068, 375, 0, &kObjectFactory},
+    {0, 0, 1875, 780, 375, 260, 375, 260, 960, 3544, 375, 260, &kObjectFactory},
+    {0, 0, 2250, 520, 375, 260, 375, 260, 776, 3052, 750, 0, &kObjectFactory},
+    {0, 0, 1500, 1300, 375, 260, 375, 260, 1720, 5440, 375, 260, &kObjectFactory},
+    {0, 0, 4500, 1820, 375, 260, 375, 260, 2532, 8392, 0, 260, &kObjectFactory},
+    {0, 0, 2250, 1300, 375, 260, 375, 260, 1200, 4808, 0, 0, &kObjectFactory},
+    {0, 0, 1500, 1300, 375, 260, 375, 260, 1420, 4316, 375, 260, &kObjectFactory},
+    {0, 0, 2250, 1300, 375, 260, 375, 260, 1300, 3172, 375, 260, &kObjectFactory},
+    {0, 0, 1875, 780, 375, 260, 375, 260, 800, 3584, 375, 260, &kObjectFactory},
+    {0, 0, 750, 260, 375, 260, 375, 260, 156, 1024, 375, 260, &kObjectFactory},
+    {0, 0, 750, 520, 375, 260, 375, 260, 332, 1324, 750, 0, &kObjectFactory},
+    {0, 0, 1875, 520, 375, 260, 375, 260, 520, 1700, 2250, 520, &kObjectFactory},
+    {0, 0, 2250, 780, 375, 260, 375, 260, 1204, 3024, 375, 520, &kObjectFactory},
 };
 
 static PathData FD_PathData[kMaxPaths] = {
     kNullPathEntry,
-    {0, 0, 3000, 1560, 375, 260, 375, 260, 1124, 3992, 3375, 520, kObjectFactory},
-    {0, 0, 3000, 2080, 375, 260, 375, 260, 2372, 7184, 2625, 1560, kObjectFactory},
-    {0, 0, 3375, 2600, 375, 260, 375, 260, 2920, 7080, 1875, 520, kObjectFactory},
-    {0, 0, 3750, 1820, 375, 260, 375, 260, 3200, 8196, 2625, 1300, kObjectFactory},
-    {0, 0, 3000, 1820, 375, 260, 375, 260, 2308, 5968, 2250, 1300, kObjectFactory},
-    {0, 0, 1500, 520, 375, 260, 375, 260, 284, 1348, 4500, 1560, kObjectFactory},
-    {0, 0, 1875, 1040, 375, 260, 375, 260, 1580, 3680, 2625, 1820, kObjectFactory},
-    {0, 0, 1875, 1040, 375, 260, 375, 260, 960, 2940, 3000, 1560, kObjectFactory},
-    {0, 0, 2250, 1300, 375, 260, 375, 260, 1240, 3260, 3000, 2080, kObjectFactory},
-    {0, 0, 1875, 1040, 375, 260, 375, 260, 740, 2096, 3000, 2080, kObjectFactory},
-    {0, 0, 2625, 1560, 375, 260, 375, 260, 2436, 7148, 375, 260, kObjectFactory},
-    {0, 0, 1875, 780, 375, 260, 375, 260, 1540, 3684, 2625, 2080, kObjectFactory},
-    {0, 0, 1500, 260, 375, 260, 375, 260, 1732, 4316, 750, 520, kObjectFactory},
-    {0, 0, 1500, 780, 375, 260, 375, 260, 396, 1256, 375, 1300, kObjectFactory},
+    {0, 0, 3000, 1560, 375, 260, 375, 260, 1124, 3992, 3375, 520, &kObjectFactory},
+    {0, 0, 3000, 2080, 375, 260, 375, 260, 2372, 7184, 2625, 1560, &kObjectFactory},
+    {0, 0, 3375, 2600, 375, 260, 375, 260, 2920, 7080, 1875, 520, &kObjectFactory},
+    {0, 0, 3750, 1820, 375, 260, 375, 260, 3200, 8196, 2625, 1300, &kObjectFactory},
+    {0, 0, 3000, 1820, 375, 260, 375, 260, 2308, 5968, 2250, 1300, &kObjectFactory},
+    {0, 0, 1500, 520, 375, 260, 375, 260, 284, 1348, 4500, 1560, &kObjectFactory},
+    {0, 0, 1875, 1040, 375, 260, 375, 260, 1580, 3680, 2625, 1820, &kObjectFactory},
+    {0, 0, 1875, 1040, 375, 260, 375, 260, 960, 2940, 3000, 1560, &kObjectFactory},
+    {0, 0, 2250, 1300, 375, 260, 375, 260, 1240, 3260, 3000, 2080, &kObjectFactory},
+    {0, 0, 1875, 1040, 375, 260, 375, 260, 740, 2096, 3000, 2080, &kObjectFactory},
+    {0, 0, 2625, 1560, 375, 260, 375, 260, 2436, 7148, 375, 260, &kObjectFactory},
+    {0, 0, 1875, 780, 375, 260, 375, 260, 1540, 3684, 2625, 2080, &kObjectFactory},
+    {0, 0, 1500, 260, 375, 260, 375, 260, 1732, 4316, 750, 520, &kObjectFactory},
+    {0, 0, 1500, 780, 375, 260, 375, 260, 396, 1256, 375, 1300, &kObjectFactory},
 };
 
 static PathData BA_PathData[kMaxPaths] = {
     kNullPathEntry,
-    {0, 0, 2250, 2080, 375, 260, 375, 260, 2444, 7612, 375, 0, kObjectFactory},
-    {0, 0, 1125, 1040, 375, 260, 375, 260, 336, 1536, 0, 0, kObjectFactory},
-    {0, 0, 1500, 1300, 375, 260, 375, 260, 1820, 4464, 750, 520, kObjectFactory},
-    {0, 0, 1125, 780, 375, 260, 375, 260, 1772, 5320, 375, 520, kObjectFactory},
-    {0, 0, 4875, 2600, 375, 260, 375, 260, 5240, 12220, 375, 0, kObjectFactory},
-    {0, 0, 4875, 2600, 375, 260, 375, 260, 5240, 12220, 375, 0, kObjectFactory},
-    {0, 0, 2250, 1040, 375, 260, 375, 260, 2312, 8224, 0, 260, kObjectFactory},
-    {0, 0, 2250, 2080, 375, 260, 375, 260, 2444, 7612, 375, 0, kObjectFactory},
-    {0, 0, 2250, 780, 375, 260, 375, 260, 964, 3008, 375, 260, kObjectFactory},
-    {0, 0, 2625, 780, 375, 260, 375, 260, 3848, 8624, 375, 260, kObjectFactory},
-    {0, 0, 2250, 1820, 375, 260, 375, 260, 1136, 5136, 0, 0, kObjectFactory},
-    {0, 0, 2250, 1820, 375, 260, 375, 260, 1136, 5136, 0, 0, kObjectFactory},
-    {0, 0, 750, 780, 375, 260, 375, 260, 288, 1644, 375, 260, kObjectFactory},
-    {0, 0, 2250, 1820, 375, 260, 375, 260, 4016, 7480, 0, 0, kObjectFactory},
-    {0, 0, 750, 780, 375, 260, 375, 260, 368, 2964, 375, 260, kObjectFactory},
-    {0, 0, 750, 260, 375, 260, 375, 260, 156, 936, 375, 260, kObjectFactory},
+    {0, 0, 2250, 2080, 375, 260, 375, 260, 2444, 7612, 375, 0, &kObjectFactory},
+    {0, 0, 1125, 1040, 375, 260, 375, 260, 336, 1536, 0, 0, &kObjectFactory},
+    {0, 0, 1500, 1300, 375, 260, 375, 260, 1820, 4464, 750, 520, &kObjectFactory},
+    {0, 0, 1125, 780, 375, 260, 375, 260, 1772, 5320, 375, 520, &kObjectFactory},
+    {0, 0, 4875, 2600, 375, 260, 375, 260, 5240, 12220, 375, 0, &kObjectFactory},
+    {0, 0, 4875, 2600, 375, 260, 375, 260, 5240, 12220, 375, 0, &kObjectFactory},
+    {0, 0, 2250, 1040, 375, 260, 375, 260, 2312, 8224, 0, 260, &kObjectFactory},
+    {0, 0, 2250, 2080, 375, 260, 375, 260, 2444, 7612, 375, 0, &kObjectFactory},
+    {0, 0, 2250, 780, 375, 260, 375, 260, 964, 3008, 375, 260, &kObjectFactory},
+    {0, 0, 2625, 780, 375, 260, 375, 260, 3848, 8624, 375, 260, &kObjectFactory},
+    {0, 0, 2250, 1820, 375, 260, 375, 260, 1136, 5136, 0, 0, &kObjectFactory},
+    {0, 0, 2250, 1820, 375, 260, 375, 260, 1136, 5136, 0, 0, &kObjectFactory},
+    {0, 0, 750, 780, 375, 260, 375, 260, 288, 1644, 375, 260, &kObjectFactory},
+    {0, 0, 2250, 1820, 375, 260, 375, 260, 4016, 7480, 0, 0, &kObjectFactory},
+    {0, 0, 750, 780, 375, 260, 375, 260, 368, 2964, 375, 260, &kObjectFactory},
+    {0, 0, 750, 260, 375, 260, 375, 260, 156, 936, 375, 260, &kObjectFactory},
 };
 
 static PathData BW_PathData[kMaxPaths] = {
     kNullPathEntry,
-    {0, 0, 3750, 1820, 375, 260, 375, 260, 1820, 4412, 0, 0, kObjectFactory},
-    {0, 0, 3750, 2080, 375, 260, 375, 260, 3160, 9076, 0, 0, kObjectFactory},
-    {0, 0, 3750, 1300, 375, 260, 375, 260, 2820, 7724, 0, 260, kObjectFactory},
-    {0, 0, 3375, 2080, 375, 260, 375, 260, 2696, 9732, 375, 0, kObjectFactory},
-    {0, 0, 3375, 2080, 375, 260, 375, 260, 2696, 9732, 375, 0, kObjectFactory},
-    {0, 0, 3375, 2080, 375, 260, 375, 260, 2696, 9732, 375, 0, kObjectFactory},
-    {0, 0, 3375, 1560, 375, 260, 375, 260, 1512, 6184, 375, 0, kObjectFactory},
-    {0, 0, 3375, 1560, 375, 260, 375, 260, 1512, 6184, 375, 0, kObjectFactory},
-    {0, 0, 2625, 1040, 375, 260, 375, 260, 1364, 4980, 375, 780, kObjectFactory},
-    {0, 0, 3375, 1560, 375, 260, 375, 260, 1512, 6184, 375, 0, kObjectFactory},
-    {0, 0, 1875, 520, 375, 260, 375, 260, 300, 1396, 1875, 1300, kObjectFactory},
-    {0, 0, 1500, 520, 375, 260, 375, 260, 244, 1104, 1125, 520, kObjectFactory},
-    {0, 0, 1500, 520, 375, 260, 375, 260, 604, 2348, 375, 1040, kObjectFactory},
-    {0, 0, 3000, 780, 375, 260, 375, 260, 832, 2180, 750, 520, kObjectFactory},
+    {0, 0, 3750, 1820, 375, 260, 375, 260, 1820, 4412, 0, 0, &kObjectFactory},
+    {0, 0, 3750, 2080, 375, 260, 375, 260, 3160, 9076, 0, 0, &kObjectFactory},
+    {0, 0, 3750, 1300, 375, 260, 375, 260, 2820, 7724, 0, 260, &kObjectFactory},
+    {0, 0, 3375, 2080, 375, 260, 375, 260, 2696, 9732, 375, 0, &kObjectFactory},
+    {0, 0, 3375, 2080, 375, 260, 375, 260, 2696, 9732, 375, 0, &kObjectFactory},
+    {0, 0, 3375, 2080, 375, 260, 375, 260, 2696, 9732, 375, 0, &kObjectFactory},
+    {0, 0, 3375, 1560, 375, 260, 375, 260, 1512, 6184, 375, 0, &kObjectFactory},
+    {0, 0, 3375, 1560, 375, 260, 375, 260, 1512, 6184, 375, 0, &kObjectFactory},
+    {0, 0, 2625, 1040, 375, 260, 375, 260, 1364, 4980, 375, 780, &kObjectFactory},
+    {0, 0, 3375, 1560, 375, 260, 375, 260, 1512, 6184, 375, 0, &kObjectFactory},
+    {0, 0, 1875, 520, 375, 260, 375, 260, 300, 1396, 1875, 1300, &kObjectFactory},
+    {0, 0, 1500, 520, 375, 260, 375, 260, 244, 1104, 1125, 520, &kObjectFactory},
+    {0, 0, 1500, 520, 375, 260, 375, 260, 604, 2348, 375, 1040, &kObjectFactory},
+    {0, 0, 3000, 780, 375, 260, 375, 260, 832, 2180, 750, 520, &kObjectFactory},
 };
 
 static PathData BR_PathData[kMaxPaths] = {
     kNullPathEntry,
-    {0, 0, 3000, 1040, 375, 260, 375, 260, 1836, 6272, 0, 0, kObjectFactory},
-    {0, 0, 4500, 1820, 375, 260, 375, 260, 2512, 5592, 375, 780, kObjectFactory},
-    {0, 0, 3375, 1040, 375, 260, 375, 260, 1768, 4284, 2625, 780, kObjectFactory},
-    {0, 0, 3750, 1820, 375, 260, 375, 260, 1380, 5704, 1125, 780, kObjectFactory},
-    {0, 0, 3375, 1300, 375, 260, 375, 260, 1200, 4272, 2625, 780, kObjectFactory},
-    {0, 0, 2625, 1820, 375, 260, 375, 260, 2552, 5360, 750, 520, kObjectFactory},
-    {0, 0, 2250, 780, 375, 260, 375, 260, 1344, 4328, 375, 0, kObjectFactory},
-    {0, 0, 2625, 520, 375, 260, 375, 260, 852, 2340, 1875, 1820, kObjectFactory},
-    {0, 0, 3000, 1820, 375, 260, 375, 260, 3128, 6272, 375, 1040, kObjectFactory},
-    {0, 0, 3750, 1820, 375, 260, 375, 260, 1860, 7256, 0, 0, kObjectFactory},
-    {0, 0, 3375, 3120, 375, 260, 375, 260, 2364, 5328, 375, 0, kObjectFactory},
-    {0, 0, 2625, 780, 375, 260, 375, 260, 768, 3344, 0, 0, kObjectFactory},
-    {0, 0, 3000, 260, 375, 260, 375, 260, 684, 2568, 3000, 1560, kObjectFactory},
-    {0, 0, 4125, 780, 375, 260, 375, 260, 1224, 3928, 375, 0, kObjectFactory},
-    {0, 0, 2625, 780, 375, 260, 375, 260, 748, 3052, 1125, 520, kObjectFactory},
-    {0, 0, 2250, 1300, 375, 260, 375, 260, 760, 2492, 1125, 780, kObjectFactory},
-    {0, 0, 2250, 2600, 375, 260, 375, 260, 2820, 10656, 0, 0, kObjectFactory},
-    {0, 0, 2625, 1040, 375, 260, 375, 260, 824, 3776, 0, 780, kObjectFactory},
-    {0, 0, 2250, 1040, 375, 260, 375, 260, 1712, 5260, 0, 520, kObjectFactory},
-    {0, 0, 3000, 1560, 375, 260, 375, 260, 884, 4436, 0, 260, kObjectFactory},
-    {0, 0, 1500, 520, 375, 260, 375, 260, 304, 1284, 0, 0, kObjectFactory},
-    {0, 0, 1500, 520, 375, 260, 375, 260, 304, 1284, 0, 0, kObjectFactory},
-    {0, 0, 1125, 1040, 375, 260, 375, 260, 196, 1364, 0, 0, kObjectFactory},
-    {0, 0, 1125, 1040, 375, 260, 375, 260, 476, 1756, 0, 0, kObjectFactory},
-    {0, 0, 1125, 1040, 375, 260, 375, 260, 576, 1616, 0, 0, kObjectFactory},
-    {0, 0, 2250, 1040, 375, 260, 375, 260, 712, 3928, 1125, 0, kObjectFactory},
-    {0, 0, 3000, 2340, 375, 260, 375, 260, 1076, 2644, 750, 780, kObjectFactory},
-    {0, 0, 1500, 520, 375, 260, 375, 260, 384, 1964, 375, 780, kObjectFactory},
-    {0, 0, 3000, 780, 375, 260, 375, 260, 552, 3284, 0, 1040, kObjectFactory},
+    {0, 0, 3000, 1040, 375, 260, 375, 260, 1836, 6272, 0, 0, &kObjectFactory},
+    {0, 0, 4500, 1820, 375, 260, 375, 260, 2512, 5592, 375, 780, &kObjectFactory},
+    {0, 0, 3375, 1040, 375, 260, 375, 260, 1768, 4284, 2625, 780, &kObjectFactory},
+    {0, 0, 3750, 1820, 375, 260, 375, 260, 1380, 5704, 1125, 780, &kObjectFactory},
+    {0, 0, 3375, 1300, 375, 260, 375, 260, 1200, 4272, 2625, 780, &kObjectFactory},
+    {0, 0, 2625, 1820, 375, 260, 375, 260, 2552, 5360, 750, 520, &kObjectFactory},
+    {0, 0, 2250, 780, 375, 260, 375, 260, 1344, 4328, 375, 0, &kObjectFactory},
+    {0, 0, 2625, 520, 375, 260, 375, 260, 852, 2340, 1875, 1820, &kObjectFactory},
+    {0, 0, 3000, 1820, 375, 260, 375, 260, 3128, 6272, 375, 1040, &kObjectFactory},
+    {0, 0, 3750, 1820, 375, 260, 375, 260, 1860, 7256, 0, 0, &kObjectFactory},
+    {0, 0, 3375, 3120, 375, 260, 375, 260, 2364, 5328, 375, 0, &kObjectFactory},
+    {0, 0, 2625, 780, 375, 260, 375, 260, 768, 3344, 0, 0, &kObjectFactory},
+    {0, 0, 3000, 260, 375, 260, 375, 260, 684, 2568, 3000, 1560, &kObjectFactory},
+    {0, 0, 4125, 780, 375, 260, 375, 260, 1224, 3928, 375, 0, &kObjectFactory},
+    {0, 0, 2625, 780, 375, 260, 375, 260, 748, 3052, 1125, 520, &kObjectFactory},
+    {0, 0, 2250, 1300, 375, 260, 375, 260, 760, 2492, 1125, 780, &kObjectFactory},
+    {0, 0, 2250, 2600, 375, 260, 375, 260, 2820, 10656, 0, 0, &kObjectFactory},
+    {0, 0, 2625, 1040, 375, 260, 375, 260, 824, 3776, 0, 780, &kObjectFactory},
+    {0, 0, 2250, 1040, 375, 260, 375, 260, 1712, 5260, 0, 520, &kObjectFactory},
+    {0, 0, 3000, 1560, 375, 260, 375, 260, 884, 4436, 0, 260, &kObjectFactory},
+    {0, 0, 1500, 520, 375, 260, 375, 260, 304, 1284, 0, 0, &kObjectFactory},
+    {0, 0, 1500, 520, 375, 260, 375, 260, 304, 1284, 0, 0, &kObjectFactory},
+    {0, 0, 1125, 1040, 375, 260, 375, 260, 196, 1364, 0, 0, &kObjectFactory},
+    {0, 0, 1125, 1040, 375, 260, 375, 260, 476, 1756, 0, 0, &kObjectFactory},
+    {0, 0, 1125, 1040, 375, 260, 375, 260, 576, 1616, 0, 0, &kObjectFactory},
+    {0, 0, 2250, 1040, 375, 260, 375, 260, 712, 3928, 1125, 0, &kObjectFactory},
+    {0, 0, 3000, 2340, 375, 260, 375, 260, 1076, 2644, 750, 780, &kObjectFactory},
+    {0, 0, 1500, 520, 375, 260, 375, 260, 384, 1964, 375, 780, &kObjectFactory},
+    {0, 0, 3000, 780, 375, 260, 375, 260, 552, 3284, 0, 1040, &kObjectFactory},
 };
 
 static PathData BM_PathData[kMaxPaths] = {
     kNullPathEntry,
-    {0, 0, 2625, 2600, 375, 260, 375, 260, 2560, 8488, 375, 0, kObjectFactory},
+    {0, 0, 2625, 2600, 375, 260, 375, 260, 2560, 8488, 375, 0, &kObjectFactory},
 };
 
 static PathData TL_PathData[kMaxPaths] = {
     kNullPathEntry,
-    {0, 0, 1125, 260, 375, 260, 375, 260, 424, 740, 375, 260, kObjectFactory},
-    {0, 0, 1875, 1820, 375, 260, 375, 260, 860, 1672, 375, 0, kObjectFactory},
+    {0, 0, 1125, 260, 375, 260, 375, 260, 424, 740, 375, 260, &kObjectFactory},
+    {0, 0, 1875, 1820, 375, 260, 375, 260, 860, 1672, 375, 0, &kObjectFactory},
 };
 
 static PathData CR_PathData[kMaxPaths] = {
     kNullPathEntry,
-    {0, 0, 3750, 1820, 375, 260, 375, 260, 560, 592, 375, 520, kObjectFactory},
-    {0, 0, 3750, 1300, 375, 260, 375, 260, 400, 416, 375, 260, kObjectFactory},
+    {0, 0, 3750, 1820, 375, 260, 375, 260, 560, 592, 375, 520, &kObjectFactory},
+    {0, 0, 3750, 1300, 375, 260, 375, 260, 400, 416, 375, 260, &kObjectFactory},
 };
 
 // ===========================================================================
@@ -2205,6 +2214,16 @@ static PathRootContainer sPathData_559660 = pathData;
 
 const PathBlyRec* CC Path_Get_Bly_Record_460F30(LevelIds lvlId, u16 pathId)
 {
+#ifdef TETHYS_SATURN
+    // SATURN: the one runtime index into a [kMaxPaths] array, and the bound is
+    // 32 now. Past it the read would return the next level's record, which
+    // looks plausible: a named death screen instead (the !rec test below can
+    // never fire, the address of an element is never null).
+    if (pathId >= kMaxPaths)
+    {
+        ALIVE_FATAL("path index over kMaxPaths");
+    }
+#endif
     const PathBlyRec* rec = &sPathData_559660.paths[static_cast<s32>(lvlId)].field_0_pBlyArrayPtr[pathId];
     if (!rec)
     {
@@ -2214,8 +2233,33 @@ const PathBlyRec* CC Path_Get_Bly_Record_460F30(LevelIds lvlId, u16 pathId)
     return rec;
 }
 
+#ifdef TETHYS_SATURN
+// SATURN (U7-T2, decision D-F3): the length of each level's FmvInfo table, in
+// LevelIds order (the PathRoot rows above: the Ender levels share their base
+// level's table). The PC indexes the table unchecked, and two shipped TLVs ask
+// past their table (fd path 4 cell 64 asks FD[6] of 5, sv path 7 cell 8 asks
+// SV[36] of 36, impl/M.md): they read whatever follows in .data.
+static const u8 kTethysFmvCount[] = {
+    ALIVE_COUNTOF(ST_FmvInfo), ALIVE_COUNTOF(MI_FmvInfo), ALIVE_COUNTOF(NE_FmvInfo), ALIVE_COUNTOF(PV_FmvInfo),
+    ALIVE_COUNTOF(SV_FmvInfo), ALIVE_COUNTOF(FD_FmvInfo), ALIVE_COUNTOF(BA_FmvInfo), ALIVE_COUNTOF(SV_FmvInfo),
+    ALIVE_COUNTOF(BW_FmvInfo), ALIVE_COUNTOF(BR_FmvInfo), ALIVE_COUNTOF(BM_FmvInfo), ALIVE_COUNTOF(PV_FmvInfo),
+    ALIVE_COUNTOF(FD_FmvInfo), ALIVE_COUNTOF(BA_FmvInfo), ALIVE_COUNTOF(BW_FmvInfo), ALIVE_COUNTOF(TL_FmvInfo),
+    ALIVE_COUNTOF(CR_FmvInfo)};
+static_assert(ALIVE_COUNTOF(kTethysFmvCount) == 17, "one FmvInfo length per LevelIds value");
+#endif
+
 FmvInfo* CC Path_Get_FMV_Record_460F70(LevelIds lvlId, u16 fmvId)
 {
+#ifdef TETHYS_SATURN
+    // An id past its level's table answers the table's own null record (index
+    // 0, kNullFmvInfo: no name), which the film layer cuts instantly, as every
+    // fileless or null film is cut (D-F3).
+    const s32 lvl = static_cast<s32>(lvlId);
+    if (lvl < 0 || lvl >= static_cast<s32>(ALIVE_COUNTOF(kTethysFmvCount)) || fmvId >= kTethysFmvCount[lvl])
+    {
+        return const_cast<FmvInfo*>(&kNullFmvInfo);
+    }
+#endif
     return &sPathData_559660.paths[static_cast<s32>(lvlId)].field_4_pFmvArray[fmvId];
 }
 

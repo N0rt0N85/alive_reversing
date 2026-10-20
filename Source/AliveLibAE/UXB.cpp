@@ -16,6 +16,20 @@
 #include "Grid.hpp"
 #include <math.h>
 
+#ifdef TETHYS_SATURN
+// SATURN (U3 T10): the blink pattern's digit extraction raised 10 to an integer
+// power through libm's double pow at every blink. The exponent is
+// pattern_length - index - 1 with pattern_length clamped to 1..4 by the ctor and
+// index < pattern_length, so it is 0..3, and pow(10, k) is exact there: a table
+// gives the same integers (out-of-range exponents keep pow's integer cast:
+// 0 for a negative one, which upstream never produces).
+static s32 Tethys_Pow10(s32 k)
+{
+    static const s32 kPow10[5] = {1, 10, 100, 1000, 10000};
+    return (k >= 0 && k < 5) ? kPow10[k] : 0;
+}
+#endif
+
 const TintEntry sTintMap_UXB_563A3C[19] = {
     {LevelIds_s8::eMines_1, 127u, 127u, 127u},
     {LevelIds_s8::eNecrum_2, 137u, 137u, 137u},
@@ -162,7 +176,11 @@ UXB* UXB::ctor_4DE9A0(Path_UXB* tlv_params, TlvItemInfoUnion itemInfo)
 
     field_1C2_pattern_index = 0;
     // Single out a single digit, and use that digit as the new amount of red blinks before a green one.
+#ifdef TETHYS_SATURN
+    field_1C6_red_blink_count = (field_1C4_pattern / Tethys_Pow10(field_1C0_pattern_length - 1)) % 10;
+#else
     field_1C6_red_blink_count = (field_1C4_pattern / static_cast<s32>(pow(10, field_1C0_pattern_length - 1))) % 10;
+#endif
 
     if (tlv_params->field_14_scale != Scale_short::eFull_0)
     {
@@ -456,7 +474,11 @@ void UXB::Update_4DF030()
                     }
 
                     // Single out a single digit, and use that digit as the new amount of red blinks before a green one.
+#ifdef TETHYS_SATURN
+                    field_1C6_red_blink_count = (field_1C4_pattern / Tethys_Pow10(field_1C0_pattern_length - field_1C2_pattern_index - 1)) % 10;
+#else
                     field_1C6_red_blink_count = (field_1C4_pattern / static_cast<s32>(pow(10, field_1C0_pattern_length - field_1C2_pattern_index - 1))) % 10;
+#endif
                 }
 
                 const AnimRecord& rec = AnimRec(AnimId::Bomb_RedGreenTick);

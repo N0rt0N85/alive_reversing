@@ -29,3 +29,9 @@ private:
     s32 field_48_padding;
 };
 ALIVE_ASSERT_SIZEOF(ScreenShake, 0x4C);
+
+#ifdef TETHYS_SATURN
+#include "TethysObjectHooks.hpp"
+// SATURN (U1d T1): every ae_new<ScreenShake> site null-tests its result: soft OOM.
+TETHYS_AE_SOFT_OOM_TYPE(ScreenShake);
+#endif

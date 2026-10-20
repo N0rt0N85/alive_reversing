@@ -57,6 +57,27 @@ EXPORT void BaseAnimatedWithPhysicsGameObject::BaseAnimatedWithPhysicsGameObject
 {
     SetVTable(this, 0x544C9C); // gVtbl_BaseAnimatedWithPhysicsGameObject_544C9C
 
+#ifdef TETHYS_SATURN
+    // SATURN (AO twin, U1b T5): the animation's VRAM rect and palette are released
+    // ONLY by vCleanUp, and the stock gate skips it whenever eListAddFailed is set
+    // (a subclass failing a step AFTER a successful Init) or eDrawable is clear:
+    // orphaned CRAM homes that accumulate across screens. vCleanUp is a no-op on
+    // a never-Init'd (zeroed) Animation and idempotent (Animation.cpp), so it
+    // always runs; only the drawables Remove_Item keeps its gate. The shadow is
+    // a separate object with its own palette: freed on every path too.
+    if (field_6_flags.Get(BaseGameObject::eDrawable_Bit4)
+        && !field_6_flags.Get(BaseGameObject::eListAddFailed_Bit1))
+    {
+        gObjList_drawables_5C1124->Remove_Item(this);
+    }
+    field_20_animation.vCleanUp_40C630();
+    if (field_E0_pShadow)
+    {
+        field_E0_pShadow->dtor_4ACA30();
+        ae_delete_free_495540(field_E0_pShadow);
+        field_E0_pShadow = nullptr;
+    }
+#else
     if (!field_6_flags.Get(BaseGameObject::eListAddFailed_Bit1))
     {
         if (field_6_flags.Get(BaseGameObject::eDrawable_Bit4))
@@ -71,6 +92,7 @@ EXPORT void BaseAnimatedWithPhysicsGameObject::BaseAnimatedWithPhysicsGameObject
             ae_delete_free_495540(field_E0_pShadow);
         }
     }
+#endif
     BaseGameObject_dtor_4DBEC0();
 }
 

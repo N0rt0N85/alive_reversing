@@ -6,6 +6,10 @@
 #include "ResourceManager.hpp"
 #include "Game.hpp"
 #include "PsxDisplay.hpp"
+#ifdef TETHYS_SATURN
+#include "TethysObjectHooks.hpp"
+extern "C" u32 Tethys_gInAnimate; // SATURN: src/sys_saturn.cxx, 1 while AnimateAll runs (Game.cpp)
+#endif
 
 BaseGameObject* Blood::VDestructor(s32 flags)
 {
@@ -57,7 +61,18 @@ Blood* Blood::ctor_40F0B0(FP xpos, FP ypos, FP xOff, FP yOff, FP scale, s16 coun
     field_126_total_count = count;
     field_122_to_render_count = count;
 
+#ifdef TETHYS_SATURN
+    // SATURN (U1d T2, AO 449.ao.4 twin): the `else` below (no buffer, the spray
+    // dies) is the recovery; ask for a SOFT refusal so it can run under the
+    // default fatal allocator policy (D-B4). Keep the compaction retry, except
+    // while AnimateAll runs (review RV1): a Slog's bite spawns Blood from a frame
+    // callback (Animation.cpp, Animation_OnFrame_Slog_4C3030), and
+    // Invoke_CallBacks_40B7A0 walks raw pointers into the UNLOCKED animation
+    // block that a compaction would move under it.
+    field_F4_ppResBuf = Tethys_ResAllocSoft(ResourceManager::Resource_Blood, 0, count * sizeof(BloodParticle), true /*locked*/, Tethys_gInAnimate == 0 /*reclaim*/);
+#else
     field_F4_ppResBuf = ResourceManager::Allocate_New_Locked_Resource_49BF40(ResourceManager::Resource_Blood, 0, count * sizeof(BloodParticle));
+#endif
     if (field_F4_ppResBuf)
     {
         field_F8_pResBuf = reinterpret_cast<BloodParticle*>(*field_F4_ppResBuf);
@@ -252,7 +267,11 @@ void Blood::vRender_40F780(PrimHeader** ppOt)
                 SetRGB0(pSprt, field_20_animation.field_8_r, field_20_animation.field_9_g, field_20_animation.field_A_b);
             }
 
+#ifdef TETHYS_SATURN
+            pSprt->mBase.header.hackPtr = nullptr; // U1d T4: queued once, below
+#else
             OrderingTable_Add_4F8AA0(OtLayer(ppOt, field_12C_render_layer), &pSprt->mBase.header);
+#endif
 
             xy.field_0_x = std::min(x0, xy.field_0_x);
             xy.field_2_y = std::min(y0, xy.field_2_y);
@@ -260,6 +279,25 @@ void Blood::vRender_40F780(PrimHeader** ppOt)
             wh.field_0_x = std::max(x0, wh.field_0_x);
             wh.field_2_y = std::max(y0, wh.field_2_y);
         }
+
+#ifdef TETHYS_SATURN
+        // SATURN (U1d T4, AO 448.ao.8 twin): ONE RENDERER CALL FOR THE SPRAY. Every
+        // droplet has the same cel, palette, size and colour, only its place
+        // moves, and a Drill kill is three sprays of 50 (Drill.cpp:773-797): 150
+        // full renderer calls a tick. The first droplet is the only one queued and
+        // stands for all of them, in the order the table would have walked them
+        // (src/renderer_saturn.cxx, DrawSprtBurst), before the tpage as they were.
+        if (field_122_to_render_count > 0)
+        {
+            Prim_Sprt* pLead = &field_F8_pResBuf[0].field_10_prims[gPsxDisplay_5C1130.field_C_buffer_index];
+            field_130_tethys_spray.mMagic = kTethysSprayMagic;
+            field_130_tethys_spray.mpFirst = reinterpret_cast<const u8*>(pLead);
+            field_130_tethys_spray.mCount = static_cast<u16>(field_122_to_render_count);
+            field_130_tethys_spray.mStride = static_cast<u16>(sizeof(BloodParticle));
+            pLead->mBase.header.hackPtr = &field_130_tethys_spray;
+            OrderingTable_Add_4F8AA0(OtLayer(ppOt, field_12C_render_layer), &pLead->mBase.header);
+        }
+#endif
 
         const s32 tpage = PSX_getTPage_4F60E0(
             field_11C_texture_mode,

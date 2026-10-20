@@ -93,3 +93,17 @@ ALIVE_VAR_EXTERN(s8, sDisableFontFlicker_5C9304);
 
 ALIVE_ARY_EXTERN(Font_AtlasEntry, 169, sFont1Atlas_551D34);
 ALIVE_ARY_EXTERN(Font_AtlasEntry, 169, sFont2Atlas_551FD8);
+
+#ifdef TETHYS_SATURN
+// SATURN: a compiled PSX little-endian u8[32] palette -> the big-endian CRAM
+// words the Saturn PalSetData takes (Font.cpp). Every Font ctor goes through it;
+// LCDScreen's second palette calls it directly.
+void Tethys_PalSetCompiled(s16 palX, s16 palY, s16 depth, const u8* pPalette);
+
+// SATURN (U1c L1/L5b/T15, AO 442.ao.7 twin): true while the pause menu is up.
+// Every in-world text (LCD marquee, status boards, gas clock, meter countdown,
+// brew counter) is composited by the renderer's text path, which the pause
+// veil does not walk: drawn, it stays bright over the dimmed screen, so these
+// texts are not drawn while paused. Defined in PauseMenu.cpp.
+bool Tethys_PauseHidesText();
+#endif

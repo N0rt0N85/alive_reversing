@@ -86,5 +86,10 @@ private:
     ZapPoint* field_13C_zap_points;
     FP_Point* field_140_sprite_segment_positions;
     PSX_RECT field_144_rects[2];
+#ifdef TETHYS_SATURN
+    // SATURN (U1d T3, AO 448.ao.8 twin): the beam's one-call descriptor. AO put
+    // it in 16 unused bytes; AE has none, so the object grows by 16 B.
+    Tethys_PrimSwarm field_154_tethys_spray;
+#endif
 };
 ALIVE_ASSERT_SIZEOF(ZapLine, 0x154);

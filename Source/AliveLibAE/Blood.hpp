@@ -47,5 +47,17 @@ private:
     s32 field_128_timer;
     Layer field_12C_render_layer;
     //s16 field_12E_pad;
+#ifdef TETHYS_SATURN
+    // SATURN (U1d T4, AO 448.ao.8 twin): the spray's one-call descriptor. AE has
+    // no unused 16 bytes here (AO had), so the object grows by 16 B.
+    s16 field_12E_tethys_pad;
+    Tethys_PrimSwarm field_130_tethys_spray;
+#endif
 };
 ALIVE_ASSERT_SIZEOF(Blood, 0x130);
+
+#ifdef TETHYS_SATURN
+#include "TethysObjectHooks.hpp"
+// SATURN (U1d T1): every ae_new<Blood> site null-tests its result: soft OOM.
+TETHYS_AE_SOFT_OOM_TYPE(Blood);
+#endif

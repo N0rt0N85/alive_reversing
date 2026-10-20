@@ -92,7 +92,26 @@ Rope* Rope::ctor_4A0A70(u16 left, s16 top, u16 bottom, FP scale)
 
     field_F4_rope_segment_count = (240 / field_F6_rope_length) + 1; // psx screen height
 
+#if defined(TETHYS_GAME_AE)
+    // SATURN (review RV1, the Font.cpp twin): the same locked last-fit block
+    // with its reclaim retry, but NON-FATAL: on Saturn the PC's call ends in the
+    // "RES NULL" death screen when the no-cart heap is full (two ropes per
+    // LiftPoint, one per PullRingRope). A refused rope stays ALIVE with no
+    // segment, because its owners reach it by id and write its fields
+    // (LiftPoint.cpp:340-348): only its strands are missing, vRender's segment
+    // loop runs zero times and the dtor's FreeResource takes the null.
+    field_F8_ppRopeRes = ResourceManager::Alloc_New_Resource_ImplEx(
+        ResourceManager::Resource_Rope, 0, field_F4_rope_segment_count * sizeof(AnimationUnknown),
+        true, ResourceManager::BlockAllocMethod::eLastMatching, true /*reclaim*/, false /*never fatal*/);
+    if (!field_F8_ppRopeRes)
+    {
+        field_F4_rope_segment_count = 0;
+        field_FC_pRopeRes = nullptr;
+        return this;
+    }
+#else
     field_F8_ppRopeRes = ResourceManager::Allocate_New_Locked_Resource_49BF40(ResourceManager::Resource_Rope, 0, field_F4_rope_segment_count * sizeof(AnimationUnknown));
+#endif
     field_FC_pRopeRes = reinterpret_cast<AnimationUnknown*>(*field_F8_ppRopeRes);
 
     for (s32 i = 0; i < field_F4_rope_segment_count; i++)

@@ -348,14 +348,29 @@ s32 CC MusicController::Create_47FC40()
     return 1;
 }
 
+#if defined(TETHYS_SATURN)
+// SATURN (U4 T9, decision D6): src/sys_saturn.cxx's vblank count, tick-locked
+// while an attract demo runs (AO 448.ao.7 rule; see PSX_VSync_4F6170).
+extern "C" u32 Tethys_gMusicVbl;
+#endif
+
 void CC MusicController::SetBaseTimeStamp_47FD00()
 {
+#if defined(TETHYS_SATURN)
+    sMusicControllerBaseTimeStamp_5C301C = Tethys_gMusicVbl;
+#else
     sMusicControllerBaseTimeStamp_5C301C = GetGameAutoPlayer().SysGetTicks();
+#endif
 }
 
 void CC MusicController::UpdateMusicTime_47F8B0()
 {
+#if defined(TETHYS_SATURN)
+    // SATURN: vblanks / 2 = 30 units a second on NTSC, the PC's 3 * ms / 100.
+    sMusicTime_5C3024 = (Tethys_gMusicVbl - sMusicControllerBaseTimeStamp_5C301C) / 2;
+#else
     sMusicTime_5C3024 = (3 * GetGameAutoPlayer().SysGetTicks() - 3 * sMusicControllerBaseTimeStamp_5C301C) / 100;
+#endif
 }
 
 void CC MusicController::Shutdown_47FD20()

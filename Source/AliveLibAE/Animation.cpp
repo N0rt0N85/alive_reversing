@@ -21,6 +21,136 @@
 #include "Renderer/IRenderer.hpp"
 #include <gmock/gmock.h>
 
+#ifdef TETHYS_SATURN
+// ============================================================================
+// SATURN (Exoddus port, D-A1/D-A2): THE ANIMATION RUNTIME ON THE SATURN PACK.
+//
+// What the AE converter ships (tools/ae/convert_ae.py, gauge check_pack_ae.py):
+// every frame is compression type 0 or 5, pre-scaled 2:1 and VDP1-packed
+// (src/pack_contract.hpp); the CLUT count is a big-endian u32 (Init reads it
+// unchanged); 191 of 199 chunks are compacted and carry the 'TSAT' record at
+// payload+8; frame callbacks are {u32 index, s16, s16} x count, big-endian.
+// What this file does with it, each piece the twin of AO's Animation.cpp:
+//   * TSAT: compiled frame-table offsets are translated at the two doors
+//     (Init_40A030, Set_Animation_Data_409C80) and exported for the three
+//     object sites that address a table by its compiled offset (RockSack,
+//     MineCar, Slurg): Tethys_TranslateFrameTable;
+//   * every frame lives in VRAM: eBit25_bDecompressDone is forced at Init (the
+//     PC draws 16- and 64-colour cels from compressed data and frees their VRAM
+//     at the first render: 3,981 of AE's 4,907 frames);
+//   * type 5 decodes into the shared LWRAM scratch through the cel cache and
+//     the slave prefetch (AliveLibCommon/TethysCelCache.hpp); there is no
+//     per-Animation decode buffer at all (the largest AE frame decodes to
+//     13,000 B, the scratch holds 16,384), so no allocation happens inside a
+//     decode and no block can move under it;
+//   * firewalls: an insane block skips the decode, Get_FrameHeader never
+//     returns null or a misaligned header, a garbage compression type skips;
+//   * idempotent release: the palette and the VRAM rect are freed once, an
+//     Init that fails gives back what it took.
+// ============================================================================
+extern "C" unsigned int Tethys_gDbufFall;   // 'fb': type-5 frames the scratch could not take (skipped)
+extern "C" unsigned int Tethys_gDbufRaw[3]; // decode raw ticks, [0] in AnimateAll, [1] elsewhere
+extern "C" unsigned int Tethys_gDbufBytes[3];
+extern "C" unsigned int Tethys_gInAnimate;
+extern "C" unsigned int Tethys_RawTicks(void);
+extern "C" unsigned char Tethys_gProbeOn;
+#define TETHYS_PT() (Tethys_gProbeOn ? Tethys_RawTicks() : 0u)
+// ao262.10: the two silent object-killers (Init returns 0, the object dies).
+extern "C" unsigned int Tethys_gVramFail;
+extern "C" unsigned int Tethys_gPalFail;
+
+// AE has no clustered blood cels (the AE converter's CLUSTER_CELS is empty), so
+// nothing is refused by the cache or the prefetch. The light laid on Abe
+// (src/glow_ae.cxx) needs no refusal either, unlike AO's chant glow: it never
+// writes a cache entry (a cached cel is copied before it is lit) and only
+// reads them, through Tethys_CelPeekAE below, when no slave batch is in flight.
+#define TETHYS_CEL_ANIM_LIST gObjList_animations_5C1A24
+#define TETHYS_CEL_REFUSE_BLOCK(pBlock) false
+#define TETHYS_CEL_PREFETCH_OFF() 0
+#include "TethysCelCache.hpp"
+#include "TethysObjectHooks.hpp" // the exported translation hooks, checked against their callers
+
+// SATURN (src/glow_ae.cxx): the cache's decoded copy of a particle's cel, read
+// without settling anything. Its callers run in AnimateAll and right after it,
+// before Tethys_CelPrefetch posts a batch; a batch in flight answers nullptr
+// (the caller decodes into its own buffer instead).
+extern "C" const u8* Tethys_CelPeekAE(const u8* pSrc, u32 len)
+{
+    const long i = Tethys_gSlzActive ? -1 : TethysCelLookup(pSrc, len);
+    return i < 0 ? nullptr : Tethys_gDbufScratch + sTethysCel[i].off;
+}
+
+// bt863/bt955: firewall gauges (declared by src/sys_saturn.cxx).
+extern "C" volatile s32 Tethys_gAnimBadBlock = 0; // garbage blocks and compression types skipped
+extern "C" volatile s32 Tethys_gAnimBadFrame = 0; // Get_FrameHeader rejects
+extern "C" volatile s32 Tethys_gAnimBadWhy = 0;   // 1 block, 2 frame index, 3 header, 5 table
+extern "C" volatile u32 Tethys_gAnimBadPtr = 0;   // the last rejected value
+// ao262.11: frame-table offsets refused for lying outside their own block.
+extern "C" u32 Tethys_gAnimOffRej = 0;
+// Defined below (ALIVE_VAR): the zeroed header the firewall hands out.
+extern FrameInfoHeader& sBlankFrameInfoHeader_5440AC;
+
+// bt982: COMPILED frame-table offset -> ACTUAL offset, through the block's own
+// 'TSAT' record at +8 (u32 BE magic, compiled table base, actual table base).
+// No record -> no translation (the 8 uncompacted AE chunks). Idempotent: the
+// converter compacts only when the new payload ends at or below the compiled
+// base (asserted per chunk by tools/ae/check_pack_ae.py), so a translated
+// offset can never satisfy `>= oldBase` and passes through unchanged.
+static s32 Tethys_FixupFrameTable(const u8* pBlock, s32 off)
+{
+    if (!pBlock || (reinterpret_cast<u32>(pBlock) & 3u) || off < 0)
+    {
+        return off;
+    }
+    const u32* pFixup = reinterpret_cast<const u32*>(pBlock + 8);
+    if (pFixup[0] != 0x54534154u) // 'TSAT'
+    {
+        return off;
+    }
+    const u32 oldBase = pFixup[1];
+    const u32 newBase = pFixup[2];
+    if (static_cast<u32>(off) >= oldBase && oldBase >= newBase)
+    {
+        return off - static_cast<s32>(oldBase - newBase);
+    }
+    return off;
+}
+
+// 388.ao.1: the same translation for code that recognises or addresses an
+// animation by its COMPILED offset (RockSack.cpp, MineCar.cpp, Slurg.cpp).
+// One copy of the arithmetic, the block's own record.
+extern "C" s32 Tethys_TranslateFrameTable(u8** ppBlock, s32 compiledOff)
+{
+    if (!ppBlock || !*ppBlock)
+    {
+        return compiledOff;
+    }
+    return Tethys_FixupFrameTable(*ppBlock, compiledOff);
+}
+
+// The inverse, for quicksaves that store a runtime offset (Slurg.cpp): a value
+// at or above the actual base was moved down by (oldBase - newBase); anything
+// below it was never moved. Exact because the translation is a single shift of
+// the table region and the converter keeps every table at or above newBase.
+extern "C" s32 Tethys_UntranslateFrameTable(u8** ppBlock, s32 runtimeOff)
+{
+    if (!ppBlock || !*ppBlock || (reinterpret_cast<u32>(*ppBlock) & 3u) || runtimeOff < 0)
+    {
+        return runtimeOff;
+    }
+    const u32* pFixup = reinterpret_cast<const u32*>(*ppBlock + 8);
+    if (pFixup[0] != 0x54534154u || pFixup[1] < pFixup[2])
+    {
+        return runtimeOff;
+    }
+    if (static_cast<u32>(runtimeOff) >= pFixup[2])
+    {
+        return runtimeOff + static_cast<s32>(pFixup[1] - pFixup[2]);
+    }
+    return runtimeOff;
+}
+#endif // TETHYS_SATURN
+
 // Frame call backs ??
 EXPORT s32 CC Animation_OnFrame_Common_Null_455F40(void*, s16*)
 {
@@ -84,6 +214,16 @@ EXPORT s32 CC Animation_OnFrame_Common_4561B0(void* pObjPtr, s16* pData)
         ypos -= FP_FromInteger(5);
     }
 
+#ifdef TETHYS_SATURN
+    // SATURN: the sneak's dust is made at scale 0 (below), which the PC draws as
+    // nothing; here the one-pixel quad would be decimated to a half-size puff
+    // under the floor line. Not made at all.
+    if (pObj->field_106_current_motion == eAbeMotions::Motion_40_SneakLoop_450550)
+    {
+        return 1;
+    }
+#endif
+
     auto pPartical = ae_new<Particle>();
     if (pPartical)
     {
@@ -98,6 +238,17 @@ EXPORT s32 CC Animation_OnFrame_Common_4561B0(void* pObjPtr, s16* pData)
         {
             pPartical->field_20_animation.field_C_render_layer = Layer::eLayer_Foreground_Half_17;
         }
+#ifdef TETHYS_SATURN
+        // SATURN: one layer under Abe. The PC adds the dust over him; here it is
+        // a VDP2 addition with the background (DUST.BAN promoted to 8 bpp,
+        // tools/ae/ae_rules.py), and a dust texel drawn after Abe would REPLACE
+        // his pixel (one VDP1 word per pixel), so the cloud of a run-stop would
+        // hollow him out. Drawn just before him, his pixels win and the dust
+        // adds to the background around him (Romain, 2026-10-19: the cloud must
+        // never make Abe disappear).
+        pPartical->field_20_animation.field_C_render_layer =
+            static_cast<Layer>(static_cast<s16>(pObj->field_20_animation.field_C_render_layer) - 1);
+#endif
 
         pPartical->field_D0_r = 45;
         pPartical->field_D2_g = 35;
@@ -121,6 +272,13 @@ EXPORT s32 CC Animation_OnFrame_Common_4561B0(void* pObjPtr, s16* pData)
                 pPartical->field_CC_sprite_scale = FP_FromDouble(0.6) * pObj->field_CC_sprite_scale;
                 break;
         }
+#ifdef TETHYS_SATURN
+        // SATURN (Exoddus; Romain, 2026-10-20: "Elle devrait etre devant comme sur
+        // pc, et s'ajouter a Abe"): the puff stays one layer under Abe (above), and
+        // the share of its light that falls on him is laid into his cel by
+        // src/glow_ae.cxx, at the PC's own tint: this reports the puff.
+        Tethys_GlowDustAE(ppAnimData);
+#endif
     }
     return 1;
 }
@@ -277,6 +435,104 @@ static IRenderer::BitDepth AnimFlagsToBitDepth(const BitField32<AnimFlags>& flag
     return IRenderer::BitDepth::e4Bit;
 }
 
+#ifdef TETHYS_SATURN
+// SATURN: the pack ships compression types 0 and 5 only. Type 0 uploads straight
+// from the block; type 5 decodes into the shared scratch through the cel cache.
+// Nothing here allocates, so the frame header cannot move under the decode
+// (AO ao242.17's hazard has no window to open). Anything else is a garbage
+// block or a pack that broke its contract: skip the upload and count it, the
+// previous cel stays on screen.
+//   A frame WIDER than the VRAM rect Init allocated (DRIPIK.BND 804 ships one,
+// 162 px in a 145 px slot; the PC draws such cels from compressed data and
+// never meets the limit) reaches here with vram_rect clamped by DecompressFrame.
+// Its rows are SatTexW(frame width) texels apart while Upload reads
+// SatTexW(slot width): when the two differ the cel is compacted to the slot's
+// stride (cropped on the right, as the clamp means) instead of sheared.
+void Animation::UploadTexture(const FrameHeader* pFrameHeader, const PSX_RECT& vram_rect, s16 width_bpp_adjusted)
+{
+    IRenderer& renderer = *IRenderer::GetRenderer();
+    const CompressionType ct = pFrameHeader->field_7_compression_type;
+    const u8* pPixels = reinterpret_cast<const u8*>(&pFrameHeader->field_8_width2);
+    u32 fromRow = 0; // bytes per decoded row, then per uploaded row (pack contract)
+    u32 toRow = 0;
+    if (width_bpp_adjusted > vram_rect.w)
+    {
+        const s32 shift = field_4_flags.Get(AnimFlags::eBit13_Is8Bit) ? 1 : 2; // halfwords -> PSX pixels
+        const s32 bppShift = field_4_flags.Get(AnimFlags::eBit13_Is8Bit) ? 0 : 1; // texels -> bytes
+        fromRow = static_cast<u32>(((((width_bpp_adjusted << shift) + 1) / 2 + 7) & ~7) >> bppShift);
+        toRow = static_cast<u32>(((((vram_rect.w << shift) + 1) / 2 + 7) & ~7) >> bppShift);
+    }
+    const bool bWider = fromRow != toRow;
+    if (ct == CompressionType::eType_4_RLE || ct == CompressionType::eType_5_RLE)
+    {
+        const u32 destLen = *reinterpret_cast<const u32*>(pPixels);
+        if (Tethys_gDbufScratch == nullptr || destLen > Tethys_gDbufScratchBytes)
+        {
+            Tethys_gDbufFall++; // 'fb': no AE frame is this big (13,000 B max), measured
+            return;
+        }
+        u8* pDst = Tethys_gDbufScratch;
+        long celOff = bWider ? -1 : TethysCelFind(pPixels, destLen);
+        if (celOff >= 0)
+        {
+            Tethys_gDbufMemoHits++;
+        }
+        else
+        {
+            // A re-strided cel is private to its slot width: never cached.
+            celOff = bWider ? -1 : TethysCelAlloc(pPixels, destLen);
+            if (celOff < 0)
+            {
+                TethysCelEvictLow(destLen); // decodes at offset 0, drops what it overwrites
+                celOff = 0;
+            }
+            const u32 t0 = TETHYS_PT();
+            CompressionType_4Or5_Decompress_4ABAB0(pPixels, pDst + celOff);
+            const u32 kPar = Tethys_gInAnimate ? 0u : 1u;
+            Tethys_gDbufRaw[kPar] += TETHYS_PT() - t0;
+            Tethys_gDbufBytes[kPar] += destLen;
+        }
+        pPixels = pDst + celOff;
+    }
+    else if (ct != CompressionType::eType_0_NoCompression)
+    {
+        Tethys_gAnimBadBlock++;
+        return;
+    }
+    // SATURN (Exoddus, AO 387.ao.1's route 3): the additive light that falls on
+    // Abe (the chant's orbs, his dust), laid into the cel before the upload, the
+    // one point where it exists as writable indices (src/glow_ae.cxx). Everywhere
+    // else this costs one load and a branch. The composite answers what to
+    // upload: this cel untouched, or its lit copy (a cache entry is never
+    // written, so nothing is forgotten).
+    if (Tethys_gGlowOn && !bWider && field_4_flags.Get(AnimFlags::eBit13_Is8Bit))
+    {
+        pPixels = Tethys_GlowCompositeAE(this, pPixels, pFrameHeader->field_4_width, pFrameHeader->field_5_height);
+    }
+    if (bWider)
+    {
+        // Compact the rows into the scratch at offset 0 (in place for a decoded
+        // cel: every row moves down, never over a row still to be read).
+        if (Tethys_gDbufScratch == nullptr || fromRow * static_cast<u32>(vram_rect.h) > Tethys_gDbufScratchBytes
+            || field_4_flags.Get(AnimFlags::eBit14_Is16Bit))
+        {
+            Tethys_gDbufFall++;
+            return;
+        }
+        if (pPixels != Tethys_gDbufScratch)
+        {
+            TethysCelEvictLow(fromRow * static_cast<u32>(vram_rect.h));
+        }
+        u8* const pOut = Tethys_gDbufScratch;
+        for (s32 row = 0; row < vram_rect.h; row++)
+        {
+            memmove(pOut + static_cast<u32>(row) * toRow, pPixels + static_cast<u32>(row) * fromRow, toRow);
+        }
+        pPixels = pOut;
+    }
+    renderer.Upload(AnimFlagsToBitDepth(field_4_flags), vram_rect, pPixels);
+}
+#else
 void Animation::UploadTexture(const FrameHeader* pFrameHeader, const PSX_RECT& vram_rect, s16 width_bpp_adjusted)
 {
     IRenderer& renderer = *IRenderer::GetRenderer();
@@ -348,6 +604,7 @@ void Animation::UploadTexture(const FrameHeader* pFrameHeader, const PSX_RECT& v
             break;
     }
 }
+#endif // TETHYS_SATURN
 
 bool Animation::EnsureDecompressionBuffer()
 {
@@ -366,6 +623,12 @@ void Animation::DecompressFrame()
     }
 
     const FrameInfoHeader* pFrameInfo = Get_FrameHeader_40B730(-1); // -1 = use current frame
+#ifdef TETHYS_SATURN
+    if (pFrameInfo == &sBlankFrameInfoHeader_5440AC)
+    {
+        return; // bt955: the firewall refused this frame, there is nothing to decode
+    }
+#endif
     if (pFrameInfo->field_6_count > 0)
     {
         Invoke_CallBacks_40B7A0();
@@ -610,6 +873,9 @@ void Animation::vCleanUp_40C630()
     gObjList_animations_5C1A24->Remove_Item(this);
     Animation_Pal_Free_40C4C0();
     ResourceManager::FreeResource_49C330(field_24_dbuf);
+#ifdef TETHYS_SATURN
+    field_24_dbuf = nullptr; // bt958: a freed handle is never reused (the dtor may vCleanUp again)
+#endif
 }
 
 void Animation::vDecode2_40B200()
@@ -638,6 +904,16 @@ bool Animation::DecodeCommon()
     {
         return false;
     }
+#ifdef TETHYS_SATURN
+    // bt863: a garbage block pointer would reach the callback dispatch (a wild
+    // jump) and the upload: skip the decode and count it.
+    if (!Tethys_BlockPtrSane(*field_20_ppBlock))
+    {
+        Tethys_gAnimBadBlock++;
+        return false;
+    }
+    TethysCelLatchVptr(this); // 445.ao.1: the prefetch walk's type test
+#endif
 
     AnimationHeader* pAnimHeader = reinterpret_cast<AnimationHeader*>(&(*field_20_ppBlock)[field_18_frame_table_offset]);
     if (pAnimHeader->field_2_num_frames == 1 && field_4_flags.Get(AnimFlags::eBit12_ForwardLoopCompleted))
@@ -760,6 +1036,22 @@ s16 Animation::Set_Animation_Data_409C80(s32 frameTableOffset, u8** pAnimRes)
         return 0;
     }
 
+#ifdef TETHYS_SATURN
+    // bt982: the compiled offset becomes the block's actual one (idempotent, so
+    // callers that feed field_18 back in are unchanged).
+    frameTableOffset = Tethys_FixupFrameTable(*field_20_ppBlock, frameTableOffset);
+    // ao262.11: a null pAnimRes keeps the PREVIOUS block, so a caller whose
+    // resource is gone applies a new table offset to the old block: refuse an
+    // offset that lies outside the block (0 = not a live Animation block, pass).
+    {
+        const u32 blockBytes = Tethys_AnimBlockBytes(field_20_ppBlock);
+        if (blockBytes != 0 && static_cast<u32>(frameTableOffset) + sizeof(AnimationHeader) > blockBytes)
+        {
+            Tethys_gAnimOffRej++;
+            return 0;
+        }
+    }
+#endif
     field_18_frame_table_offset = frameTableOffset;
 
     AnimationHeader* pAnimationHeader = reinterpret_cast<AnimationHeader*>(&(*field_20_ppBlock)[field_18_frame_table_offset]);
@@ -800,12 +1092,18 @@ void Animation::Animation_Pal_Free_40C4C0()
             if (field_84_vram_rect.x || field_84_vram_rect.y || field_4_flags.Get(AnimFlags::eBit9))
             {
                 Vram_free_495A60({field_84_vram_rect.x, field_84_vram_rect.y}, {field_84_vram_rect.w, field_84_vram_rect.h});
+#ifdef TETHYS_SATURN
+                field_84_vram_rect.w = 0; // idempotent: a failed Init and the dtor both come here
+#endif
             }
         }
 
         if (field_90_pal_depth > 0 && field_4_flags.Get(AnimFlags::eBit17_bOwnPal))
         {
             IRenderer::GetRenderer()->PalFree(IRenderer::PalRecord{field_8C_pal_vram_xy.field_0_x, field_8C_pal_vram_xy.field_2_y, field_90_pal_depth});
+#ifdef TETHYS_SATURN
+            field_90_pal_depth = 0; // idempotent: a second PalFree would release a home another anim owns
+#endif
         }
     }
 }
@@ -833,12 +1131,35 @@ void Animation::SetFrame_409D50(s16 newFrame)
 
 ALIVE_VAR(1, 0x5440AC, FrameInfoHeader, sBlankFrameInfoHeader_5440AC, {});
 
+#ifdef TETHYS_SATURN
+// bt955: ONE out-of-line reject path for the firewall checks below.
+__attribute__((noinline)) static FrameInfoHeader* Tethys_AnimReject(s32 why, u32 detail)
+{
+    Tethys_gAnimBadFrame++;
+    Tethys_gAnimBadWhy = why;
+    Tethys_gAnimBadPtr = detail;
+    return &sBlankFrameInfoHeader_5440AC;
+}
+#endif
+
 FrameInfoHeader* Animation::Get_FrameHeader_40B730(s16 frame)
 {
+#ifdef TETHYS_SATURN
+    // bt955: the update/culling-path twin of the decode firewall. On Saturn every
+    // failure yields the ZEROED blank header, never nullptr: most callers do not
+    // test for null, and a null read here returns boot-ROM bytes instead of a
+    // fault. A blank header degrades to a zero-size rect at the object's own
+    // position for one frame.
+    if (!field_20_ppBlock || !*field_20_ppBlock || !Tethys_BlockPtrSane(*field_20_ppBlock))
+    {
+        return Tethys_AnimReject(1, field_20_ppBlock ? reinterpret_cast<u32>(*field_20_ppBlock) : 0u);
+    }
+#else
     if (!field_20_ppBlock)
     {
         return nullptr;
     }
+#endif
 
     if (frame < -1 || frame == -1)
     {
@@ -846,9 +1167,27 @@ FrameInfoHeader* Animation::Get_FrameHeader_40B730(s16 frame)
     }
 
     AnimationHeader* pHead = reinterpret_cast<AnimationHeader*>(*field_20_ppBlock + field_18_frame_table_offset); // TODO: Make getting offset to animation header cleaner
+#ifdef TETHYS_SATURN
+    // A wild table offset or frame index reads arbitrary bytes as offsets: SH-2
+    // raises an address error on a misaligned load, so check before reading.
+    if ((reinterpret_cast<u32>(pHead) & 3) || !Tethys_BlockPtrSane(reinterpret_cast<const u8*>(pHead)))
+    {
+        return Tethys_AnimReject(5, reinterpret_cast<u32>(pHead));
+    }
+    if (frame < 0 || pHead->field_2_num_frames <= 0 || frame >= pHead->field_2_num_frames)
+    {
+        return Tethys_AnimReject(2, static_cast<u32>(frame));
+    }
+#endif
     u32 frameOffset = pHead->mFrameOffsets[frame];
 
     FrameInfoHeader* pFrame = reinterpret_cast<FrameInfoHeader*>(*field_20_ppBlock + frameOffset);
+#ifdef TETHYS_SATURN
+    if ((reinterpret_cast<u32>(pFrame) & 3) || !Tethys_BlockPtrSane(reinterpret_cast<const u8*>(pFrame)))
+    {
+        return Tethys_AnimReject(3, reinterpret_cast<u32>(pFrame));
+    }
+#endif
 
     // Never seen this get hit, perhaps some sort of PSX specific check as addresses have to be aligned there?
     // TODO: Remove it in the future when proven to be not required?
@@ -911,6 +1250,19 @@ s16 Animation::Init_40A030(s32 frameTableOffset, DynamicArray* /*animList*/, Bas
         return 0;
     }
 
+#ifdef TETHYS_SATURN
+    // bt982: translate after the null check (it needs the block) and store again,
+    // field_18 was written from the compiled value above. A block that is gone or
+    // insane is refused here rather than walked.
+    if (!*ppAnimData || !Tethys_BlockPtrSane(*ppAnimData))
+    {
+        Tethys_gAnimBadBlock++;
+        return 0;
+    }
+    frameTableOffset = Tethys_FixupFrameTable(*ppAnimData, frameTableOffset);
+    field_18_frame_table_offset = frameTableOffset;
+#endif
+
     field_94_pGameObj = pGameObj;
     AnimationHeader* pHeader = reinterpret_cast<AnimationHeader*>(&(*ppAnimData)[frameTableOffset]);
 
@@ -944,7 +1296,13 @@ s16 Animation::Init_40A030(s32 frameTableOffset, DynamicArray* /*animList*/, Bas
     field_4_flags.Clear(AnimFlags::eBit22_DeadMode);
 
     // TODO: Refactor
+#ifdef TETHYS_SATURN
+    // The Saturn pack's 'TSAT' compaction record lives exactly here (D-A1):
+    // only a non-zero word that is not the record is the dead-mode data.
+    if (*((u32*) *ppAnimData + 2) != 0 && *((u32*) *ppAnimData + 2) != 0x54534154u)
+#else
     if (*((u32*) *ppAnimData + 2) != 0)
+#endif
     {
         // Never in any source data ?
         field_4_flags.Set(AnimFlags::eBit22_DeadMode);
@@ -977,8 +1335,17 @@ s16 Animation::Init_40A030(s32 frameTableOffset, DynamicArray* /*animList*/, Bas
 
     u8* pClut = &pAnimData[pFrameHeader_1->field_0_clut_offset];
 
+#ifdef TETHYS_SATURN
+    if (pFrameInfoHeader == &sBlankFrameInfoHeader_5440AC)
+    {
+        return 0; // bt955: frame 0 refused by the firewall, nothing to size a rect on
+    }
+#endif
     if (!Vram_alloc_4956C0(maxW, maxH, pFrameHeader_1->field_6_colour_depth, &field_84_vram_rect))
     {
+#ifdef TETHYS_SATURN
+        Tethys_gVramFail++; // ao262.10: the object dies silently; `vf` says why
+#endif
         return 0;
     }
 
@@ -1027,12 +1394,21 @@ s16 Animation::Init_40A030(s32 frameTableOffset, DynamicArray* /*animList*/, Bas
     }
 
     field_4_flags.Set(AnimFlags::eBit25_bDecompressDone, b256Pal);
+#ifdef TETHYS_SATURN
+    // D-A1: every Saturn frame is uploaded to VRAM (types 0 and 5 only); without
+    // the bit vRender_40B820 frees the rect at the first render, as the PC does
+    // for the 16- and 64-colour cels it draws from compressed data.
+    field_4_flags.Set(AnimFlags::eBit25_bDecompressDone);
+#endif
 
     if (field_4_flags.Get(AnimFlags::eBit17_bOwnPal) && !field_4_flags.Get(AnimFlags::eBit24))
     {
         IRenderer::PalRecord palRec{0, 0, pal_depth};
         if (!IRenderer::GetRenderer()->PalAlloc(palRec))
         {
+#ifdef TETHYS_SATURN
+            Tethys_gPalFail++; // ao262.10: `pf`
+#endif
             Animation_Pal_Free_40C4C0();
             return 0;
         }
@@ -1051,6 +1427,9 @@ s16 Animation::Init_40A030(s32 frameTableOffset, DynamicArray* /*animList*/, Bas
     // NOTE: OG bug or odd compiler code gen? Why isn't it using the passed in list which appears to always be this anyway ??
     if (!gObjList_animations_5C1A24->Push_Back(this))
     {
+#ifdef TETHYS_SATURN
+        Animation_Pal_Free_40C4C0(); // bt1044: give back the rect and the palette this call took
+#endif
         return 0;
     }
 

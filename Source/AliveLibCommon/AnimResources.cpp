@@ -1867,7 +1867,253 @@ constexpr CombinedAnimRecord kAnimRecords[] = {
     ////////////////////////////////////////////////////////////////////////////////////////////////////
 };
 
-#if defined(TETHYS_SATURN) && !TETHYS_AE_TABLES
+#if defined(TETHYS_SATURN) && defined(TETHYS_GAME_AE)
+// SATURN (L4, decision D-B4): THE EXODDUS IMAGE KEEPS EXODDUS' COLUMN, the
+// mirror image of AO's 450.ao.1 fold below (read its banner for the method).
+//
+// kAnimRecords and kBgAnimRecords carry an Oddysee column beside Exoddus'; the
+// AE build reads only Exoddus', so the tables below are folded at compile time
+// out of the combined ones: the combined tables are only ever read by the
+// compiler and do not reach the image (about 43 KB of HWRAM .rodata linked
+// whole, against about 16.7 KB folded).
+//
+// Every lookup answers exactly as the combined tables did, for every id:
+//   * a row with an AE column returns it (first match, original order);
+//   * an Oddysee-only row returned its EMPTY AE column, the null record, and
+//     still does: one bit per AnimId says what the combined table holds, and
+//     the dropped background ids are kept as a list (444 B, U1b decision D3);
+//   * an id the combined table does not hold still ends in ALIVE_FATAL.
+// A row is dropped only if its AE column is the null record field by field,
+// and a static_assert stops the build if an id is ever held twice. The
+// Oddysee lookups AO::AnimRec/BgAnimRec/PalRec are NOT defined in this build:
+// a caller that wants the AO column fails to link instead of reading AE's.
+namespace {
+
+struct TethysAeAnimRow final
+{
+    AnimId mId;
+    AnimDetails mData;
+};
+
+struct TethysAeBgAnimRow final
+{
+    s32 mBgAnimId;
+    BgAnimDetails mData;
+};
+
+template <typename Row, u32 N>
+struct TethysAeRows final
+{
+    Row mRows[N];
+};
+
+constexpr bool TethysAeIsNull(const AnimDetails& d)
+{
+    return d.mBanName == nullptr &&
+           d.mFrameTableOffset == kNullAnimDetails.mFrameTableOffset &&
+           d.mMaxW == kNullAnimDetails.mMaxW &&
+           d.mMaxH == kNullAnimDetails.mMaxH &&
+           d.mResourceId == kNullAnimDetails.mResourceId &&
+           d.mPalOverride == kNullAnimDetails.mPalOverride;
+}
+
+constexpr bool TethysAeIsNull(const BgAnimDetails& d)
+{
+    return d.mBanName == nullptr &&
+           d.mFrameTableOffset == kNullBgAnimDetails.mFrameTableOffset &&
+           d.mMaxW == kNullBgAnimDetails.mMaxW &&
+           d.mMaxH == kNullBgAnimDetails.mMaxH;
+}
+
+constexpr bool TethysAeKeeps(const CombinedAnimRecord& rec)
+{
+    return !TethysAeIsNull(rec.mAEData) || rec.mId == AnimId::None;
+}
+
+constexpr bool TethysAeKeeps(const CombinedBgAnimRecord& rec)
+{
+    return !TethysAeIsNull(rec.mAEData) || rec.mBgAnimId == AOBgAnimID::BG_None;
+}
+
+template <typename Combined, u32 N>
+constexpr u32 TethysAeCount(const Combined (&table)[N])
+{
+    u32 count = 0;
+    for (const Combined& rec : table)
+    {
+        count += TethysAeKeeps(rec) ? 1u : 0u;
+    }
+    return count;
+}
+
+constexpr u32 kTethysAeAnimCount = TethysAeCount(kAnimRecords);
+constexpr u32 kTethysAeBgAnimCount = TethysAeCount(kBgAnimRecords);
+constexpr u32 kTethysAeBgAnimDropped = static_cast<u32>(sizeof(kBgAnimRecords) / sizeof(kBgAnimRecords[0])) - kTethysAeBgAnimCount;
+
+constexpr TethysAeRows<TethysAeAnimRow, kTethysAeAnimCount> TethysAeFoldAnims()
+{
+    TethysAeRows<TethysAeAnimRow, kTethysAeAnimCount> out = {};
+    u32 i = 0;
+    for (const CombinedAnimRecord& rec : kAnimRecords)
+    {
+        if (TethysAeKeeps(rec))
+        {
+            out.mRows[i].mId = rec.mId;
+            out.mRows[i].mData = rec.mAEData;
+            i++;
+        }
+    }
+    return out;
+}
+
+constexpr TethysAeRows<TethysAeBgAnimRow, kTethysAeBgAnimCount> TethysAeFoldBgAnims()
+{
+    TethysAeRows<TethysAeBgAnimRow, kTethysAeBgAnimCount> out = {};
+    u32 i = 0;
+    for (const CombinedBgAnimRecord& rec : kBgAnimRecords)
+    {
+        if (TethysAeKeeps(rec))
+        {
+            out.mRows[i].mBgAnimId = rec.mBgAnimId;
+            out.mRows[i].mData = rec.mAEData;
+            i++;
+        }
+    }
+    return out;
+}
+
+// The ids of the background rows the fold dropped (the Oddysee ones): a
+// lookup of one of them got the null record, not the fatal.
+constexpr TethysAeRows<s32, (kTethysAeBgAnimDropped ? kTethysAeBgAnimDropped : 1u)> TethysAeFoldBgDropped()
+{
+    TethysAeRows<s32, (kTethysAeBgAnimDropped ? kTethysAeBgAnimDropped : 1u)> out = {};
+    u32 i = 0;
+    for (const CombinedBgAnimRecord& rec : kBgAnimRecords)
+    {
+        if (!TethysAeKeeps(rec))
+        {
+            out.mRows[i++] = rec.mBgAnimId;
+        }
+    }
+    return out;
+}
+
+// AnimId is dense from None = 0 to Anim_Tester: one bit each.
+constexpr u32 kTethysAeAnimIdCount = static_cast<u32>(AnimId::Anim_Tester) + 1u;
+
+struct TethysAeAnimIdBits final
+{
+    u8 mBits[(kTethysAeAnimIdCount + 7u) / 8u];
+};
+
+constexpr TethysAeAnimIdBits TethysAeFoldKnownIds()
+{
+    TethysAeAnimIdBits out = {};
+    for (const CombinedAnimRecord& rec : kAnimRecords)
+    {
+        const u32 id = static_cast<u32>(rec.mId);
+        out.mBits[id >> 3] = static_cast<u8>(out.mBits[id >> 3] | (1u << (id & 7u)));
+    }
+    return out;
+}
+
+// First-match equivalence holds only while no id is held twice.
+constexpr bool TethysAeAnimIdsUnique()
+{
+    TethysAeAnimIdBits seen = {};
+    for (const CombinedAnimRecord& rec : kAnimRecords)
+    {
+        const u32 id = static_cast<u32>(rec.mId);
+        const u32 bit = 1u << (id & 7u);
+        if (seen.mBits[id >> 3] & bit)
+        {
+            return false;
+        }
+        seen.mBits[id >> 3] = static_cast<u8>(seen.mBits[id >> 3] | bit);
+    }
+    return true;
+}
+
+constexpr bool TethysAeBgAnimIdsUnique()
+{
+    constexpr u32 kCount = static_cast<u32>(sizeof(kBgAnimRecords) / sizeof(kBgAnimRecords[0]));
+    for (u32 i = 0; i < kCount; i++)
+    {
+        for (u32 j = i + 1; j < kCount; j++)
+        {
+            if (kBgAnimRecords[i].mBgAnimId == kBgAnimRecords[j].mBgAnimId)
+            {
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
+static_assert(TethysAeAnimIdsUnique(), "SATURN L4: an AnimId appears twice in kAnimRecords, the AE fold would answer differently");
+static_assert(TethysAeBgAnimIdsUnique(), "SATURN L4: a background id appears twice in kBgAnimRecords, the AE fold would answer differently");
+
+constexpr auto kTethysAeAnims = TethysAeFoldAnims();
+constexpr auto kTethysAeBgAnims = TethysAeFoldBgAnims();
+constexpr auto kTethysAeBgDropped = TethysAeFoldBgDropped();
+constexpr TethysAeAnimIdBits kTethysAeAnimIdKnown = TethysAeFoldKnownIds();
+
+} // namespace
+
+// The checks only LOG (compiled out on Saturn); kept faithful over the folded
+// rows, the upstream walk minus the Oddysee column.
+void FrameTableOffsetExists(int frameTableOffset, bool isAe, int maxW, int maxH)
+{
+    if (!isAe)
+    {
+        return; // SATURN: no Oddysee column in this build, nothing to check against
+    }
+
+    for (const TethysAeBgAnimRow& entry : kTethysAeBgAnims.mRows)
+    {
+        if (entry.mData.mFrameTableOffset == frameTableOffset &&
+            entry.mData.mMaxW == maxW &&
+            entry.mData.mMaxH == maxH)
+        {
+            return;
+        }
+    }
+
+    for (const TethysAeAnimRow& entry : kTethysAeAnims.mRows)
+    {
+        if (entry.mData.mFrameTableOffset == frameTableOffset &&
+            entry.mData.mMaxW == maxW &&
+            entry.mData.mMaxH == maxH)
+        {
+            return;
+        }
+
+        // special handling for some weird OG behavior (see Explosion.cpp line 184)
+        if (entry.mId == AnimId::Explosion_Small)
+        {
+            return;
+        }
+    }
+    LOG_INFO("couldn't find AnimId for framtableoffset: " << frameTableOffset << " maxW " << maxW << " maxH " << maxH);
+}
+
+void FrameTableOffsetExists(int frameTableOffset, bool isAe)
+{
+    if (!isAe)
+    {
+        return; // SATURN: no Oddysee column in this build, nothing to check against
+    }
+
+    for (const TethysAeAnimRow& entry : kTethysAeAnims.mRows)
+    {
+        if (entry.mData.mFrameTableOffset == frameTableOffset)
+        {
+            return;
+        }
+    }
+    LOG_INFO("couldn't find AnimId for framtableoffset: " << frameTableOffset);
+}
+#elif defined(TETHYS_SATURN) && !TETHYS_AE_TABLES
 // SATURN 450.ao.1: THE AO IMAGE KEEPS AO'S COLUMN OF THE TWO SHARED TABLES.
 //
 // kAnimRecords and kBgAnimRecords are RELIVE's COMBINED tables: every row
@@ -2215,7 +2461,57 @@ const PalRecord PalRec(PalId toFind)
     return PalRec(true, toFind);
 }
 
-#if defined(TETHYS_SATURN) && !TETHYS_AE_TABLES
+#if defined(TETHYS_SATURN) && defined(TETHYS_GAME_AE)
+// SATURN (L4): Exoddus' lookups over the folded tables (see above).
+static const BgAnimRecord BgAnimRec(bool /*isAe*/, s32 toFind)
+{
+    for (const TethysAeBgAnimRow& anim : kTethysAeBgAnims.mRows)
+    {
+        if (anim.mBgAnimId == toFind)
+        {
+            return BgAnimRecord{ anim.mBgAnimId, anim.mData.mBanName, anim.mData.mFrameTableOffset, anim.mData.mMaxW, anim.mData.mMaxH };
+        }
+    }
+    for (u32 i = 0; i < kTethysAeBgAnimDropped; i++)
+    {
+        if (kTethysAeBgDropped.mRows[i] == toFind)
+        {
+            return BgAnimRecord{ toFind, kNullBgAnimDetails.mBanName, kNullBgAnimDetails.mFrameTableOffset, kNullBgAnimDetails.mMaxW, kNullBgAnimDetails.mMaxH };
+        }
+    }
+    LOG_ERROR("couldn't find bg anim id " << toFind);
+    ALIVE_FATAL("missing background animation entry for anim id");
+}
+
+const BgAnimRecord BgAnimRec(s32 toFind)
+{
+    return BgAnimRec(true, toFind);
+}
+
+static const AnimRecord AnimRec(bool /*isAe*/, AnimId toFind)
+{
+    for (const TethysAeAnimRow& anim : kTethysAeAnims.mRows)
+    {
+        if (anim.mId == toFind)
+        {
+            const AnimDetails& data = anim.mData;
+            return AnimRecord{ anim.mId, data.mBanName, data.mFrameTableOffset, data.mMaxW, data.mMaxH, data.mResourceId, data.mPalOverride };
+        }
+    }
+    const u32 id = static_cast<u32>(toFind);
+    if (id < kTethysAeAnimIdCount && ((kTethysAeAnimIdKnown.mBits[id >> 3] >> (id & 7u)) & 1u))
+    {
+        const AnimDetails& data = kNullAnimDetails;
+        return AnimRecord{ toFind, data.mBanName, data.mFrameTableOffset, data.mMaxW, data.mMaxH, data.mResourceId, data.mPalOverride };
+    }
+    ALIVE_FATAL("Missing animation entry");
+}
+
+const AnimRecord AnimRec(AnimId toFind)
+{
+    return AnimRec(true, toFind);
+}
+#elif defined(TETHYS_SATURN) && !TETHYS_AE_TABLES
 // SATURN 450.ao.1: AO's lookups over the folded tables (see above). isAe is
 // always false here: the Exoddus wrappers that pass true are not compiled.
 static const BgAnimRecord BgAnimRec(bool /*isAe*/, s32 toFind)
@@ -2296,6 +2592,7 @@ const AnimRecord AnimRec(AnimId toFind)
 
 #endif
 
+#if !defined(TETHYS_GAME_AE) // SATURN (L4): no Oddysee column in the Exoddus image
 namespace AO
 {
     const PalRecord PalRec(PalId toFind)
@@ -2313,3 +2610,4 @@ namespace AO
         return ::BgAnimRec(false, toFind);
     }
 }
+#endif

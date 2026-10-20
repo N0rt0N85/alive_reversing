@@ -63,7 +63,14 @@ struct SaveFileRec final
 };
 ALIVE_ASSERT_SIZEOF(SaveFileRec, 0x24);
 
+#ifdef TETHYS_SATURN
+// SATURN (U1c T04, AO 450.ao.1 twin): the load lists show the four backup-RAM
+// slots of one device (src/save_saturn.cxx), not a PC folder: 4 records, not
+// 128 (-4,464 B of .bss). Every writer is bounded by ALIVE_COUNTOF.
+ALIVE_ARY_EXTERN(SaveFileRec, 4, sSaveFileRecords_BB31D8);
+#else
 ALIVE_ARY_EXTERN(SaveFileRec, 128, sSaveFileRecords_BB31D8);
+#endif
 ALIVE_VAR_EXTERN(Quicksave, sActiveQuicksaveData_BAF7F8);
 ALIVE_VAR_EXTERN(s32, sAccumulatedObjectCount_5C1BF4);
 ALIVE_VAR_EXTERN(s32, sSavedGameToLoadIdx_BB43FC);
@@ -78,3 +85,29 @@ EXPORT void CC Quicksave_FindSaves_4D4150();
 void QuikSave_RestoreBlyData_D481890_4C9BE0(const u8* pSaveData);
 EXPORT void CC Quicksave_SaveSwitchResetterStates_4C9870();
 EXPORT void CC Quicksave_RestoreSwitchResetterStates_4C9A30();
+
+#ifdef TETHYS_SATURN
+// SATURN (U1c T07/T08/T10, decision D-T2): the PC's save files are backup-RAM
+// slots (src/save_saturn.cxx). Write: sActiveQuicksaveData from 0x200 (its
+// zero tail trimmed) into the slot requested with Tethys_SaveSlotRequest,
+// titled pTitle (the camera code). Read: slot `slot` into sActiveQuicksaveData,
+// only once its checksum holds (the PSX header and the tail zeroed). Both
+// return false on any failure, the read leaving the quicksave untouched.
+bool Quicksave_WriteSlot_Saturn(const char_type* pTitle);
+bool Quicksave_ReadSlot_Saturn(s32 slot);
+
+// SATURN (decision D-T3): THE SHIPPED QUICKSAVE RECORDS, ATTRnnnn.SAV (attract
+// demos) and NXTPnnnn.SAV (the path-skip cheat), are big-endian on the disc
+// (tools/ae/ae_save_schema.py), but each TLV id inside them follows the
+// TlvItemInfoUnion layout they were converted against. Stream R1 reordered the
+// union for the Saturn (Factory.hpp, so .all keeps the PC's value) AFTER the
+// packs were converted with the old "parts" rule: played now, those records
+// would bind objects to the wrong TLVs. 0 = the demos and the path skip stay
+// off (the menu never times out into a demo, the demo page and the cheat do
+// nothing). Set 1 once ae_save_schema.py --generate gives the "numeric" rule
+// and cd/data_ae is reconverted (requests.md, R1 -> lead and R3 -> lead).
+// Done 2026-10-18: the schema gives "numeric" (--check and --selftest OK), the
+// 11 packs were reconverted (9 changed: only their SAV records, the one
+// converter input that moved) and check_pack_ae reads them back with 0 findings.
+#define TETHYS_AE_SAV_RECORDS_CURRENT 1
+#endif

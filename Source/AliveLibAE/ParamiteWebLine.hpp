@@ -57,5 +57,9 @@ private:
     s16 field_1A6_padding;
     s16 field_1A8_padding;
     s16 field_1AA_padding;
+#ifdef TETHYS_SATURN
+    // SATURN (U1d T22): the segments' resource block (they left the HWRAM pool).
+    u8** field_1AC_tethys_ppSegments;
+#endif
 };
 ALIVE_ASSERT_SIZEOF(ParamiteWebLine, 0x1AC);

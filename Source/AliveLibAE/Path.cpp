@@ -9,6 +9,23 @@
 
 ALIVE_VAR(1, 0xbb47c0, Path*, sPath_dword_BB47C0, nullptr);
 
+#ifdef TETHYS_SATURN
+extern "C" volatile u32 Tethys_gTlvGuard;    // AE ResourceManager.cpp, `tg` (454.ao.1)
+extern "C" volatile s32 Tethys_gLastTlvType; // src/sys_saturn.cxx, the boot forensics
+
+// SATURN (AO 454.ao.1 twin, U1a A10): a TLV offset Loader may dereference:
+// 4-aligned (the walk reads 32-bit fields in place) and wholly inside the
+// object block, which the converter fills exactly up to the index table
+// (tools/ae/ae_path_convert.py proves the tiling on all 117 paths). It refuses
+// only a walk gone wrong, counted (`tg`), instead of an address error.
+static bool Tethys_TlvOffsetOk(const PathData* pPathData, s32 tlvOffset)
+{
+    return tlvOffset >= 0 && !(tlvOffset & 3)
+        && pPathData->field_12_object_offset + static_cast<u32>(tlvOffset) + static_cast<u32>(sizeof(Path_TLV))
+               <= pPathData->field_16_object_indextable_offset;
+}
+#endif
+
 void Path::ctor_4DB170()
 {
     field_C_pPathData = nullptr;
@@ -64,6 +81,13 @@ void Path::Loader_4DB800(s16 xpos, s16 ypos, LoadMode loadMode, TlvTypes typeToL
         // -1 means there are no objects for the given camera
         return;
     }
+#ifdef TETHYS_SATURN
+    if (!Tethys_TlvOffsetOk(field_C_pPathData, objectTableIdx))
+    {
+        Tethys_gTlvGuard++;
+        return;
+    }
+#endif
 
     u8* ptr = &(*field_10_ppRes)[field_C_pPathData->field_12_object_offset + objectTableIdx];
     Path_TLV* pPathTLV = reinterpret_cast<Path_TLV*>(ptr);
@@ -84,8 +108,11 @@ void Path::Loader_4DB800(s16 xpos, s16 ypos, LoadMode loadMode, TlvTypes typeToL
                 data.parts.levelId = static_cast<u8>(field_0_levelId);
                 data.parts.pathId = static_cast<u8>(field_2_pathId);
 
+#ifdef TETHYS_SATURN
+                Tethys_gLastTlvType = static_cast<s32>(pPathTLV->field_4_type.mType); // which factory was live at a fatal
+#endif
                 // Call the factory to construct the item
-                field_C_pPathData->field_1E_object_funcs.object_funcs[static_cast<s32>(pPathTLV->field_4_type.mType)](pPathTLV, this, data, loadMode);
+                field_C_pPathData->field_1E_object_funcs->object_funcs[static_cast<s32>(pPathTLV->field_4_type.mType)](pPathTLV, this, data, loadMode); // SATURN: field_1E is a pointer now (PathData.hpp)
             }
         }
 
@@ -96,6 +123,13 @@ void Path::Loader_4DB800(s16 xpos, s16 ypos, LoadMode loadMode, TlvTypes typeToL
         }
 
         objectTableIdx += pPathTLV->field_2_length;
+#ifdef TETHYS_SATURN
+        if (!Tethys_TlvOffsetOk(field_C_pPathData, objectTableIdx))
+        {
+            Tethys_gTlvGuard++;
+            break;
+        }
+#endif
         pPathTLV = Next_TLV_4DB6A0(pPathTLV);
     }
 }

@@ -3,6 +3,9 @@
 #include "Function.hpp"
 #include "Map.hpp"
 #include "Sound/Midi.hpp"
+#ifdef TETHYS_SATURN
+#include "Sound/Sound.hpp" // SATURN (U1d T14): SND_Restart_4CB0E0
+#endif
 #include "Sfx.hpp"
 #include "DebugHelpers.hpp"
 #include "stdlib.hpp"
@@ -2252,6 +2255,10 @@ s16 Abe::vTakeDamage_44BB50(BaseGameObject* pFrom)
             field_D0_r = 30;
 
             auto pGibs = ae_new<Gibs>();
+            // SATURN (U1d T1): null-tested like the 21 other Gibs sites, so Gibs
+            // can take the soft OOM policy (a full pool = no debris, not a crash).
+            if (pGibs)
+            {
             pGibs->ctor_40FB40(
                 GibType::Abe_0,
                 field_B8_xpos,
@@ -2260,9 +2267,12 @@ s16 Abe::vTakeDamage_44BB50(BaseGameObject* pFrom)
                 FP_FromInteger(0),
                 field_CC_sprite_scale,
                 0);
+            }
 
             // Note Check on word_5CC88C <= 3846 appeared always true, removed.
             auto pMoreGibs = ae_new<Gibs>();
+            if (pMoreGibs) // SATURN (U1d T1): see above
+            {
             pMoreGibs->ctor_40FB40(
                 GibType::Abe_0,
                 field_B8_xpos,
@@ -2271,6 +2281,7 @@ s16 Abe::vTakeDamage_44BB50(BaseGameObject* pFrom)
                 FP_FromInteger(0),
                 field_CC_sprite_scale,
                 0);
+            }
 
             field_20_animation.field_4_flags.Clear(AnimFlags::eBit3_Render);
         }
@@ -2299,6 +2310,8 @@ s16 Abe::vTakeDamage_44BB50(BaseGameObject* pFrom)
                 field_D0_r = 30;
 
                 auto pGibs = ae_new<Gibs>();
+                if (pGibs) // SATURN (U1d T1): null-tested like every other Gibs site
+                {
                 pGibs->ctor_40FB40(
                     GibType::Abe_0,
                     field_B8_xpos,
@@ -2307,6 +2320,7 @@ s16 Abe::vTakeDamage_44BB50(BaseGameObject* pFrom)
                     FP_FromInteger(0),
                     field_CC_sprite_scale,
                     0);
+                }
 
                 field_20_animation.field_4_flags.Clear(AnimFlags::eBit3_Render);
                 field_E0_pShadow->field_14_flags.Clear(Shadow::Flags::eBit2_Enabled);
@@ -6787,6 +6801,44 @@ void Abe::Motion_86_HandstoneBegin_45BD00()
     CircularFade* pCircularFade = static_cast<CircularFade*>(sObjectIds_5C1B70.Find_449CF0(field_14C_circular_fade_id));
     DeathFadeOut* pFade = static_cast<DeathFadeOut*>(sObjectIds_5C1B70.Find_449CF0(field_148_fade_obj_id));
 
+#ifdef TETHYS_SATURN
+    // SATURN (U1d T7, AO 346.ao.1 twin): THE IRIS IS LOOKED UP BY ID EVERY TICK,
+    // and the states that use it call it unguarded (VDone, VFadeIn): a virtual
+    // call through a null object reads the SH-2's boot ROM as a vtable and jumps
+    // anywhere. A CircularFade is reaped when it dies, and one born dead (its
+    // Animation_Init refused: no VRAM rect, no CRAM home for the 256-colour
+    // SPOTLITE) dies at the end of the tick that made it. Leave the stone the
+    // way upstream already leaves it when its TLV is missing (Motion_87), and
+    // give back what this motion took: the transition sound, the SPOTLITE ref
+    // of eHandstoneBegin_0, the music a film stopped.
+    if (!pCircularFade
+        && (field_120_state.stone == StoneStates::eGetHandstoneType_1
+            || field_120_state.stone == StoneStates::eHandstoneEnd_3
+            || (field_120_state.stone == StoneStates::eHandstoneMovieDone_2 && sMovie_ref_count_BB4AE4 == 0)))
+    {
+        if (field_120_state.stone == StoneStates::eHandstoneMovieDone_2)
+        {
+            // the film is over: put the camera back as the state itself would
+            gPsxDisplay_5C1130.PutCurrentDispEnv_41DFA0();
+            pScreenManager_5BB5F4->DecompressCameraToVRam_40EF60((u16**) gMap_5C3030.field_2C_camera_array[0]->field_C_pCamRes);
+            pScreenManager_5BB5F4->field_40_flags |= 0x10000;
+        }
+        if (sHandstoneSoundChannels_5C2C68)
+        {
+            SND_Stop_Channels_Mask_4CA810(sHandstoneSoundChannels_5C2C68);
+            sHandstoneSoundChannels_5C2C68 = 0;
+        }
+        if (field_180_hand_stone_type == TlvTypes::MovieHandStone_27 && field_120_state.stone != StoneStates::eGetHandstoneType_1)
+        {
+            SND_Restart_4CB0E0(); // U1d T14: the film's stop, undone
+        }
+        ResourceManager::FreeResource_49C330(ResourceManager::GetLoadedResource_49C2A0(ResourceManager::Resource_Animation, AEResourceID::kSpotliteResID, 0, 0));
+        field_14C_circular_fade_id = -1;
+        field_106_current_motion = eAbeMotions::Motion_87_HandstoneEnd_45C4F0;
+        return;
+    }
+#endif
+
     switch (field_120_state.stone)
     {
         case StoneStates::eHandstoneBegin_0:
@@ -6803,6 +6855,19 @@ void Abe::Motion_86_HandstoneBegin_45BD00()
                     0,
                     0);
 
+#ifdef TETHYS_SATURN
+                // SATURN (U1d T7, AO 346.ao.1 twin): an iris born dead is reaped at
+                // the end of this tick; leave now, before the stone is armed
+                // (the exit upstream takes when the TLV is missing), and give the
+                // SPOTLITE ref back.
+                if (!pCircularFade2 || pCircularFade2->field_6_flags.Get(BaseGameObject::eDead_Bit3))
+                {
+                    ResourceManager::FreeResource_49C330(ResourceManager::GetLoadedResource_49C2A0(ResourceManager::Resource_Animation, AEResourceID::kSpotliteResID, 0, 0));
+                    field_14C_circular_fade_id = -1;
+                    field_106_current_motion = eAbeMotions::Motion_87_HandstoneEnd_45C4F0;
+                    break;
+                }
+#endif
                 if (field_20_animation.field_4_flags.Get(AnimFlags::eBit5_FlipX))
                 {
                     pCircularFade2->field_20_animation.field_4_flags.Set(AnimFlags::eBit5_FlipX);
@@ -6890,6 +6955,15 @@ void Abe::Motion_86_HandstoneBegin_45BD00()
                     Get_fmvs_sectors_494460(pFmvRec->field_0_pName, 0, 0, &pos, 0, 0);
                     sLevelId_dword_5CA408 = static_cast<u32>(gMap_5C3030.field_0_current_level);
 
+#ifdef TETHYS_SATURN
+                    // SATURN (U1d T14, AO 446.ao.3 twin): stop the music before the
+                    // stone's film whatever the record says (the Movie object stops
+                    // it only when its flags ask), so eHandstoneEnd_3 can restart
+                    // it: the Saturn film player swaps the sound driver out and a
+                    // stone never makes the camera change that would bring the
+                    // music back (the pause menu's pair, SND_StopAll / SND_Restart).
+                    SND_StopAll_4CB060();
+#endif
                     Movie* pMovie = ae_new<Movie>();
                     if (pMovie)
                     {
@@ -6941,6 +7015,14 @@ void Abe::Motion_86_HandstoneBegin_45BD00()
                     SND_Stop_Channels_Mask_4CA810(sHandstoneSoundChannels_5C2C68);
                     sHandstoneSoundChannels_5C2C68 = 0;
                 }
+#ifdef TETHYS_SATURN
+                // SATURN (U1d T14): the music the film stopped comes back, after the
+                // transition-sound mask above so the mask cannot cut its first notes.
+                if (field_180_hand_stone_type == TlvTypes::MovieHandStone_27)
+                {
+                    SND_Restart_4CB0E0();
+                }
+#endif
 
                 u8** ppResToFree = ResourceManager::GetLoadedResource_49C2A0(ResourceManager::Resource_Animation, AEResourceID::kSpotliteResID, 0, 0);
                 ResourceManager::FreeResource_49C330(ppResToFree);

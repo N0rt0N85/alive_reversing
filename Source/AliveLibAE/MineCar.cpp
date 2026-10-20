@@ -14,6 +14,9 @@
 #include "ParticleBurst.hpp"
 #include "ScreenShake.hpp"
 #include "Grid.hpp"
+#ifdef TETHYS_SATURN
+#include "TethysObjectHooks.hpp"
+#endif
 
 const FP mineCarHeightUnscaled = FP_FromInteger(60);
 const FP mineCarWidthUnscaled = FP_FromInteger(12);
@@ -793,7 +796,15 @@ s32 MineCar::vGetSaveState_467E10(MineCar_SaveState* pState)
     pState->field_2E_render = field_20_animation.field_4_flags.Get(AnimFlags::eBit3_Render);
 
 
+#ifdef TETHYS_SATURN
+    // SATURN (D-A1, C6): field_18 holds the TRANSLATED offset of the compacted
+    // BAYROLL.BAN 6013 (TSAT), the cases below are the COMPILED PC offsets: give
+    // the switch the compiled value back, or no case matches, no token is
+    // written and a quickload restores the car on Mine_Car_Closed.
+    switch (Tethys_UntranslateFrameTable(field_20_animation.field_20_ppBlock, field_20_animation.field_18_frame_table_offset))
+#else
     switch (field_20_animation.field_18_frame_table_offset)
+#endif
     {
         case 20788: // Mine_Car_Tread_Move_B
             pState->field_24_frame_table = 10860;
@@ -826,7 +837,11 @@ s32 MineCar::vGetSaveState_467E10(MineCar_SaveState* pState)
     pState->field_32_unused = field_124_anim.field_4_flags.Get(AnimFlags::eBit5_FlipX);
     pState->field_30_unused = field_124_anim.field_4_flags.Get(AnimFlags::eBit3_Render);
     
+#ifdef TETHYS_SATURN
+    switch (Tethys_UntranslateFrameTable(field_124_anim.field_20_ppBlock, field_124_anim.field_18_frame_table_offset)) // SATURN: as above
+#else
     switch (field_124_anim.field_18_frame_table_offset)
+#endif
     {
         case 20788: // Mine_Car_Tread_Move_B
             pState->field_38_frame_table_offset2 = 10860;

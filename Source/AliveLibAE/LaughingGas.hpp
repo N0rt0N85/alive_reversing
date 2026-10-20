@@ -5,6 +5,17 @@
 #include "Path.hpp"
 #include "Primitives.hpp"
 
+#if defined(TETHYS_SATURN) && defined(TETHYS_AE_GAS)
+// SATURN: the look of the gas is src/gas_ae.cxx's (AE port decision D-G2): the
+// zone, white or laughing and the amount at the ctor (with the 36 phase draws of
+// Init_432980), every update's amount in place of sub_4328A0 (with its 16 draws),
+// the end at the dtor. C linkage hides the parameter list from the linker, so
+// src/gas_ae.cxx includes this header and the compiler checks both sides.
+extern "C" void Tethys_GasBegin(s32 x, s32 y, s32 right, s32 bottom, s32 white, s32 amountFp);
+extern "C" void Tethys_GasTick(s32 amountFp);
+extern "C" void Tethys_GasEnd();
+#endif
+
 // TODO: These can be combined
 struct Path_LaughingGas_Data final
 {
@@ -53,14 +64,18 @@ private:
 
     EXPORT void vRender_432D10(PrimHeader** ppOt);
 
+#if !defined(TETHYS_SATURN) // SATURN: the field is src/gas_ae.cxx's, fixed point (D-G2)
     EXPORT void DoRender_432740();
+#endif
 
     EXPORT s16 CounterOver_432DA0();
 
     EXPORT void vUpdate_432C40();
 
+#if !defined(TETHYS_SATURN) // SATURN: the field is src/gas_ae.cxx's, fixed point (D-G2)
     EXPORT f32 Calc_X_4326A0(f32* a2, s32 xIndex);
     EXPORT f32 Calc_Y_4326F0(f32* a2, s32 yIndex);
+#endif
 
     EXPORT void sub_4328A0();
 
@@ -85,6 +100,10 @@ private:
 
     Prim_GasEffect field_5C_prim;
 
+#if !defined(TETHYS_SATURN)
+    // SATURN: out (12,664 B of float tables and the pixel buffer's pointer):
+    // the phases, controls and bases live in src/gas_ae.cxx in fixed point, and
+    // the field is drawn into VDP2 VRAM instead of a 2 * wc * hc malloc (D-G2).
     f32 field_7C_gas_y[6][6];
     f32 field_10C_gas_x[6][6];
 
@@ -100,8 +119,11 @@ private:
 
     s32 field_31F8_w_count;
     s32 field_31FC_h_count;
+#endif
 };
+#if !defined(TETHYS_SATURN)
 ALIVE_ASSERT_SIZEOF(LaughingGas, 0x3200);
+#endif
 
 ALIVE_VAR_EXTERN(s32, gGasInstanceCount_5BC214);
 ALIVE_VAR_EXTERN(s16, gLaughingGasOn_5C1BA4);

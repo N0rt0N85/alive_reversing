@@ -62,8 +62,23 @@ GasCountDown* GasCountDown::ctor_417010(Path_GasCountDown* pTlv, s32 tlvInfo)
     SetType(AETypes::eGasClock_23);
     field_68_tlvInfo = tlvInfo;
 
+#ifdef TETHYS_SATURN
+    // SATURN (U1c T14/D13): the clock draws with LCDFONT, the sheet the LCD
+    // screens and status boards already share through sFont2Context with a
+    // load count. A private context uploaded a second copy of the same sheet
+    // (11,700 B of VDP1 texture) and registered a THIRD font rect with the
+    // renderer, which keeps two (renderer_saturn.cxx, Tethys_NoteFontRect).
+    // The same sheet and atlas: the picture is the PC's.
+    if (!sFontType2LoadCount_5BC5E8)
+    {
+        sFont2Context_5BC5D8.LoadFontType_433400(2);
+    }
+    sFontType2LoadCount_5BC5E8++;
+    field_30_font.ctor_433590(5, byte_5513D4, &sFont2Context_5BC5D8);
+#else
     field_20_font_context.LoadFontType_433400(2);
     field_30_font.ctor_433590(5, byte_5513D4, &field_20_font_context);
+#endif
     field_6_flags.Set(BaseGameObject::eDrawable_Bit4);
     gObjList_drawables_5C1124->Push_Back(this);
 
@@ -125,7 +140,14 @@ void GasCountDown::dtor_417220()
     gObjList_drawables_5C1124->Remove_Item(this);
     Path::TLV_Reset_4DB8E0(field_68_tlvInfo, -1, 0, 0);
     field_30_font.dtor_433540();
+#ifdef TETHYS_SATURN
+    if (!--sFontType2LoadCount_5BC5E8) // SATURN: the shared sheet (see the ctor)
+    {
+        sFont2Context_5BC5D8.dtor_433510();
+    }
+#else
     field_20_font_context.dtor_433510();
+#endif
     BaseGameObject_dtor_4DBEC0();
 }
 
@@ -150,6 +172,13 @@ void GasCountDown::vScreenChanged_417700()
 
 void GasCountDown::vRender_4175A0(PrimHeader** ppOt)
 {
+#ifdef TETHYS_SATURN
+    // SATURN (U1c T15): not drawn while paused (Font.hpp, Tethys_PauseHidesText).
+    if (Tethys_PauseHidesText())
+    {
+        return;
+    }
+#endif
     char_type text[128] = {}; // Bigger buffer to handle large numbers or negative numbers causing a buffer overflow/crash.
     sprintf(text, "%02d:%02d", field_74_time_left / 60, field_74_time_left % 60);
 

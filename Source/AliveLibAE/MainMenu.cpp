@@ -28,6 +28,45 @@
 #include "Sys.hpp"
 #include "BaseGameAutoPlayer.hpp"
 
+// SATURN (D-T1): French text read out of the user's Exoddus.exe by
+// tools/ae/ae_text.py into build/generated/ae (gitignored game data). The four
+// .inc files are written together, a text arm also requires the French atlas
+// (RELIVE's US rects draw the French sheets' accents wrong or blank), and
+// TETHYS_LANG_EN keeps RELIVE's English.
+// SATURN (11.14, the language discs): TETHYS_LANG_ES compiles the Spanish set
+// (ae_text.py --lang es: tethys_ae_*_es.inc, the same macros), under the same
+// rule; TETHYS_AE_MAINMENU_FR then means "localized tables", and the `fr`
+// argument of TETHYS_AE_MM_TEXT the localized text.
+#if defined(TETHYS_SATURN) && defined(TETHYS_LANG_ES) && __has_include("ae/tethys_ae_mainmenu_es.inc") && __has_include("ae/tethys_ae_font_atlas_es.inc")
+#include "ae/tethys_ae_mainmenu_es.inc"
+#define TETHYS_AE_MAINMENU_FR 1
+#define TETHYS_AE_MM_TEXT(fr, en) fr
+// The Saturn-only prompt of the remap page, in the Spanish disc's words.
+#define TETHYS_AE_MM_START_CANCEL "o Start para cancelar"
+#elif defined(TETHYS_SATURN) && !defined(TETHYS_LANG_EN) && !defined(TETHYS_LANG_ES) && __has_include("ae/tethys_ae_mainmenu_fr.inc") && __has_include("ae/tethys_ae_font_atlas_fr.inc")
+#include "ae/tethys_ae_mainmenu_fr.inc"
+#define TETHYS_AE_MAINMENU_FR 1
+#define TETHYS_AE_MM_TEXT(fr, en) fr
+#else
+#define TETHYS_AE_MAINMENU_FR 0
+#define TETHYS_AE_MM_TEXT(fr, en) en
+#endif
+#ifndef TETHYS_AE_MM_START_CANCEL
+#define TETHYS_AE_MM_START_CANCEL "ou Start pour annuler"
+#endif
+
+#ifdef TETHYS_SATURN
+extern "C" [[noreturn]] void Tethys_Fatal(const char_type* msg); // SATURN: src/main.cxx
+#include "TethysObjectHooks.hpp" // SATURN: the chant glow's arm and disarm (src/glow_ae.cxx)
+#endif
+
+#if defined(TETHYS_AE_START_CAM) && TETHYS_AE_START_CAM > 0
+// SATURN (U4 T15): the debug boot spawn (HandleMainMenuUpdate), armed by
+// tethys_start_ae.mk; the live pad-0 word src/sys_saturn.cxx publishes.
+extern "C" volatile u32 Tethys_gPadWord;
+static u8 sTethysStartDone = 0;
+#endif
+
 MainMenuController* MainMenuController::gMainMenuController = nullptr;
 
 ALIVE_VAR(1, 0xbb4400, s32, sMainMenuObjectCounter_BB4400, 0);
@@ -349,6 +388,9 @@ ALIVE_ARY(1, 0x561960, MainMenuPage, 24, sMainMenuPages_561960,
             &MainMenuController::BackStory_Or_NewGame_Load_4D1BA0,
             &MainMenuController::BackStory_Or_NewGame_Unload_4D1BE0}});
 
+#if TETHYS_AE_MAINMENU_FR
+MenuFMV sFmvs_561540[TETHYS_AE_MM_FMVS_COUNT] = {TETHYS_AE_MM_FMVS_ROWS};
+#else
 MenuFMV sFmvs_561540[28] = {
     {"GT Logo", LevelIds::eMenu_0, -1, -1, 3, -1, -1},
     {"Oddworld Intro", LevelIds::eMenu_0, -1, -1, 1, -1, -1},
@@ -378,8 +420,12 @@ MenuFMV sFmvs_561540[28] = {
     {"Happy Ending", LevelIds::eBrewery_9, -1, -1, 17, -1, -1},
     {"Sad Ending", LevelIds::eBrewery_9, -1, -1, 18, -1, -1},
     {"Credits", LevelIds::eCredits_16, -1, -1, -1, -1, -1}};
+#endif
 
 // Used by the level skip cheat/ui/menu
+#if TETHYS_AE_MAINMENU_FR
+PerLvlData gPerLvlData_561700[TETHYS_AE_MM_LEVELS_COUNT] = {TETHYS_AE_MM_LEVELS_ROWS};
+#else
 PerLvlData gPerLvlData_561700[17] = {
     {"Mines", LevelIds::eMines_1, 1, 4, 65535u, 2712, 1300},
     {"Mines Ender", LevelIds::eMines_1, 6, 10, 65535u, 2935, 2525},
@@ -398,7 +444,11 @@ PerLvlData gPerLvlData_561700[17] = {
     {"Game Ender", LevelIds::eBrewery_Ender_10, 1, 1, 65535u, 460, 968},
     {"Credits", LevelIds::eCredits_16, 1, 1, 65535u, 0, 0},
     {"Menu", LevelIds::eMenu_0, 1, 1, 65535u, 0, 0}};
+#endif
 
+#if TETHYS_AE_MAINMENU_FR
+PerLvlData sDemos_5617F0[TETHYS_AE_MM_DEMOS_COUNT] = {TETHYS_AE_MM_DEMOS_ROWS};
+#else
 PerLvlData sDemos_5617F0[23] = {
     {"Mudokons 1", LevelIds::eMines_1, 8, 5, 0, 0, 0},
     {"Mudokons 2", LevelIds::eMines_1, 8, 32, 1, 0, 0},
@@ -423,6 +473,7 @@ PerLvlData sDemos_5617F0[23] = {
     {"Sligs", LevelIds::eBrewery_9, 26, 4, 23, 0, 0},
     {"Tortured Mudokons", LevelIds::eBrewery_9, 27, 7, 24, 0, 0},
     {"Greeters Go Boom", LevelIds::eBrewery_9, 28, 4, 25, 0, 0}};
+#endif
 
 MainMenuFrameTable sMainMenuFrameTable_561CC8[49] = {
     {AnimId::None, 0, 0, 0, 0},
@@ -474,6 +525,143 @@ MainMenuFrameTable sMainMenuFrameTable_561CC8[49] = {
     {AnimId::MenuParamiteSpeak_Stay, 10, 1, 41, 14},
     {AnimId::MenuParamiteSpeak_DoIt, 10, 2, 41, 14},
     {AnimId::MenuParamiteSpeak_AllAYa, 10, 0, 41, 14}};
+
+#ifdef TETHYS_SATURN
+// SATURN (GameSpeak split, AO 313.ao.1's recipe; Romain 2026-10-19, "Page
+// GameSpeak, decoupe comme Oddysee"): THE SPEAKERS' HEADS, ONE PHRASE AT A TIME.
+//
+// Without a RAM cartridge a speaker's talking head was ONE record staged as one
+// block of its whole sectors: SLGSPEAK.BAN 688,128 B and GLKSPEAK.BAN
+// 768,000 B on an 838,856 B heap, so 469.ae.1 refused those two pages. The
+// converter now also cuts each of the four heads (tools/ae/ae_rules.py,
+// section 6), beside the whole records the cartridge path keeps loading, into:
+//   - an IDLE piece, "MSPKnn.BAN" with nn the speaker's first idle entry of the
+//     table above (18, 27, 37, 41): its idle table(s) only, under the head's own
+//     chunk id, so the pages' GetLoadedResource lines are unchanged (without a
+//     cart the whole head is never loaded, so the id names one block);
+//   - one PHRASE piece per entry that plays a voice (slot 7..10, sound != -1),
+//     "MSPKnn.BAN" with nn THAT entry, chunk id kTethysSpeakIdBase + nn. One id
+//     per FILE: the idle piece and a phrase piece are resident together, and
+//     GetLoadedResource returns the FIRST block of a (type, id) by address
+//     (AO 449.ao.2: ten pieces sharing id 130 under a keep-cache gave orphans
+//     and wrong bytes).
+// A piece is the whole head's own bytes for the tables it keeps (the same CLUT,
+// the same cels), compacted with its first kept table as the TSAT base, so the
+// COMPILED offsets these sites pass translate inside it (Animation.cpp). The
+// palette is not reloaded between the idle and a phrase piece of one slot
+// (AnimationAndSoundLogic_4CFE80 compares slots, not blocks): the converter
+// asserts the CLUT equality, tools/ae/check_pack_ae.py re-reads it.
+// Measured: the worst moment on a page, idle piece resident + largest phrase
+// piece staged, is Scrab's 277,144 B (Slig 222,920, Glukkon 212,972, Paramite
+// 228,616), against the 644,964 B of Abe's two heads that the main menu holds.
+// A first phrase costs one CD read of 26 to 72 sectors (about 0.25 to 0.55 s,
+// the loop stopped, like AO's phrases), a repeat costs nothing. With a cart
+// nothing changes: the whole heads, as the PC.
+extern "C" volatile u32 Tethys_gCartHeapBytes; // src/main.cxx: 0 = no cartridge
+u32 Tethys_HeapLargestFree();                  // AE ResourceManager.cpp (AO 425.ao.1)
+bool Tethys_MenuPinsRelease();                 // AE ResourceManager.cpp (the menu pins, a loan)
+
+static const u32 kTethysSpeakIdBase = 14000;              // tools/ae/ae_rules.py SPEAK_PIECE_ID_BASE
+static const char_type kTethysSpeakName[] = "MSPK00.BAN"; // tools/ae/ae_rules.py SPEAK_PIECE_PATTERN
+
+// SATURN: the piece of frame-table entry idx (0..99), "MSPKnn.BAN".
+static void Tethys_SpeakPieceName(char_type* pOut, s32 idx)
+{
+    memcpy(pOut, kTethysSpeakName, sizeof(kTethysSpeakName));
+    while (idx >= 10) // tens by subtraction: the SH-2 has no divide instruction
+    {
+        idx -= 10;
+        pOut[4]++;
+    }
+    pOut[5] = static_cast<char_type>(pOut[5] + idx);
+}
+
+// SATURN: a speaker's phrase, as opposed to its idles: one of the four
+// speakers' slots and a voice (every idle entry of the table has sound -1).
+static bool Tethys_IsSpeakPhrase(s32 idx)
+{
+    return idx > 0 && idx < static_cast<s32>(ALIVE_COUNTOF(sMainMenuFrameTable_561CC8))
+        && sMainMenuFrameTable_561CC8[idx].field_4_menu_res_id >= MenuResIds::eSligSpeak
+        && sMainMenuFrameTable_561CC8[idx].field_6_sound != -1;
+}
+
+// SATURN: the file a speaker page loads: the whole head with a cart, else its
+// idle piece (named into pBuf). Out of line: four page loads call it, and the
+// pool pays for every inlined copy (measured on the object).
+__attribute__((noinline)) static const char_type* Tethys_SpeakIdleFile(const char_type* pWhole, s32 idleIdx, char_type* pBuf)
+{
+    if (Tethys_gCartHeapBytes != 0)
+    {
+        return pWhole;
+    }
+    Tethys_SpeakPieceName(pBuf, idleIdx);
+    return pBuf;
+}
+
+// SATURN: the block menu entry idx animates with. Unchanged for every entry but
+// a speaker's phrase without a cart, which lives in its own piece, held in slot
+// eUnknown (never used by the PC, set null by the constructor, freed by the
+// destructor and by Load_AbeSpeakResources), read HERE, before the voice the
+// caller starts (AO 416.ao.1), the previous piece dropped first: one phrase
+// piece is resident at a time. nullptr = refused (no room, no record): the
+// caller drops the request.
+static u8** Tethys_MenuAnimRes(MainMenuController& m, s16 idx)
+{
+    u8** ppSlot = m.field_F4_resources.field_0_resources[sMainMenuFrameTable_561CC8[idx].field_4_menu_res_id];
+    if (Tethys_gCartHeapBytes != 0 || !Tethys_IsSpeakPhrase(idx) || !ppSlot)
+    {
+        return ppSlot;
+    }
+    const u32 id = kTethysSpeakIdBase + static_cast<u32>(idx);
+    u8**& ppPhrase = m.field_F4_resources.field_0_resources[MenuResIds::eUnknown];
+    if (ppPhrase && ResourceManager::Get_Header_49C410(ppPhrase)->field_C_id == id)
+    {
+        return ppPhrase; // the same phrase again: no read
+    }
+    if (ppPhrase)
+    {
+        // AO 449.ao.1's twin: the animation never stays on a freed block. It goes
+        // back on the speaker's idle (resident) the same tick, never drawn when the
+        // read below succeeds. Defensive: input waits for a phrase to end
+        // (HandleMainMenuUpdate, eBit22), so it is normally on the idle already.
+        if (m.field_20_animation.field_20_ppBlock == ppPhrase)
+        {
+            const s16 idleIdx = sMainMenuFrameTable_561CC8[idx].field_8_anim_enum;
+            const AnimRecord& idleRec = AnimRec(sMainMenuFrameTable_561CC8[idleIdx].field_0_animation);
+            m.field_20_animation.Set_Animation_Data_409C80(idleRec.mFrameTableOffset, ppSlot);
+        }
+        ResourceManager::FreeResource_49C330(ppPhrase); // a real free flushes the cel cache
+        ppPhrase = nullptr;
+    }
+    char_type name[sizeof(kTethysSpeakName)];
+    Tethys_SpeakPieceName(name, idx);
+    const LvlFileRecord* pRec = sLvlArchive_5BC520.Find_File_Record_433160(name);
+    if (!pRec)
+    {
+        return nullptr;
+    }
+    // Never the loader's ten-second wedge (ResourceManager.cpp, the staging
+    // valve): the whole staging block must exist as one free run first, after
+    // a compaction and, failing that, after the menu pins (a loan) go back.
+    const u32 need = static_cast<u32>(pRec->field_10_num_sectors) << 11;
+    if (Tethys_HeapLargestFree() < need)
+    {
+        ResourceManager::Reclaim_Memory_49C470(0);
+        if (Tethys_HeapLargestFree() < need && Tethys_MenuPinsRelease())
+        {
+            ResourceManager::Reclaim_Memory_49C470(0);
+        }
+        if (Tethys_HeapLargestFree() < need)
+        {
+            return nullptr;
+        }
+    }
+    ResourceManager::LoadResourceFile_49C170(name, nullptr);
+    // The only reference this object takes: FreeResource then really frees.
+    ppPhrase = ResourceManager::GetLoadedResource_49C2A0(ResourceManager::Resource_Animation, id, TRUE, FALSE);
+    return ppPhrase;
+}
+#endif
 
 #if DEVELOPER_MODE
 bool gBootToLoadScreen = false;
@@ -653,6 +841,9 @@ BaseGameObject* MainMenuController::vdtor_4CEF00(s32 flags)
 void MainMenuController::dtor_4CEF30()
 {
     SetVTable(this, 0x547958);
+#ifdef TETHYS_SATURN
+    Tethys_GlowChantDisarmAE(); // SATURN: the chant glow and its CRAM pin leave with the menu
+#endif
 
     Path::TLV_Reset_4DB8E0(field_1F0_tlvOffsetLevelIdPathId, -1, 0, 0);
     field_158_animation.vCleanUp_40C630();
@@ -718,9 +909,16 @@ void MainMenuController::Render_4CF4C0(PrimHeader** ppOt)
 }
 
 // Main Menu Text Data
+#if TETHYS_AE_MAINMENU_FR
+MainMenuText sMMT_FrontPage_5623A0[TETHYS_AE_MMT_sMMT_FrontPage_5623A0_COUNT] = {TETHYS_AE_MMT_sMMT_FrontPage_5623A0_ROWS};
+#else
 MainMenuText sMMT_FrontPage_5623A0[1] = {{35, 205, "x", 3u, 0u, 0u, 0u, 0.75, 0u, 0u, 0u, 0u}};
+#endif
 
 // Paramite speak text data
+#if TETHYS_AE_MAINMENU_FR
+const MainMenuText sParamiteSpeak_5622C8[TETHYS_AE_MMT_sParamiteSpeak_5622C8_COUNT] = {TETHYS_AE_MMT_sParamiteSpeak_5622C8_ROWS};
+#else
 const MainMenuText sParamiteSpeak_5622C8[9] = {
     {153, 212, "esc", 3u, 0u, 0u, 0u, 0.75, 0u, 0u, 0u, 0u},
     {75, 55, kSpeak1, 2u, 0u, 0u, 0u, 0.0, 0u, 0u, 0u, 0u},
@@ -731,7 +929,11 @@ const MainMenuText sParamiteSpeak_5622C8[9] = {
     {66, 175, kWork, 2u, 0u, 0u, 0u, 0.0, 0u, 0u, 0u, 0u},
     {308, 85, kAnger, 1u, 0u, 0u, 0u, 0.0, 0u, 0u, 0u, 0u},
     {317, 115, kAllYa, 1u, 0u, 0u, 0u, 0.0, 0u, 0u, 0u, 0u}};
+#endif
 
+#if TETHYS_AE_MAINMENU_FR
+const MainMenuText sAbeGameSpeak_561F38[TETHYS_AE_MMT_sAbeGameSpeak_561F38_COUNT] = {TETHYS_AE_MMT_sAbeGameSpeak_561F38_ROWS};
+#else
 const MainMenuText sAbeGameSpeak_561F38[12] = {
     {184, 25, kChant, 3u, 0u, 0u, 0u, 0.0, 0u, 0u, 0u, 0u},
     {153, 212, "esc", 3u, 0u, 0u, 0u, 0.75, 0u, 0u, 0u, 0u},
@@ -745,7 +947,11 @@ const MainMenuText sAbeGameSpeak_561F38[12] = {
     {314, 115, kAllYa, 1u, 0u, 0u, 0u, 0.0, 0u, 0u, 0u, 0u},
     {319, 145, kSorry, 1u, 0u, 0u, 0u, 0.0, 0u, 0u, 0u, 0u},
     {306, 175, kStopIt, 1u, 0u, 0u, 0u, 0.0, 0u, 0u, 0u, 0u}};
+#endif
 
+#if TETHYS_AE_MAINMENU_FR
+const MainMenuText sSligGameSpeak_562058[TETHYS_AE_MMT_sSligGameSpeak_562058_COUNT] = {TETHYS_AE_MMT_sSligGameSpeak_562058_ROWS};
+#else
 const MainMenuText sSligGameSpeak_562058[11] = {
     {153, 212, "esc", 3u, 0u, 0u, 0u, 0.75, 0u, 0u, 0u, 0u},
     {75, 55, kSpeak1, 2u, 0u, 0u, 0u, 0.0, 0u, 0u, 0u, 0u},
@@ -758,7 +964,11 @@ const MainMenuText sSligGameSpeak_562058[11] = {
     {317, 108, kAllYa, 1u, 0u, 0u, 0u, 0.0, 0u, 0u, 0u, 0u},
     {317, 131, kSorry, 1u, 0u, 0u, 0u, 0.0, 0u, 0u, 0u, 0u},
     {317, 173, kStopIt, 1u, 0u, 0u, 0u, 0.0, 0u, 0u, 0u, 0u}};
+#endif
 
+#if TETHYS_AE_MAINMENU_FR
+const MainMenuText sGlukkonGameSpeak_562160[TETHYS_AE_MMT_sGlukkonGameSpeak_562160_COUNT] = {TETHYS_AE_MMT_sGlukkonGameSpeak_562160_ROWS};
+#else
 const MainMenuText sGlukkonGameSpeak_562160[11] = {
     {153, 212, "esc", 3u, 0u, 0u, 0u, 0.75, 0u, 0u, 0u, 0u},
     {75, 55, kSpeak1, 2u, 0u, 0u, 0u, 0.0, 0u, 0u, 0u, 0u},
@@ -771,13 +981,21 @@ const MainMenuText sGlukkonGameSpeak_562160[11] = {
     {325, 117, kAllYa, 1u, 0u, 0u, 0u, 0.0, 0u, 0u, 0u, 0u},
     {321, 147, kSorry, 1u, 0u, 0u, 0u, 0.0, 0u, 0u, 0u, 0u},
     {313, 178, kStopIt, 1u, 0u, 0u, 0u, 0.0, 0u, 0u, 0u, 0u}};
+#endif
 
+#if TETHYS_AE_MAINMENU_FR
+const MainMenuText sScrabGameSpeak_562268[TETHYS_AE_MMT_sScrabGameSpeak_562268_COUNT] = {TETHYS_AE_MMT_sScrabGameSpeak_562268_ROWS};
+#else
 const MainMenuText sScrabGameSpeak_562268[4] = {
     {153, 215, "esc", 3u, 0u, 0u, 0u, 0.75, 0u, 0u, 0u, 0u},
     {75, 55, kSpeak1, 2u, 0u, 0u, 0u, 0.0, 0u, 0u, 0u, 0u},
     {60, 86, kHello, 2u, 0u, 0u, 0u, 0.0, 0u, 0u, 0u, 0u},
     {60, 133, kFollowMe, 2u, 0u, 0u, 0u, 0.0, 0u, 0u, 0u, 0u}};
+#endif
 
+#if TETHYS_AE_MAINMENU_FR
+const MainMenuText sAbeMotions_562448[TETHYS_AE_MMT_sAbeMotions_562448_COUNT] = {TETHYS_AE_MMT_sAbeMotions_562448_ROWS};
+#else
 const MainMenuText sAbeMotions_562448[15] = {
     {55, 182, "X", 3u, 0u, 0u, 0u, 0.75, 0u, 0u, 0u, 0u},
     {153, 211, "esc", 3u, 0u, 0u, 0u, 0.75, 0u, 0u, 0u, 0u},
@@ -795,6 +1013,7 @@ const MainMenuText sAbeMotions_562448[15] = {
     {330, 155, kSorry, 2u, 0u, 0u, 0u, 0.88f, 0u, 0u, 0u, 0u},            //sympathy [7]
     {330, 174, kAnger, 2u, 0u, 0u, 0u, 0.88f, 0u, 0u, 0u, 0u},            //angry slap [5]
 };
+#endif
 
 void MainMenuController::AbeSpeak_Render_4D2060(PrimHeader** ot)
 {
@@ -818,8 +1037,15 @@ MainMenuNextCam MainMenuController::AbeSpeak_Update_4D2D20(u32 input_held)
                 const s16 randX = Math_RandomRange_496AB0(-40, 40) + 184;
                 const s16 randY = Math_RandomRange_496AB0(30, 90);
 
+#ifdef TETHYS_SATURN
+                // SATURN (U3 T10, U1c A6): whole numbers, so FP_FromInteger is
+                // the exact same value without the soft-double round trip.
+                const FP xpos = pScreenManager_5BB5F4->field_20_pCamPos->field_0_x + FP_FromInteger(randX);
+                FP ypos = pScreenManager_5BB5F4->field_20_pCamPos->field_4_y + FP_FromInteger(randY);
+#else
                 const FP xpos = pScreenManager_5BB5F4->field_20_pCamPos->field_0_x + FP_FromDouble(randX);
                 FP ypos = pScreenManager_5BB5F4->field_20_pCamPos->field_4_y + FP_FromDouble(randY);
+#endif
                 ypos.fpValue += 0x44D60C; // TODO: 68.83 ??
 
                 pParticle->ctor_4CC4C0(
@@ -833,7 +1059,20 @@ MainMenuNextCam MainMenuController::AbeSpeak_Update_4D2D20(u32 input_held)
                 if (pParticle)
                 {
                     pParticle->field_20_animation.field_B_render_mode = TPageAbr::eBlend_1;
+#ifdef TETHYS_SATURN
+                    // SATURN (U1c MM18, AO 383.ao.1 twin): THE CHANT FLARE GOES
+                    // UNDER ABE. eBlend_1 is additive, which the renderer gets
+                    // from VDP2 colour calculation, against the BACKGROUND only:
+                    // VDP1 cannot blend one sprite with another, so over Abe the
+                    // flare would REPLACE his texels (AO's tester saw his face go
+                    // "black and blue"). Under him every flare texel lands on the
+                    // camera and adds light, and Abe stays whole. 25 is below his
+                    // eLayer_27 (Animation_Init's scale-1 default) and no AE menu
+                    // page draws on 22..26 (its labels are 32, 38, 39 and 41).
+                    pParticle->field_20_animation.field_C_render_layer = Layer::eLayer_BeforeShadow_25;
+#else
                     pParticle->field_20_animation.field_C_render_layer = Layer::eLayer_Above_FG1_39;
+#endif
                 }
             }
         }
@@ -959,7 +1198,14 @@ void MainMenuController::SligSpeak_Load_4D3090()
 {
     Unload_AbeSpeakResources();
 
+#ifdef TETHYS_SATURN
+    // SATURN (GameSpeak split): without a cart the idle piece, under the head's
+    // own id (see Tethys_MenuAnimRes).
+    char_type tethysName[sizeof(kTethysSpeakName)];
+    ResourceManager::LoadResourceFile_49C170(Tethys_SpeakIdleFile("SLGSPEAK.BAN", eSlig_Idle, tethysName), nullptr);
+#else
     ResourceManager::LoadResourceFile_49C170("SLGSPEAK.BAN", nullptr);
+#endif
     field_F4_resources.field_0_resources[MenuResIds::eSligSpeak] = ResourceManager::GetLoadedResource_49C2A0(ResourceManager::Resource_Animation, AEResourceID::kSligSpeakResID, TRUE, FALSE);
     const AnimRecord& rec = AnimRec(AnimId::MenuSligSpeak_Idle);
     field_20_animation.Set_Animation_Data_409C80(rec.mFrameTableOffset, field_F4_resources.field_0_resources[MenuResIds::eSligSpeak]);
@@ -1019,7 +1265,14 @@ void MainMenuController::GlukkonSpeak_Load_4D3480()
 {
     Unload_AbeSpeakResources();
 
+#ifdef TETHYS_SATURN
+    // SATURN (GameSpeak split): without a cart the idle piece (Idle and
+    // IdleVariation), under the head's own id (see Tethys_MenuAnimRes).
+    char_type tethysName[sizeof(kTethysSpeakName)];
+    ResourceManager::LoadResourceFile_49C170(Tethys_SpeakIdleFile("GLKSPEAK.BAN", eGlukkon_Idle, tethysName), nullptr);
+#else
     ResourceManager::LoadResourceFile_49C170("GLKSPEAK.BAN", nullptr);
+#endif
     field_F4_resources.field_0_resources[MenuResIds::eGlukkonSpeak] = ResourceManager::GetLoadedResource_49C2A0(ResourceManager::Resource_Animation, AEResourceID::kGlukkonSpeakResID, TRUE, FALSE);
     const AnimRecord& rec = AnimRec(AnimId::MenuGlukkonSpeak_Idle);
     field_20_animation.Set_Animation_Data_409C80(rec.mFrameTableOffset, field_F4_resources.field_0_resources[MenuResIds::eGlukkonSpeak]);
@@ -1073,7 +1326,14 @@ void MainMenuController::ScrabSpeak_Load_4D3870()
 {
     Unload_AbeSpeakResources();
 
+#ifdef TETHYS_SATURN
+    // SATURN (GameSpeak split): without a cart the idle piece (Idle and
+    // IdleVariation), under the head's own id (see Tethys_MenuAnimRes).
+    char_type tethysName[sizeof(kTethysSpeakName)];
+    ResourceManager::LoadResourceFile_49C170(Tethys_SpeakIdleFile("SCRSPEAK.BAN", eScrab_Idle, tethysName), nullptr);
+#else
     ResourceManager::LoadResourceFile_49C170("SCRSPEAK.BAN", nullptr);
+#endif
     field_F4_resources.field_0_resources[MenuResIds::eScrabSpeak] = ResourceManager::GetLoadedResource_49C2A0(ResourceManager::Resource_Animation, AEResourceID::kScrabSpeakResID, TRUE, FALSE);
     const AnimRecord& rec = AnimRec(AnimId::MenuScrabSpeak_Idle);
     field_20_animation.Set_Animation_Data_409C80(rec.mFrameTableOffset, field_F4_resources.field_0_resources[MenuResIds::eScrabSpeak]);
@@ -1136,7 +1396,14 @@ void MainMenuController::ParamiteSpeak_Load_4D3B70()
 {
     Unload_AbeSpeakResources();
 
+#ifdef TETHYS_SATURN
+    // SATURN (GameSpeak split): without a cart the idle piece (Idle and
+    // IdleVariation), under the head's own id (see Tethys_MenuAnimRes).
+    char_type tethysName[sizeof(kTethysSpeakName)];
+    ResourceManager::LoadResourceFile_49C170(Tethys_SpeakIdleFile("PARSPEAK.BAN", eParamite_Idle, tethysName), nullptr);
+#else
     ResourceManager::LoadResourceFile_49C170("PARSPEAK.BAN", nullptr);
+#endif
     field_F4_resources.field_0_resources[MenuResIds::eParamiteSpeak] = ResourceManager::GetLoadedResource_49C2A0(ResourceManager::Resource_Animation, AEResourceID::kParamiteSpeakResID, TRUE, FALSE);
     const AnimRecord& rec = AnimRec(AnimId::MenuParamiteSpeak_Idle);
     field_20_animation.Set_Animation_Data_409C80(rec.mFrameTableOffset, field_F4_resources.field_0_resources[MenuResIds::eParamiteSpeak]);
@@ -1288,10 +1555,14 @@ static void RenderScrollableTextEntries(
     }
 }
 
+#if TETHYS_AE_MAINMENU_FR
+const MainMenuText sControllerMenuButtonCaptions_Text_562628[TETHYS_AE_MMT_sControllerMenuButtonCaptions_Text_562628_COUNT] = {TETHYS_AE_MMT_sControllerMenuButtonCaptions_Text_562628_ROWS};
+#else
 const MainMenuText sControllerMenuButtonCaptions_Text_562628[3] = {
     {34, 27, "x", 3u, 0u, 0u, 0u, 0.75, 0u, 0u, 0u, 0u},
     {331, 204, "esc", 3u, 0u, 0u, 0u, 0.75, 0u, 0u, 0u, 0u},
     {32, 203, "c", 3u, 0u, 0u, 0u, 0.75, 0u, 0u, 0u, 0u}};
+#endif
 
 const SaveFileRec aKeyboard_1[2] = //used SaveFileRec as workaround for RenderScrollableTextEntries()
     {
@@ -1383,9 +1654,13 @@ void MainMenuController::Demo_And_FMV_List_Render_4D4F30(PrimHeader** ppOt)
         }
     }
 
+#if TETHYS_AE_MAINMENU_FR
+    const MainMenuText stru_5625F8[TETHYS_AE_MMT_stru_5625F8_COUNT] = {TETHYS_AE_MMT_stru_5625F8_ROWS};
+#else
     const MainMenuText stru_5625F8[2] = {
         {32, 27, "x", 3u, 0u, 0u, 0u, 0.75f, 0u, 0u, 0u, 0u},
         {331, 204, "esc", 3u, 0u, 0u, 0u, 0.75f, 0u, 0u, 0u, 0u}};
+#endif
 
     s32 polyIndex = 0;
     for (const MainMenuText& text : stru_5625F8)
@@ -1598,9 +1873,13 @@ MainMenuNextCam MainMenuController::Page_FMV_Level_Update_4D4AB0(u32 input_held)
     return MainMenuNextCam(MainMenuCams::eGameIsLoading_ShaddapCam, NO_SELECTABLE_BUTTONS);
 }
 
+#if TETHYS_AE_MAINMENU_FR
+MainMenuText sLoadButtonGraphics[TETHYS_AE_MMT_sLoadButtonGraphics_COUNT] = {TETHYS_AE_MMT_sLoadButtonGraphics_ROWS};
+#else
 MainMenuText sLoadButtonGraphics[2] = {
     {32, 27, "x", 3u, 0u, 0u, 0u, 0.75, 0u, 0u, 0u, 0u},
     {331, 204, "esc", 3u, 0u, 0u, 0u, 0.75, 0u, 0u, 0u, 0u}};
+#endif
 
 ALIVE_VAR(1, 0xBB43E8, s32, sSelectedSavedGameIdx_BB43E8, 0);
 
@@ -1613,7 +1892,7 @@ void MainMenuController::tLoadGame_Render_4D44D0(PrimHeader** ot)
 
     if (sTotalSaveFilesCount_BB43E0 <= 0) // max save files count
     {
-        DrawMenuStringWithShadow(ot, field_120_font, "No Saved Games", 120, 110, 255, 218, 140, polyOffset);
+        DrawMenuStringWithShadow(ot, field_120_font, TETHYS_AE_MM_TEXT(TETHYS_AE_MM_NO_SAVED_GAMES, "No Saved Games"), 120, 110, 255, 218, 140, polyOffset);
     }
     for (auto& menuGraphic : sLoadButtonGraphics)
     {
@@ -1625,6 +1904,72 @@ void MainMenuController::AbeMotions_Render_4D25E0(PrimHeader** ot)
 {
     RenderOnScreenTextHelper(ot, &sAbeMotions_562448[0], ALIVE_COUNTOF(sAbeMotions_562448), 0);
 }
+
+#ifdef TETHYS_SATURN
+u32 Tethys_ResHeapSize(); // SATURN: AE ResourceManager.cpp, the bound heap's size
+
+// SATURN (review RV1, R3's open item; retargeted by the GameSpeak split): the
+// most a speaker page asks of the heap once Abe's two heads are freed
+// (SligSpeak_Load_4D3090 and its three twins). With a cart, its whole head, one
+// block of its whole sectors (a cartridge's heap always passes). Without one,
+// its idle piece plus its LARGEST phrase piece, one phrase piece being resident
+// at a time (Tethys_MenuAnimRes): 213 to 277 KB, where the whole Slig and
+// Glukkon heads staged 688,128 and 768,000 B on the 838,856 B heap and made
+// 469.ae.1 refuse those pages. A speaker whose pieces are not ALL in this
+// level's archive is refused too: its idle would load nothing and a phrase
+// would play on the wrong block. Refused = the error sound, the page stays (a
+// record that cannot fit would wedge the loader ten seconds before its named
+// fatal). Bytes, not contiguity: the load compacts first and the locked blocks
+// sit at the top (last-fit).
+static bool Tethys_SpeakerFits(s32 speaker, u8** ppAbe, u8** ppAbe2)
+{
+    static const char_type* const kWhole[5] = {nullptr, "SLGSPEAK.BAN", "GLKSPEAK.BAN", "SCRSPEAK.BAN", "PARSPEAK.BAN"};
+    static const s16 kIdle[5] = {0, MainMenuController::eSlig_Idle, MainMenuController::eGlukkon_Idle,
+                                 MainMenuController::eScrab_Idle, MainMenuController::eParamite_Idle};
+    const u32 kSlack = 16384; // block headers, alignment, the loader's own small blocks
+    char_type name[sizeof(kTethysSpeakName)];
+    const char_type* pFile = Tethys_SpeakIdleFile(kWhole[speaker], kIdle[speaker], name);
+    const LvlFileRecord* pRec = sLvlArchive_5BC520.Find_File_Record_433160(pFile);
+    if (!pRec)
+    {
+        return false;
+    }
+    u32 need = (static_cast<u32>(pRec->field_10_num_sectors) << 11) + kSlack;
+    if (pFile == name)
+    {
+        u32 most = 0;
+        for (s32 i = 1; i < static_cast<s32>(ALIVE_COUNTOF(sMainMenuFrameTable_561CC8)); i++)
+        {
+            if (sMainMenuFrameTable_561CC8[i].field_4_menu_res_id == MenuResIds::eSligSpeak + speaker - 1
+                && Tethys_IsSpeakPhrase(i))
+            {
+                Tethys_SpeakPieceName(name, i);
+                const LvlFileRecord* pPiece = sLvlArchive_5BC520.Find_File_Record_433160(name);
+                if (!pPiece)
+                {
+                    return false;
+                }
+                if (static_cast<u32>(pPiece->field_10_num_sectors) > most)
+                {
+                    most = static_cast<u32>(pPiece->field_10_num_sectors);
+                }
+            }
+        }
+        need += most << 11;
+    }
+    u32 freed = 0;
+    if (ppAbe)
+    {
+        freed += ResourceManager::Get_Header_49C410(ppAbe)->field_0_size;
+    }
+    if (ppAbe2)
+    {
+        freed += ResourceManager::Get_Header_49C410(ppAbe2)->field_0_size;
+    }
+    const u32 used = sManagedMemoryUsedSize_AB4A04 > freed ? sManagedMemoryUsedSize_AB4A04 - freed : 0u;
+    return used + need <= Tethys_ResHeapSize();
+}
+#endif
 
 MainMenuNextCam MainMenuController::Gamespeak_Update_4D1FC0(u32 input_held)
 {
@@ -1639,6 +1984,18 @@ MainMenuNextCam MainMenuController::Gamespeak_Update_4D1FC0(u32 input_held)
     {
         return MainMenuNextCam(MainMenuCams::eNoChange);
     }
+
+#ifdef TETHYS_SATURN
+    // SATURN (review RV1, the GameSpeak split): see Tethys_SpeakerFits.
+    if (field_1FC_button_index >= 1 && field_1FC_button_index <= 4
+        && !Tethys_SpeakerFits(field_1FC_button_index,
+                               field_F4_resources.field_0_resources[MenuResIds::eAbeSpeak],
+                               field_F4_resources.field_0_resources[MenuResIds::eAbeSpeak2]))
+    {
+        SFX_Play_46FA90(SoundEffect::ElectricZap_39, 0);
+        return MainMenuNextCam(MainMenuCams::eNoChange);
+    }
+#endif
 
     switch (field_1FC_button_index)
     {
@@ -1667,20 +2024,32 @@ void MainMenuController::RenderOnScreenTextHelper(PrimHeader** ot, const MainMen
     }
 }
 
+#if TETHYS_AE_MAINMENU_FR
+MainMenuText sMTxt_Gamespeak_5623B8[TETHYS_AE_MMT_sMTxt_Gamespeak_5623B8_COUNT] = {TETHYS_AE_MMT_sMTxt_Gamespeak_5623B8_ROWS};
+#else
 MainMenuText sMTxt_Gamespeak_5623B8[2] = {
     {330, 204, "esc", 3u, 0u, 0u, 0u, 0.75f, 0u, 0u, 0u, 0u},
     {35, 205, "x", 3u, 0u, 0u, 0u, 0.75f, 0u, 0u, 0u, 0u},
 };
+#endif
 
+#if TETHYS_AE_MAINMENU_FR
+MainMenuText sMTxt_Gamespeak_5623E8[TETHYS_AE_MMT_sMTxt_Gamespeak_5623E8_COUNT] = {TETHYS_AE_MMT_sMTxt_Gamespeak_5623E8_ROWS};
+#else
 MainMenuText sMTxt_Gamespeak_5623E8[2] = {
     {35, 205, "x", 3u, 0u, 0u, 0u, 0.75f, 0u, 0u, 0u, 0u},
     {331, 205, "esc", 3u, 0u, 0u, 0u, 0.75f, 0u, 0u, 0u, 0u},
 };
+#endif
 
+#if TETHYS_AE_MAINMENU_FR
+MainMenuText sMTxt_NewGame_562598[TETHYS_AE_MMT_sMTxt_NewGame_562598_COUNT] = {TETHYS_AE_MMT_sMTxt_NewGame_562598_ROWS};
+#else
 MainMenuText sMTxt_NewGame_562598[3] = {
     {165, 211, "esc", 3u, 0u, 0u, 0u, 0.75, 0u, 0u, 0u, 0u},
     {161, 164, "x", 3u, 0u, 0u, 0u, 0.75, 0u, 0u, 0u, 0u},
 };
+#endif
 
 void MainMenuController::Gamespeak_Render_4D24F0(PrimHeader** ot)
 {
@@ -1719,7 +2088,12 @@ MainMenuNextCam MainMenuController::Page_Front_Update_4D0720(u32 input)
     }
 
     // Go to loading a demo screen if no input after time out, after one demo plays the next time out is lower if input isn't pressed
+#if defined(TETHYS_SATURN) && !TETHYS_AE_SAV_RECORDS_CURRENT
+    // SATURN (D-T3): no attract demo until the ATTR records are current (QuikSave.hpp).
+    if (false)
+#else
     if (field_1F8_page_timeout > (bLongerTimeoutToNextDemo_5C1B9A ? 300 : 1500))
+#endif
     {
         bLongerTimeoutToNextDemo_5C1B9A = 1;
         field_1FC_button_index = 0;
@@ -2069,6 +2443,16 @@ void MainMenuController::remove_ISO9660_Suffix_4D1660(char_type* out, const char
 
 s8 MainMenuController::checkIfDemoFileExists_4D1430(char_type* input)
 {
+#if defined(TETHYS_SATURN)
+    // SATURN (U1c MM12, T10): the PC looked for a demo's level file in its CD
+    // emulation folders and on its drives (access_impl, MainMenu.cpp below).
+    // Every level of the game is on this one disc (cd/data_ae, read by name
+    // through the CD seam), so the answer is always yes. The demo then loads
+    // its ATTRnnnn.SAV record from ST.LVL, converted to big-endian offline
+    // (tools/ae/ae_save_schema.py), and plays the camera's own Demo chunk.
+    (void) input;
+    return 1;
+#else
     char_type* inputMod = input;
     if (inputMod[0] == '\\')
     {
@@ -2115,6 +2499,7 @@ s8 MainMenuController::checkIfDemoFileExists_4D1430(char_type* input)
     {
         return 0;
     }
+#endif // TETHYS_SATURN: checkIfDemoFileExists_4D1430
 }
 
 // true if demo was started manually from the demos menu,
@@ -2125,6 +2510,12 @@ ALIVE_VAR(1, 0x5C1BA2, u8, sCurrentDemoIdForIdlingDemoPlayback_5C1BA2, 0);
 MainMenuNextCam MainMenuController::LoadDemo_Update_4D1040(u32)
 {
     const s32 maxDemoId = ALIVE_COUNTOF(sDemos_5617F0);
+#if defined(TETHYS_SATURN) && !TETHYS_AE_SAV_RECORDS_CURRENT
+    // SATURN (D-T3): no record is played until the ATTR records are current
+    // (QuikSave.hpp); back where the demo came from, as the PC's skipped demo.
+    field_1F8_page_timeout = 0;
+    return MainMenuNextCam(gIsDemoStartedManually_5C1B9C ? MainMenuCams::eDemoSelectionCam : MainMenuCams::eMainMenuCam);
+#endif
 
     if (field_23C_T80.Get(Flags::eBit18_Loading))
     {
@@ -2215,18 +2606,41 @@ MainMenuNextCam MainMenuController::LoadDemo_Update_4D1040(u32)
         }
         else
         {
+#if defined(TETHYS_SATURN)
+            // SATURN: the image's own arithmetic (French LoadDemo_Update,
+            // 0x4D12C2): the counter is incremented FIRST, wraps to 1 past the
+            // list length, and the demo is entry counter - 1. RELIVE's
+            // post-increment reaches entry maxDemoId, one past the table, before
+            // it wraps: a garbage ATTR id, a resource that is not there, a null
+            // dereferenced by the copy below.
+            if (++sCurrentDemoIdForIdlingDemoPlayback_5C1BA2 > maxDemoId)
+            {
+                sCurrentDemoIdForIdlingDemoPlayback_5C1BA2 = 1;
+            }
+            demoId = static_cast<s16>(sCurrentDemoIdForIdlingDemoPlayback_5C1BA2 - 1);
+#else
             if (sCurrentDemoIdForIdlingDemoPlayback_5C1BA2 > maxDemoId)
             {
                 // all the "idling" demos have been played, wrap around
                 sCurrentDemoIdForIdlingDemoPlayback_5C1BA2 = 0;
             }
             demoId = sCurrentDemoIdForIdlingDemoPlayback_5C1BA2++; // take the pre-incremented value
+#endif
         }
 
         char_type file[32] = {};
         sprintf(file, "ATTR%04d.SAV", sDemos_5617F0[demoId].field_A_id);
         ResourceManager::LoadResourceFile_49C170(file, nullptr);
         u8** resource = ResourceManager::GetLoadedResource_49C2A0(ResourceManager::ResourceType::Resource_NxtP, AEResourceID::kUnknownResID_0, 1, 0);
+#ifdef TETHYS_SATURN
+        // SATURN (review RV1): CheatController tests this handle, the PC did not
+        // here. ST.LVL carries ATTR0000..0027 today; a missing record would copy
+        // 8 KB of the low address space into the quicksave: named instead.
+        if (!resource)
+        {
+            Tethys_Fatal("demo: ATTR record missing");
+        }
+#endif
         sActiveQuicksaveData_BAF7F8 = *(reinterpret_cast<Quicksave*>(*resource));
         ResourceManager::FreeResource_49C330(resource);
 
@@ -2317,6 +2731,11 @@ MainMenuNextCam MainMenuController::DemoSelect_Update_4D0E10(u32 input)
 
     if (input_or_field_204 & InputCommands::Enum::eUnPause_OrConfirm)
     {
+#if defined(TETHYS_SATURN) && !TETHYS_AE_SAV_RECORDS_CURRENT
+        // SATURN (D-T3): the ATTR records are not current yet (QuikSave.hpp).
+        SFX_Play_46FA90(SoundEffect::ElectricZap_39, 0);
+        return MainMenuNextCam(MainMenuCams::eNoChange);
+#endif
         // selected a demo for playing
         gIsDemoStartedManually_5C1B9C = TRUE;
         sDemoIdChosenFromDemoMenu_5C1B9E = field_230_target_entry_index;
@@ -2401,6 +2820,18 @@ EXPORT MainMenuNextCam MainMenuController::tLoadGame_Input_4D3EF0(u32 input)
             return MainMenuNextCam(MainMenuCams::eMainMenuCam, 2);
         }
 
+#ifdef TETHYS_SATURN
+        // SATURN (U1c T10/SG5, decision D-T2): the list holds the backup-RAM
+        // slots of the device as "<slot digit> <camera code>"
+        // (Quicksave_FindSaves_4D4150); the digit names the slot, read and
+        // checksummed into the quicksave (QuikSave.cpp). A slot that fails
+        // leaves the page as the PC's missing file did.
+        if (!Quicksave_ReadSlot_Saturn(sSaveFileRecords_BB31D8[sSavedGameToLoadIdx_BB43FC].field_0_fileName[0] - '1'))
+        {
+            SFX_Play_46FA90(SoundEffect::ElectricZap_39, 0);
+            return MainMenuNextCam(MainMenuCams::eNoChange);
+        }
+#else
         // Load selected save
         char_type filename[40] = {};
         strcpy(filename, sSaveFileRecords_BB31D8[sSavedGameToLoadIdx_BB43FC].field_0_fileName);
@@ -2416,6 +2847,7 @@ EXPORT MainMenuNextCam MainMenuController::tLoadGame_Input_4D3EF0(u32 input)
 
         IO_Read(hFile, &sActiveQuicksaveData_BAF7F8, sizeof(Quicksave), 1u);
         IO_Close(hFile);
+#endif
 
         field_23C_T80.Set(Flags::eBit21_LoadingSave);
         return MainMenuNextCam(MainMenuCams::eGameIsLoading_ShaddapCam, NO_SELECTABLE_BUTTONS);
@@ -2461,7 +2893,14 @@ MainMenuNextCam MainMenuController::Options_Update_4D1AB0(u32 input)
     {
         case 0:
         {
+#ifdef TETHYS_SATURN
+            // SATURN (U1c MM17, AO ao261.24 twin): one input device, the pad, so
+            // the Keyboard / Game Pad chooser has nothing to choose: straight to
+            // the remap page (sJoystickEnabled_5C9F70 is 1 on this port).
+            return MainMenuNextCam(MainMenuCams::eRemapInputsCam);
+#else
             return MainMenuNextCam(MainMenuCams::eControllerSelectionCam);
+#endif
         }
         case 1:
         {
@@ -2578,6 +3017,9 @@ void MainMenuController::ControllerMenu_Load_4D16B0()
     sSelectedControllerEntry_BB43F4 = sJoystickEnabled_5C9F70;
 }
 
+#if TETHYS_AE_MAINMENU_FR
+const char_type* sInputButtonNames_562790[8] = {TETHYS_AE_MM_INPUT_NAMES_ROWS};
+#else
 const char_type* sInputButtonNames_562790[8] = {
     "Run",
     "Sneak",
@@ -2587,8 +3029,12 @@ const char_type* sInputButtonNames_562790[8] = {
     "Throw",
     "Fart/Roll",
     "Speak 2"};
+#endif
 
 
+#if TETHYS_AE_MAINMENU_FR
+const MainMenuText kTextInfo_5626A0[TETHYS_AE_MMT_kTextInfo_5626A0_COUNT] = {TETHYS_AE_MMT_kTextInfo_5626A0_ROWS};
+#else
 const MainMenuText kTextInfo_5626A0[10] = {
     {35, 34, "x", 3u, 0u, 0u, 0u, 0.75, 0u, 0u, 0u, 0u},
     {331, 204, "esc", 3u, 0u, 0u, 0u, 0.75, 0u, 0u, 0u, 0u},
@@ -2600,6 +3046,7 @@ const MainMenuText kTextInfo_5626A0[10] = {
     {250, 107, kThrow, 3u, 0u, 0u, 0u, 0.88f, 1u, 0u, 0u, 0u},
     {250, 140, kFart, 3u, 0u, 0u, 0u, 0.88f, 1u, 0u, 0u, 0u},
     {250, 172, kSpeak2, 3u, 0u, 0u, 0u, 0.88f, 1u, 0u, 0u, 0u}};
+#endif
 
 void MainMenuController::RemapInput_Render_4D2A10(PrimHeader** ppOt)
 {
@@ -2608,11 +3055,11 @@ void MainMenuController::RemapInput_Render_4D2A10(PrimHeader** ppOt)
     {
         if (sJoystickEnabled_5C9F70)
         {
-            field_234_pStr = "Press button to use";
+            field_234_pStr = TETHYS_AE_MM_TEXT(TETHYS_AE_MM_PRESS_BUTTON, "Press button to use");
         }
         else
         {
-            field_234_pStr = "Press key to use";
+            field_234_pStr = TETHYS_AE_MM_TEXT(TETHYS_AE_MM_PRESS_KEY, "Press key to use");
         }
 
         s32 textWidth = field_120_font.MeasureWidth_4336C0(field_234_pStr, FP_FromInteger(1));
@@ -2627,7 +3074,7 @@ void MainMenuController::RemapInput_Render_4D2A10(PrimHeader** ppOt)
         }
         polyIndex = field_120_font.DrawString_4337D0(ppOt, field_234_pStr, nextTextXPos, 88, TPageAbr::eBlend_0, 1, 0, Layer::eLayer_Menu_41, 40, 20, 0, polyIndex, FP_FromInteger(1), 640, 0);
         char_type buffer[512] = {};
-        sprintf(buffer, "for %s", sInputButtonNames_562790[sButtonToRemapIdx_BB43EC]);
+        sprintf(buffer, TETHYS_AE_MM_TEXT(TETHYS_AE_MM_FOR_FMT, "for %s"), sInputButtonNames_562790[sButtonToRemapIdx_BB43EC]);
         field_234_pStr = buffer;
         textWidth = field_120_font.MeasureWidth_4336C0(buffer, FP_FromInteger(1));
         if (textWidth >= 336)
@@ -2639,7 +3086,14 @@ void MainMenuController::RemapInput_Render_4D2A10(PrimHeader** ppOt)
             nextTextXPos = (368 - textWidth) / 2;
         }
         polyIndex = field_120_font.DrawString_4337D0(ppOt, field_234_pStr, nextTextXPos, 120, TPageAbr::eBlend_0, 1, 0, Layer::eLayer_Menu_41, 40, 20, 0, polyIndex, FP_FromInteger(1), 640, 0);
-        field_234_pStr = "Press BackSpace for none, Esc to exit";
+#ifdef TETHYS_SATURN
+        // SATURN (U1c MM21, AO 307.ao.1 twin): the pad remap swaps two buttons
+        // and START cancels (src/sys_saturn.cxx Input_Remap_492680): there is no
+        // BackSpace, no Esc, and no unbound state. The Oddysee disc's words.
+        field_234_pStr = TETHYS_AE_MM_TEXT(TETHYS_AE_MM_START_CANCEL, "or Start to cancel");
+#else
+        field_234_pStr = TETHYS_AE_MM_TEXT(TETHYS_AE_MM_BACKSPACE_ESC, "Press BackSpace for none, Esc to exit");
+#endif
         textWidth = field_120_font.MeasureWidth_4336C0(field_234_pStr, FP_FromInteger(1));
         if (textWidth >= 336)
         {
@@ -2656,10 +3110,18 @@ void MainMenuController::RemapInput_Render_4D2A10(PrimHeader** ppOt)
         if (!sJoystickEnabled_5C9F70)
         {
             // Speak 1
+#if TETHYS_AE_MAINMENU_FR
+            const MainMenuText speak1Stru_562760 = TETHYS_AE_MMT_speak1Stru_562760_ROWS;
+#else
             const MainMenuText speak1Stru_562760 = {152, 174, "-", 3u, 0u, 0u, 0u, 0.88f, 0u, 0u, 0u, 0u};
+#endif
 
             // Speak 2
+#if TETHYS_AE_MAINMENU_FR
+            const MainMenuText speak2Stru_562778 = TETHYS_AE_MMT_speak2Stru_562778_ROWS;
+#else
             const MainMenuText speak2Stru_562778 = {250, 174, "-", 3u, 0u, 0u, 0u, 0.88f, 0u, 0u, 0u, 0u};
+#endif
 
             DrawMenuText_4D20D0(&speak1Stru_562760, ppOt, &field_120_font, &polyIndex, 1);
             DrawMenuText_4D20D0(&speak2Stru_562778, ppOt, &field_120_font, &polyIndex, 1);
@@ -2859,12 +3321,32 @@ void MainMenuController::tLoadGame_Unload_4D4360()
     }
 }
 
+#if defined(TETHYS_SATURN)
+extern "C" void Tethys_ReturnToBios(void); // src/sys_saturn.cxx (AO 306.ao.1)
+#endif
+
 void MainMenuController::Game_Force_Quit_Load_4D1A90()
 {
+#if defined(TETHYS_SATURN)
+    // SATURN (U4 T11, decision D-S5, AO 306.ao.1 twin): QUIT GOES BACK TO THE
+    // BIOS, this platform's desktop, which is the faithful reading of the PC's
+    // exit. Here and not after the game loop: the loop's exit runs AE's PC
+    // shutdown chain (resource manager, every object, sound and display
+    // teardown), which only delays a reset on a console. This page loads once
+    // the quit transition is over, so the screen is already black. Should
+    // SYS_Exit ever return, the PC path below ends the loop and main.cxx parks
+    // on a named fatal.
+    Tethys_ReturnToBios();
+#endif
     sBreakGameLoop_5C2FE0 = TRUE;
 }
 
+#ifdef TETHYS_SATURN
+template <typename TFnOnGameSpeak> // SATURN: member template, see MainMenu.hpp
+MainMenuNextCam MainMenuController::HandleGameSpeakInput(u32 input_held, TFnOnGameSpeak fnOnGameSpeak)
+#else
 MainMenuNextCam MainMenuController::HandleGameSpeakInput(u32 input_held, std::function<MainMenuNextCam(InputCommands::Enum cmd)> fnOnGameSpeak)
+#endif
 {
     field_20_animation.field_4_flags.Set(AnimFlags::eBit3_Render);
     field_20_animation.field_4_flags.Set(AnimFlags::eBit2_Animate);
@@ -3028,6 +3510,46 @@ void MainMenuController::HandleMainMenuUpdate()
     }
 
     MainMenuPage* pPage = &sMainMenuPages_561960[field_214_page_index];
+
+#if defined(TETHYS_AE_START_CAM) && TETHYS_AE_START_CAM > 0
+    // SATURN (U4 T15, decision D-K1): THE DEBUG BOOT SPAWN, the twin of AO's
+    // tethys_start.mk knob (tethys_start_ae.mk; compiled out when its camera is
+    // 0, the default). It goes through the game's OWN level select: the cheat
+    // page's arming (Page_FMV_Level_Update_4D4AB0) and then LoadNewGame_Update,
+    // which creates the pause menu and Abe and places him the way the level
+    // select places him. Nothing is invented, only the menus and the logo film
+    // are skipped. Window: the copyright splash (page 16, 150 updates); with
+    // TETHYS_AE_START_HOLD it fires only while THROW + SNEAK (C + Z) are held,
+    // so the same disc still boots normally.
+    if (!sTethysStartDone && pPage->field_0_cam_id == MainMenuCams::eGameBootCopyrightSplashCam && !field_21E_changeScreenState)
+    {
+#if TETHYS_AE_START_HOLD
+        const bool bTethysFire = (Tethys_gPadWord & 0xC0u) == 0xC0u; // eThrowItem | eSneak
+#else
+        const bool bTethysFire = true;
+#endif
+        if (bTethysFire)
+        {
+            sTethysStartDone = 1;
+            field_23C_T80.Set(Flags::eBit25_CheatLevelSelectLoading);
+            field_244_lvl_id = static_cast<LevelIds>(TETHYS_AE_START_LEVEL);
+            field_246_path_id = TETHYS_AE_START_PATH;
+            field_248_camera = TETHYS_AE_START_CAM;
+            // The knob is Abe's WORLD position (what DDCheat's flight HUD prints
+            // as heroxy); the level select stores it plus the path's own start,
+            // which LoadNewGame_Update_4D0920 subtracts again.
+            const PathData* pTethysPath = Path_Get_Bly_Record_460F30(field_244_lvl_id, TETHYS_AE_START_PATH)->field_4_pPathData;
+            field_24A_abeXOff = static_cast<s16>(TETHYS_AE_START_X + pTethysPath->field_1A_abe_start_xpos);
+            field_24C_abeYOff = static_cast<s16>(TETHYS_AE_START_Y + pTethysPath->field_1C_abe_start_ypos);
+            field_24E_start_scale = -1; // full scale, the level select's 65535
+            field_218_target_page_index = static_cast<s16>(GetPageIndexFromCam_4D05A0(MainMenuCams::eGameIsLoading_ShaddapCam));
+            field_21A_target_button_index = NO_SELECTABLE_BUTTONS;
+            field_21C_camSwapEffectState = camTransEffectState::eDone_0;
+            field_21E_changeScreenState = 1;
+            return;
+        }
+    }
+#endif
 
     const auto currentCamId = pPage->field_0_cam_id;
     if (sInputObject_5BD4E0.field_0_pads[0].field_0_pressed && currentCamId != MainMenuCams::eGameBootCopyrightSplashCam && currentCamId != MainMenuCams::eUnknown20Cam && currentCamId != MainMenuCams::eControllerSelectionCam)
@@ -3707,7 +4229,21 @@ void MainMenuController::AnimationAndSoundLogic_4CFE80()
     {
         if (!field_22C_T80_animation_delay)
         {
+#ifdef TETHYS_SATURN
+            // SATURN (GameSpeak split): the block this entry animates with. A
+            // speaker's phrase without a cart is read HERE, before its voice
+            // below (AO 416.ao.1: voice and animation start on the same tick). A
+            // refused piece drops the request instead of retrying it every frame:
+            // a page change waits for it (ChangeScreenAndIntroLogic_4CF640).
+            u8** ppTethysRes = Tethys_MenuAnimRes(*this, field_228_res_idx);
+            if (!ppTethysRes && Tethys_gCartHeapBytes == 0 && Tethys_IsSpeakPhrase(field_228_res_idx))
+            {
+                field_228_res_idx = 0;
+            }
+            if (ppTethysRes)
+#else
             if (field_F4_resources.field_0_resources[sMainMenuFrameTable_561CC8[field_228_res_idx].field_4_menu_res_id])
+#endif
             {
                 if (field_228_res_idx > 0)
                 {
@@ -3763,15 +4299,33 @@ void MainMenuController::AnimationAndSoundLogic_4CFE80()
                         field_20_animation.field_4_flags.Set(AnimFlags::eBit2_Animate);
 
                         const AnimRecord& rec = AnimRec(sMainMenuFrameTable_561CC8[field_228_res_idx].field_0_animation);
+#ifdef TETHYS_SATURN
+                        field_20_animation.Set_Animation_Data_409C80(rec.mFrameTableOffset, ppTethysRes); // SATURN: the split's block
+#else
                         field_20_animation.Set_Animation_Data_409C80(
                             rec.mFrameTableOffset,
                             field_F4_resources.field_0_resources[sMainMenuFrameTable_561CC8[field_228_res_idx].field_4_menu_res_id]);
+#endif
                         if (sMainMenuFrameTable_561CC8[field_228_res_idx].field_4_menu_res_id != sMainMenuFrameTable_561CC8[field_220_frame_table_idx].field_4_menu_res_id)
                         {
                             Load_Anim_Pal_4D06A0(&field_20_animation);
                         }
 
                         field_20_animation.SetFrame_409D50(field_22A_anim_frame_num);
+#ifdef TETHYS_SATURN
+                        // SATURN (Exoddus, AO 387.ao.1's route 3): the chant glow
+                        // (src/glow_ae.cxx) arms with the chant and drops with any other
+                        // animation of the controller; the orbs are the Particles
+                        // AbeSpeak_Update spawns from the eOptionFlare block.
+                        if (field_228_res_idx == eAbe_Chant)
+                        {
+                            Tethys_GlowChantArmAE(&field_20_animation, field_F4_resources.field_0_resources[MenuResIds::eOptionFlare]);
+                        }
+                        else
+                        {
+                            Tethys_GlowChantDisarmAE();
+                        }
+#endif
 
                         if (field_228_res_idx != eAbe_Chant && field_23C_T80.Get(Flags::eBit24_Chant_Seq_Playing))
                         {
@@ -3816,7 +4370,27 @@ void MainMenuController::DrawMenuText_4D20D0(const MainMenuText* array, PrimHead
     const bool bSpeak2 = strstr(array->field_8_text, kSpeak2) != 0;
 
     char_type textBuffer[32] = {};
+#ifdef TETHYS_SATURN
+    // SATURN (U1c MM23): the PC wrote its keyboard keys over the menu art's
+    // button discs, "x" / "X" for confirm (every page that shows it takes
+    // eUnPause_OrConfirm) and "esc" for back. The pad's own letters go there,
+    // through the control codes the formatter resolves from the pad map
+    // (kConfirm = A, kBack = B by default), so a remap moves them as well.
+    // Centred like the PC's label (align 3). Not yet checked against the AE
+    // French art on a capture (the AO disc measured a 2 px bias on its own).
+    const char_type* pLabel = array->field_8_text;
+    if (!strcmp(pLabel, "x") || !strcmp(pLabel, "X"))
+    {
+        pLabel = kConfirm;
+    }
+    else if (!strcmp(pLabel, "esc"))
+    {
+        pLabel = kBack;
+    }
+    String_FormatString_4969D0(pLabel, textBuffer, ALIVE_COUNTOF(textBuffer), array->field_14 == 0);
+#else
     String_FormatString_4969D0(array->field_8_text, textBuffer, ALIVE_COUNTOF(textBuffer), array->field_14 == 0);
+#endif
 
     if (op2)
     {
@@ -3839,6 +4413,18 @@ void MainMenuController::DrawMenuText_4D20D0(const MainMenuText* array, PrimHead
     }
 
     FP fontScale;
+#ifdef TETHYS_SATURN
+    // SATURN (U3 T10): the scale is raw 16.16 already (MainMenu.hpp,
+    // MainMenuTextScale); same values, no soft float.
+    if (array->field_10_scale.raw == 0)
+    {
+        fontScale = FP_FromRaw(0xD70A); // FP_FromDouble(0.84f)
+    }
+    else
+    {
+        fontScale = FP_FromRaw(array->field_10_scale.raw);
+    }
+#else
     if (array->field_10_scale == 0.0f)
     {
         fontScale = FP_FromDouble(0.84f); // 0xD70A
@@ -3847,6 +4433,7 @@ void MainMenuController::DrawMenuText_4D20D0(const MainMenuText* array, PrimHead
     {
         fontScale = FP_FromDouble(array->field_10_scale);
     }
+#endif
 
     const s32 array_field_x = array->field_0_x;
     const s32 array_field_y = array->field_4_y;
@@ -3922,6 +4509,15 @@ void MainMenuController::Unload_AbeSpeakResources()
 
 void MainMenuController::Load_AbeSpeakResources()
 {
+#ifdef TETHYS_SATURN
+    // SATURN (GameSpeak split): the speaker's phrase piece (slot eUnknown,
+    // Tethys_MenuAnimRes) leaves with its page, before Abe's two heads come
+    // back. The four speaker pages' unloads call this, and nothing else does.
+    // The animation is on the idle piece by then: a page change waits for the
+    // last phrase to end (ChangeScreenAndIntroLogic_4CF640).
+    ResourceManager::FreeResource_49C330(field_F4_resources.field_0_resources[MenuResIds::eUnknown]);
+    field_F4_resources.field_0_resources[MenuResIds::eUnknown] = nullptr;
+#endif
     // Compact heap + load file to memory
     ResourceManager::Reclaim_Memory_49C470(0);
     ResourceManager::LoadResourceFile_49C170("ABESPEK2.BAN", nullptr);

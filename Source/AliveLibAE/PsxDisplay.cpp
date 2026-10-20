@@ -53,6 +53,7 @@ EXPORT void CC PSX_Calc_FrameSkip_4945D0()
     }
 }
 
+#ifndef TETHYS_SATURN // SATURN: the PC debug font; src/sys_saturn.cxx owns DebugFont_Init/Printf/Flush
 struct TextRecords final
 {
     char_type field_0_src_txt[1024];
@@ -91,7 +92,9 @@ EXPORT void CC DebugFont_Update_Text_4F8BE0(s32 idx)
 }
 
 ALIVE_ARY(1, 0xBB47CC, char_type, 600, sDebugFontTmpBuffer_BB47CC, {});
+#endif
 ALIVE_VAR(1, 0xBB4A24, s16, sbDebugFontLoaded_BB4A24, 0);
+#ifndef TETHYS_SATURN
 ALIVE_VAR(1, 0xBB47C8, s32, sDebugTextIdx_BB47C8, 0);
 
 
@@ -212,6 +215,7 @@ void PSX_DrawDebugTextBuffers(Bitmap* pBmp, const RECT& rect)
         }
     }
 }
+#endif // !TETHYS_SATURN: the PC debug font
 
 void PsxDisplay::ctor_41DC30()
 {
@@ -279,6 +283,12 @@ void PsxDisplay::PSX_Display_Render_OT_41DDF0()
     {
         // Single buffered rendering
         PSX_PutDrawEnv_4F5980(&field_10_drawEnv[0].field_0_draw_env);
+#ifdef TETHYS_SATURN
+        // SATURN (decision D-S4): no PC frame skip, every tick is drawn and paced.
+        PSX_DrawOTag_4F6540(field_10_drawEnv[0].field_70_ot_buffer);
+        PSX_DrawSync_4F6280(0);
+        PSX_VSync_4F6170(2);
+#else
         PSX_Calc_FrameSkip_4945D0();
         if (sCommandLine_NoFrameSkip_5CA4D1)
         {
@@ -299,6 +309,7 @@ void PsxDisplay::PSX_Display_Render_OT_41DDF0()
             }
             PSX_VSync_4F6170(2);
         }
+#endif
         PSX_PutDispEnv_4F58E0(&field_10_drawEnv[0].field_5C_disp_env);
         PSX_ClearOTag_4F6290(field_10_drawEnv[0].field_70_ot_buffer, field_A_buffer_size);
         field_C_buffer_index = 0;

@@ -64,7 +64,9 @@ struct Converted_Vag final
 };
 ALIVE_ASSERT_SIZEOF(Converted_Vag, 0x12);
 
-#if defined(TETHYS_SATURN) && !TETHYS_AE_TABLES
+#if defined(TETHYS_SATURN) && (!TETHYS_AE_TABLES || defined(TETHYS_GAME_AE))
+// SATURN (Exoddus, L4): ONE SLOT FOR EXODDUS TOO: one sound bank per level,
+// every VH id 0, MONK included (measured on the 11 AE levels, U1b).
 // SATURN 450.ao.1: ONE VAB SLOT, BECAUSE AO NEVER FILLS A SECOND ONE.
 // Every VAB AO ships carries VH id 0 (docs/AUDIO_VIDEO_PLAN.md 3.1, all 15
 // banks, MONK included) and each level has one sound block, so slots 1-3 of
@@ -122,7 +124,14 @@ struct MIDI_Channel final
     s32 field_4_priority;
     s32 field_8_left_vol;
     s32 field_C_vol; // pan vol?
+#if defined(TETHYS_GAME_AE)
+    // SATURN (Exoddus): the note's pitch multiplier in 16.16 fixed point (was an
+    // f32 built by a soft-double pow at every note-on, U6 F2); it crosses the
+    // sound seam as is (Sound.hpp, src/sound_saturn.cxx). Same size and offset.
+    u32 field_10_freq;
+#else
     f32 field_10_freq;
+#endif
     s32 field_14_time;
     s32 field_18_rightVol;
     MIDI_ADSR_State field_1C_adsr;
@@ -233,6 +242,25 @@ EXPORT s16 CC SsUtKeyOffV_4FE010(s16 idx);
 EXPORT s16 CC SsUtChangePitch_4FDF70(s16 voice, s32 /*vabId*/, s32 /*prog*/, s16 old_note, s16 old_fine, s16 new_note, s16 new_fine);
 
 #ifdef TETHYS_SATURN
+#if defined(TETHYS_GAME_AE)
+// SATURN (Exoddus): the same 2^(x/12) as Tethys_Pow12_Saturn below, returned in
+// 16.16 fixed point with no float at all: the Exoddus note-on, pitch bend and
+// SsUtChangePitch hand it to the sound seam as is (Sound.hpp).
+EXPORT u32 CC Tethys_Pow12Fx_Saturn(s32 x256);
+
+// SATURN (Exoddus): a * b16 / 65536 rounded down, saturated to 32 bits: one
+// 32x32->64 multiply (dmulu.l), no libgcc call. The pitch seam's only arithmetic.
+inline u32 Tethys_SndMulFx16(u32 a, u32 b16)
+{
+    const u64 p = static_cast<u64>(a) * b16;
+    const u32 hi = static_cast<u32>(p >> 32);
+    if (hi >> 16)
+    {
+        return 0xFFFFFFFFu;
+    }
+    return (hi << 16) | (static_cast<u32>(p) >> 16);
+}
+#endif
 // SATURN: shared fixed-point 2^(x/12) for the note-on / pitch-bend hot paths
 // (no FPU -- the f64 pow() these paths used costs thousands of cycles each).
 // x256 = exponent in 1/256-semitone units; returns the frequency multiplier.

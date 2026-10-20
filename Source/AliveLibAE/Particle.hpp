@@ -26,3 +26,13 @@ EXPORT void New_RandomizedChant_Particle_45BC70(class BaseAliveGameObject* pObj)
 EXPORT Particle* CC New_TintShiny_Particle_426C30(FP xpos, FP ypos, FP scale, Layer layer);
 EXPORT void CC New_ShootingZFire_Particle_4269B0(FP xpos, FP ypos, FP scale);
 EXPORT void CC New_ShootingFire_Particle_426890(FP xpos, FP ypos, s8 direction, FP scale);
+
+#ifdef TETHYS_SATURN
+#include "TethysObjectHooks.hpp"
+// SATURN (U1b T3): every ae_new<Particle> site null-tests its result before any
+// use (R1's scan, obj/R1/softscan2.py, plus BirdPortal.cpp's two sites guarded
+// by R2), and the factories returning one (New_Orb/TintChant/TintShiny,
+// New_DestroyOrCreateObject) are either discarded or null-tested by their
+// callers (Map.cpp:381): soft OOM.
+TETHYS_AE_SOFT_OOM_TYPE(Particle);
+#endif

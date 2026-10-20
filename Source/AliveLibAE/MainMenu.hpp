@@ -62,6 +62,25 @@ struct MainMenuControllerResources final
     u8** field_0_resources[11];
 };
 
+#ifdef TETHYS_SATURN
+// SATURN (U3 T10, U1c A5): a label's scale as raw 16.16, converted at COMPILE
+// time from the tables' float literals (RELIVE's English rows and the French
+// .inc rows alike) exactly as FP_FromDouble truncates them (0.75 -> 0xC000,
+// 0.84f -> 0xD70A, 0.88f -> 0xE147). The constructor is constexpr, so every
+// table stays constant-initialised data, and DrawMenuText_4D20D0 reads the
+// raw value with no soft float (the SH-2 has no FPU). 0 still means "0.84".
+struct MainMenuTextScale final
+{
+    s32 raw;
+    constexpr MainMenuTextScale()
+        : raw(0)
+    { } // an array row left out of its initializer (sMTxt_NewGame_562598[2])
+    constexpr MainMenuTextScale(f64 f)
+        : raw(static_cast<s32>(f * 0x10000))
+    { }
+};
+#endif
+
 struct MainMenuText final
 {
     s32 field_0_x;
@@ -71,7 +90,11 @@ struct MainMenuText final
     u8 field_D;
     u8 field_E;
     u8 field_F;
+#ifdef TETHYS_SATURN
+    MainMenuTextScale field_10_scale; // SATURN: see MainMenuTextScale
+#else
     f32 field_10_scale;
+#endif
     u8 field_14;
     u8 field_15;
     u8 field_16;
@@ -329,7 +352,16 @@ public:
     static MainMenuController* gMainMenuController;
 
 private:
+#ifdef TETHYS_SATURN
+    // SATURN: a member template on the callable instead of std::function (decision
+    // D-B3): <functional> is not on the Saturn include chain (13 files failed on
+    // this line), and std::function's empty-call path pulls libstdc++'s
+    // __throw_bad_function_call into the image. The five callers pass lambdas.
+    template <typename TFnOnGameSpeak>
+    MainMenuNextCam HandleGameSpeakInput(u32 input_held, TFnOnGameSpeak fnOnGameSpeak);
+#else
     MainMenuNextCam HandleGameSpeakInput(u32 input_held, std::function<MainMenuNextCam(InputCommands::Enum cmd)> fnOnGameSpeak);
+#endif
 
     void HandleCreditsControllerUpdate();
     void HandleMainMenuUpdate();

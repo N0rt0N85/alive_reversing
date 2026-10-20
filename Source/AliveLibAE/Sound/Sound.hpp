@@ -122,13 +122,25 @@ EXPORT s32 CC SND_Get_Buffer_Status_4EE8F0(s32 idx);
 EXPORT s32 CC SND_Stop_Sample_At_Idx_4EFA90(s32 idx);
 EXPORT s32 CC SND_Buffer_Set_Volume_4EFAD0(s32 idx, s32 vol);
 EXPORT SoundBuffer* CC SND_Get_Sound_Buffer_4EF970(s32 sampleIdx, s32 field10);
+#if defined(TETHYS_GAME_AE)
+// SATURN (Exoddus): pitch multipliers cross the seam in 16.16 fixed point
+// (AliveLibAE/Sound/PsxSpuApi.hpp Tethys_Pow12Fx_Saturn; src/sound_saturn.cxx):
+// no float anywhere between a note and its SCSP pitch word.
+EXPORT s32 CC SND_Buffer_Set_Frequency_4EFC90(s32 idx, u32 hzChangeFreq16);
+EXPORT s32 CC SND_Buffer_Set_Frequency_4EFC00(s32 idx, u32 freq16);
+#else
 EXPORT s32 CC SND_Buffer_Set_Frequency_4EFC90(s32 idx, f32 hzChangeFreq);
 EXPORT s32 CC SND_Buffer_Set_Frequency_4EFC00(s32 idx, f32 freq);
+#endif
 EXPORT s32 CC SND_LoadSamples_4EF1C0(const SoundEntry* pSnd, u32 sampleOffset, u8* pSoundBuffer, u32 sampleCount);
 EXPORT u32* CC SND_4F00B0(u32* /*a1*/, u32 /*a2*/, s32 /*a3*/);
 
 struct MIDI_Channel;
+#if defined(TETHYS_GAME_AE)
+EXPORT s32 CC SND_PlayEx_4EF740(const SoundEntry* pSnd, s32 panLeft, s32 panRight, u32 freq16, MIDI_Channel* pMidiStru, s32 playFlags, s32 priority); // SATURN: 16.16, see above
+#else
 EXPORT s32 CC SND_PlayEx_4EF740(const SoundEntry* pSnd, s32 panLeft, s32 panRight, f32 freq, MIDI_Channel* pMidiStru, s32 playFlags, s32 priority);
+#endif
 
 struct SoundApi final
 {

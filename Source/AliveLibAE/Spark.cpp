@@ -9,6 +9,9 @@
 #include "Abe.hpp"
 #include "PsxDisplay.hpp"
 #include "ScreenManager.hpp"
+#ifdef TETHYS_SATURN
+#include "TethysObjectHooks.hpp"
+#endif
 
 BaseGameObject* Spark::VDestructor(s32 flags)
 {
@@ -60,7 +63,13 @@ Spark* Spark::ctor_4CBBB0(FP xpos, FP ypos, FP scale, u8 count, s16 minAngle, s1
 
     field_5C_count = count;
 
+#ifdef TETHYS_SATURN
+    // SATURN (U1d T2, AO 383.ao.1 twin): the `else` of this test (no buffer, the
+    // spark dies) is the recovery: a soft refusal under the fatal default (D-B4).
+    field_54_ppSprxRes = Tethys_ResAllocSoft(ResourceManager::Resource_Sprx, 0, sizeof(SparkRes) * count, true /*locked*/, true /*reclaim*/);
+#else
     field_54_ppSprxRes = ResourceManager::Allocate_New_Locked_Resource_49BF40(ResourceManager::Resource_Sprx, 0, sizeof(SparkRes) * count);
+#endif
     if (field_54_ppSprxRes)
     {
         field_58_pRes = reinterpret_cast<SparkRes*>(*field_54_ppSprxRes);

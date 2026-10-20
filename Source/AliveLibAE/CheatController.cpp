@@ -10,6 +10,13 @@
 void CheatController_ForceLink()
 { }
 
+#ifdef TETHYS_SATURN
+// SATURN (U4 D4, U1b T15, AO 446.ao.3 twin): src/sys_saturn.cxx, 1 while R is
+// down on pad 1 (physical, so a remap does not move it). No arguments on either
+// side: an extern "C" arity mismatch links silently.
+extern "C" s32 Tethys_CheatButtonHeld();
+#endif
+
 ALIVE_VAR(1, 0x5BC120, CheatController*, pCheatController_5BC120, nullptr);
 
 const InputCommands::Enum sCheatKeyArray_MovieSelect_5515C0[8] = {
@@ -58,6 +65,12 @@ EXPORT void CC CheatController_Cheat_LevelSelect_421B00()
 
 EXPORT void CC CheatController_Cheat_PathSkip_421B30()
 {
+#if defined(TETHYS_SATURN) && !TETHYS_AE_SAV_RECORDS_CURRENT
+    // SATURN (D-T3): the NXTP records are not current yet (QuikSave.hpp): the
+    // code does nothing rather than tear the level down for a record that would
+    // bind its objects to the wrong TLVs.
+    return;
+#endif
     char_type nameBuffer[20];
 
     DestroyObjects_4A1F20();
@@ -114,7 +127,18 @@ void CheatController::Update_421C70()
     if (held)
     {
         // Only do cheat code check if shift is held
+#ifdef TETHYS_SATURN
+        // SATURN (U4 D4): the codes are typed holding R, as on the Oddysee disc
+        // (one gesture for both games). The PC's Shift is eRun, X on this pad,
+        // which also makes Abe run. R alone sends nothing (it enables GameSpeak
+        // bank 2), so the directions arrive alone and AE's exact compare below
+        // holds. The path skip loads the level's NXTPnnnn.SAV record, converted
+        // to big-endian offline like every quicksave on the disc
+        // (tools/ae/ae_save_schema.py).
+        if (Tethys_CheatButtonHeld())
+#else
         if (sInputObject_5BD4E0.field_0_pads[sCurrentControllerIndex_5C1BBE].field_0_pressed & InputCommands::Enum::eRun)
+#endif
         {
             for (auto& cheatEntry : sCheatArray_5515F8)
             {

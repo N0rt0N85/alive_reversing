@@ -86,9 +86,21 @@ struct PathData final
     u32 field_16_object_indextable_offset;
     s16 field_1A_abe_start_xpos;
     s16 field_1C_abe_start_ypos;
+#if defined(TETHYS_GAME_AE)
+    // SATURN (decision D-B4, AO's bt1082 twin): by pointer. By value it is a
+    // 1,024 B table in each of the 12 x 99 PathData entries, 1.25 MB of HWRAM
+    // .data for one table; one read site (Path.cpp:88), one write
+    // (PathDataExtensions.cpp:123).
+    const PathFunctionTable* field_1E_object_funcs;
+#else
     PathFunctionTable field_1E_object_funcs;
+#endif
 };
+#if defined(TETHYS_GAME_AE)
+ALIVE_ASSERT_SIZEOF(PathData, 0x20); // SATURN: the table is a pointer now
+#else
 ALIVE_ASSERT_SIZEOF(PathData, 0x41C);
+#endif
 
 struct PathBlyRec final
 {

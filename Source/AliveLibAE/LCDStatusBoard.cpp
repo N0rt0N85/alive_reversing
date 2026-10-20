@@ -118,6 +118,13 @@ void LCDStatusBoard::vUpdate_47B8D0()
 // Todo: clean up
 void LCDStatusBoard::vRender_47B900(PrimHeader** ppOt)
 {
+#ifdef TETHYS_SATURN
+    // SATURN (U1c L5b): not drawn while paused (Font.hpp, Tethys_PauseHidesText).
+    if (Tethys_PauseHidesText())
+    {
+        return;
+    }
+#endif
     if (!field_108_is_hidden)
     {
         char_type text[12] = {};
@@ -213,12 +220,23 @@ void LCDStatusBoard::vRender_47B900(PrimHeader** ppOt)
             flickerAmount);
         maxWidth = std::max(font1Width, maxWidth);
 
+#ifdef TETHYS_SATURN
+        // SATURN (U3 T10): Exoddus.exe computes these two as (40 * v) / 23 in
+        // integers (0x47BB30); RELIVE's `/ 0.575f` was a soft-float divide.
+        pScreenManager_5BB5F4->InvalidateRect_40EC90(
+            static_cast<s16>(PsxToPCX(static_cast<s32>(field_104_position_x))),
+            field_106_position_y,
+            static_cast<s16>(PsxToPCX(maxWidth)),
+            64,
+            pScreenManager_5BB5F4->field_3A_idx);
+#else
         pScreenManager_5BB5F4->InvalidateRect_40EC90(
             static_cast<s32>(field_104_position_x / 0.575f),
             field_106_position_y,
             static_cast<s32>(maxWidth / 0.575f),
             64,
             pScreenManager_5BB5F4->field_3A_idx);
+#endif
     }
 }
 

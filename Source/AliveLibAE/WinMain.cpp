@@ -45,6 +45,7 @@
 
 INITIALIZE_EASYLOGGINGPP
 
+#ifndef TETHYS_SATURN // SATURN: no gtest on the console (the p1shim stub has no GTEST_FLAG/InitGoogleMock)
 static void RunTests()
 {
     ::testing::GTEST_FLAG(throw_on_failure) = true;
@@ -66,13 +67,16 @@ static void RunTests()
     AETest::TestsBaseAnimatedWithPhysicsGameObject::BaseAnimatedWithPhysicsGameObjectTests();
     AETest::TestsMath::Math_Tests();
 }
+#endif
 
 static void InitOtherHooksAndRunTests()
 {
+#ifndef TETHYS_SATURN // SATURN: no tests, and VGA.cpp/Psx.cpp are PC files src/ replaces
     RunTests();
 
     VGA_ForceLink();
     Psx_ForceLink();
+#endif
     DynamicArray_ForceLink();
     Math_ForceLink();
     Game_ForceLink();
