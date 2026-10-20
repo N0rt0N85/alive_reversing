@@ -380,6 +380,38 @@ EXPORT void CC SsVabClose_4FC5B0(s32 vabId)
 }
 
 
+#if defined(TETHYS_SATURN)
+// SATURN (Exoddus R4, U6 R12/F6; Oddysee too since 2026-10-19): trunc(mant *
+// 2^-shift) for a 24-bit float mantissa, then the original's
+// std::min(static_cast<u16>(x), 32767): the u16 conversion keeps the low 16 bits
+// of the truncated value on the PC and on the SH-2 alike (U6 F6), so the wrap is
+// reproduced, not saturated.
+static u16 Tethys_AdsrFromMantissa(u32 mant, s32 shift)
+{
+    const u32 v = shift >= 0 ? (mant >> shift) : (mant << -shift);
+    const u32 w = v & 0xFFFFu;
+    return static_cast<u16>(w > 32767u ? 32767u : w);
+}
+
+// powf(2.0f, a * 0.25f) * 0.09f in float32 is Q[a & 3] * 2^(a >> 2), with Q[f]
+// the float32 product round(round(2^(f/4)) * 0.09f) = kMant[f] * 2^-kShift[f]
+// (scaling by 2^m commutes with float rounding). Exact for a correctly rounded
+// powf; indices 106, 109, 113, 114, 122 and 125 would move by 1-16 under a
+// powf one ulp off, and no Exoddus tone uses an attack index above 65.
+static u16 Tethys_AdsrAttack(s32 a)
+{
+    static const u32 kMant[4] = {12079596u, 14365141u, 8541564u, 10157689u};
+    static const u8 kShift[4] = {27, 27, 26, 26};
+    return Tethys_AdsrFromMantissa(kMant[a & 3], kShift[a & 3] - (a >> 2));
+}
+
+// pow(2, r) * 0.045f in double is 2^r * (12079596 * 2^-28) exactly (0.045f).
+static u16 Tethys_AdsrRelease(s32 r)
+{
+    return Tethys_AdsrFromMantissa(12079596u, 28 - r);
+}
+#endif
+
 EXPORT s16 CC SsVabOpenHead_4FC620(VabHeader* pVabHeader)
 {
     if (!pVabHeader)
@@ -445,12 +477,24 @@ EXPORT s16 CC SsVabOpenHead_4FC620(VabHeader* pVabHeader)
                 const s16 centre = pVagAttr->field_4_centre;
                 pData->field_A_shift_cen = 2 * (pVagAttr->field_5_shift + (centre << 7));
 
+#if defined(TETHYS_SATURN)
+                // SATURN (Exoddus R4, U6 R12/F6; Oddysee since 2026-10-19): the four
+                // values below, in integers, equal to what the float code computes,
+                // u16 wrap and clamp included (release 30 = 18,352 ms, 29 = 32,767).
+                // No powf/pow at bank load. Proof: obj/R4 adsr_tables.py (IEEE model,
+                // every index) and the host test (the float code compiled verbatim).
+                pData->field_0_adsr_attack = Tethys_AdsrAttack((pVagAttr->field_10_adsr1 >> 8) & 0x7F);
+                pData->field_4_adsr_decay = static_cast<u16>((16 * ((pVagAttr->field_10_adsr1 >> 4) & 0xF)) / 15);
+                pData->field_2_adsr_sustain_level = static_cast<u16>(80 * (~(u8) pVagAttr->field_10_adsr1 & 0xF));
+                pData->field_6_adsr_release = Tethys_AdsrRelease(pVagAttr->field_12_adsr2 & 0x1F);
+#else
                 f32 sustain_level = static_cast<f32>((2 * (~(u8) pVagAttr->field_10_adsr1 & 0xF)));
 
                 pData->field_0_adsr_attack = std::min(static_cast<u16>((powf(2.0f, ((pVagAttr->field_10_adsr1 >> 8) & 0x7F) * 0.25f) * 0.09f)), static_cast<u16>(32767));
                 pData->field_4_adsr_decay = static_cast<u16>((((pVagAttr->field_10_adsr1 >> 4) & 0xF) / 15.0f) * 16.0);
                 pData->field_2_adsr_sustain_level = std::min(static_cast<u16>((sustain_level / 15.0f) * 600.0), static_cast<u16>(32767));
                 pData->field_6_adsr_release = std::min(static_cast<u16>(pow(2, pVagAttr->field_12_adsr2 & 0x1F) * 0.045f), static_cast<u16>(32767));
+#endif
 
                 // If decay is at max, then nothing should play. So mute sustain too ?
                 if (pData->field_4_adsr_decay == 16)
@@ -732,7 +776,14 @@ EXPORT s32 CC MIDI_PlayMidiNote_4FCB30(s32 vabId, s32 program, s32 note, s32 lef
                     pChannel->field_1C_adsr.field_1_program = static_cast<u8>(program);
                     pChannel->field_1C_adsr.field_2_note_byte1 = static_cast<u8>(noteKeyNumber);
 
-#if ORIGINAL_PS1_BEHAVIOR
+#if defined(TETHYS_SATURN)
+                    // SATURN (Oddysee, 2026-10-19): the same table pitch as AO's own
+                    // music note-on (AO/Midi.cpp, Tethys_Pow12_Saturn), in f32 for this
+                    // seam: (note - shift_cen) / 256 semitones, the ORIGINAL_PS1_BEHAVIOR
+                    // exponent, without the soft-double pow every effect tone paid
+                    // (0.1-0.3 ms each). Error < 0.7 cent.
+                    pChannel->field_10_freq = Tethys_Pow12_Saturn(note - pVagIter->field_A_shift_cen);
+#elif ORIGINAL_PS1_BEHAVIOR
 
                     // Note: 1.059463094359 is the 12th root of 2.
                     // https://en.wikipedia.org/wiki/Twelfth_root_of_two
@@ -748,10 +799,26 @@ EXPORT s32 CC MIDI_PlayMidiNote_4FCB30(s32 vabId, s32 program, s32 note, s32 lef
                     pChannel->field_10_freq = static_cast<f32>(pow(1.059463094359, (f64)(note - pVagIter->field_A_shift_cen) * 0.00390625));
 #endif
 
+#if defined(TETHYS_SATURN)
+                    // SATURN (Exoddus U6 F3; Oddysee since 2026-10-19): no 10 ms busy-wait
+                    // between two notes. The PC armed it after any note on programs 4, 5,
+                    // 8, 23-25 and spun at the next note-on, inside the sequencer tick,
+                    // i.e. inside PSX_VSync: up to 140 ms per chant and 1.76 s per pass of
+                    // one Paramonia tune of master SH-2 (811 waits over one pass of the
+                    // 367 Exoddus SEQs, measured by obj/R4/seqtest). In Oddysee those
+                    // program numbers are effects (Abe's and Elum's steps, zaps,
+                    // possession, wells, levers: 36 of the 231 rows of its effect tables)
+                    // that reached AE's note-on through RELIVE: up to 10 ms of a 33 ms tick
+                    // each time another effect followed, about 30 ms when a Slig shot Abe.
+                    // The SCSP needs no stagger (KeyOnSlot owns the key-on discipline):
+                    // chords start together, as libsnd's did on the PSX. Neither armed nor
+                    // waited.
+#else
                     if (gSpuVars->sMidi_WaitUntil())
                     {
                         MIDI_Wait_4FCE50();
                     }
+#endif
 
                     GetSoundAPI().SND_PlayEx(
                         &gSpuVars->sSoundEntryTable16().table[vabId][pVagIter->field_10_vag],
@@ -767,10 +834,12 @@ EXPORT s32 CC MIDI_PlayMidiNote_4FCB30(s32 vabId, s32 program, s32 note, s32 lef
 #endif
                         pVagIter->field_E_priority);
 
+#if !defined(TETHYS_SATURN) // SATURN (U6 F3): never armed, see above
                     if (program == 4 || program == 5 || program == 8 || program == 23 || program == 24 || program == 25)
                     {
                         gSpuVars->sMidi_WaitUntil() = SYS_GetTicks() + 10;
                     }
+#endif
 
                     usedChannelBits |= (1 << midiChannel);
                 }
