@@ -301,6 +301,19 @@ extern "C" u32 Tethys_WedgeBytes()
 // next pinned page re-arms them when the room is there again.
 static const char_type* const kTethysMenuPins[3] = {"STP01C01.CAM", "STP01C02.CAM", "STP01C04.CAM"};
 static const u32 kTethysMenuPinMargin = 262144;
+// 476.ae.4: THE HEADROOM ABOVE THE PINS. A locked last-fit block made while the
+// pins are held lands right UNDER them: the FG1 CHNK array of the page being
+// shown is built just after the stream that armed them. When the pins go, that
+// block stays as an island between their hole and the rest of the free heap.
+// Ymir, 2026-10-21, no cart: STP01C01's 1,696 B CHNK left 278,572 + 284,688 B
+// free where ABESPEAK.BAN's staging block needs 475,136 B in one piece, and the
+// menu died on "wz STP01C01 464k" the moment it reloaded Abe's head (its idle
+// demo, or a page). So a block of this size takes the top first, the pins go
+// under it and it is freed at once: those locked blocks land in the gap ABOVE
+// the pins. The largest CHNK of a menu page is STP01C04's (Load, pinned): 80
+// FG1 blocks x 168 B + 16 = 13,456 B.
+static const u32 kTethysMenuPinHeadroom = 32768;
+static const u32 kTethysMenuPinRoomId = 0x4D4F4F52; // 'ROOM'
 // The largest pinned page's own chunks (STP01C04's FG1, 134,288 B) + slack: a
 // stream that reads or fills a pin while the heap is shorter than this gives the
 // pins back BEFORE it starts (they cannot be lent back mid-stream).
@@ -394,7 +407,7 @@ static void Tethys_MenuPinsBeforeStream(const char_type* pCamName)
             break;
         }
         const u32 bytes = static_cast<u32>(pRec->field_10_num_sectors) << 11;
-        if (total + bytes + sizeof(ResourceManager::Header) + kTethysMenuPinMargin > freeBytes)
+        if (total + bytes + sizeof(ResourceManager::Header) + kTethysMenuPinMargin + kTethysMenuPinHeadroom > freeBytes)
         {
             break;
         }
@@ -408,15 +421,28 @@ static void Tethys_MenuPinsBeforeStream(const char_type* pCamName)
         return;
     }
     sTethysMenuPinPeakSnap = sPeakedManagedMemUsage_AB4A08;
+    u8** ppRoom = ResourceManager::Alloc_New_Resource_ImplEx(
+        ResourceManager::Resource_DecompressionBuffer, kTethysMenuPinRoomId,
+        kTethysMenuPinHeadroom, true, ResourceManager::eLastMatching,
+        false /*bReclaimOnFail*/, false /*bFatalOnFail*/);
+    if (!ppRoom)
+    {
+        sPeakedManagedMemUsage_AB4A08 = sTethysMenuPinPeakSnap;
+        return; // no headroom, no pins: the menu reads as it always did
+    }
     u8** ppBlock = ResourceManager::Alloc_New_Resource_ImplEx(
         ResourceManager::Resource_DecompressionBuffer, kTethysMenuPinResId,
         total, true, ResourceManager::eLastMatching,
         false /*bReclaimOnFail*/, false /*bFatalOnFail*/);
+    ResourceManager::FreeResource_49C330(ppRoom);
     if (!ppBlock)
     {
         sPeakedManagedMemUsage_AB4A08 = sTethysMenuPinPeakSnap;
         return; // fragmented right now: no pins, the menu reads as it always did
     }
+    // pk as if the headroom had never been taken: the pins alone on top of the rest.
+    sPeakedManagedMemUsage_AB4A08 = (sManagedMemoryUsedSize_AB4A04 > sTethysMenuPinPeakSnap)
+                                        ? sManagedMemoryUsedSize_AB4A04 : sTethysMenuPinPeakSnap;
     sppTethysMenuPins = ppBlock;
     sTethysMenuPinBytes = total + sizeof(ResourceManager::Header);
     Tethys_CamPinsInit(*ppBlock, names, sectors, n);

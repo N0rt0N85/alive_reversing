@@ -76,7 +76,6 @@ extern "C" u32 Tethys_RawTicks(void);
 // before the sprite flush by src/sys_saturn.cxx).
 extern "C" u32 Tethys_gInAnimate;
 extern "C" void Tethys_CelPrefetch();
-extern "C" void Tethys_GlowTickAE(); // src/glow_ae.cxx (declared with its twins in TethysObjectHooks.hpp)
 static u32 sTethysPhase0 = 0;
 extern "C" void Tethys_ConfigLoad(void); // src/sys_saturn.cxx: the options record
 #endif
@@ -556,7 +555,15 @@ EXPORT void CC Game_Run_466D40()
     Tethys_ConfigLoad();
 #endif
 
+#ifdef TETHYS_SATURN
+    // SATURN: Camera is #pragma pack(2) (Camera.hpp, the PC's 0x32 bytes), so the
+    // compiler may put this local at a 2-aligned stack slot (it did: sp+30), and
+    // DynamicArray::ctor's 32-bit stores into it raise a CPU address error on the
+    // console and on Mednafen at boot (Ymir lets them through). 4-aligned here.
+    alignas(4) Camera camera;
+#else
     Camera camera;
+#endif
     camera.ctor_480DD0();
 
 #ifndef TETHYS_SATURN // SATURN (L5): no Pxtd chunk in any AE level; AO skips its twin too
@@ -863,10 +870,6 @@ EXPORT void CC Game_Loop_467230()
             GetGameAutoPlayer().SyncPoint(SyncPoints::AnimateAll);
             AnimationBase::AnimateAll_40AC20(gObjList_animations_5C1A24);
 #ifdef TETHYS_SATURN
-            // SATURN (Exoddus, src/glow_ae.cxx): a still Abe under dust that moved
-            // is uploaded again with its light, and once more without it when the
-            // dust has gone. Before the prefetch: no slave batch is in flight.
-            Tethys_GlowTickAE();
             // SATURN (R2's request, AO 445.ao.1 twin): hand the NEXT tick's cels
             // to the slave SH-2, which decodes them while VRender and the OT walk
             // run below.
