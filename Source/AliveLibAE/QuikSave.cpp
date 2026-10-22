@@ -260,6 +260,20 @@ const QuickSaveFlagTypeTable kQuickSaveFlagsTable = {
 
 ALIVE_VAR(1, 0x547794, QuickSaveFlagTypeTable, kObjectTypeAttributesTable_byte_547794, kQuickSaveFlagsTable);
 
+#if defined(TETHYS_AE_ZONE) && TETHYS_AE_ZONE
+extern "C" const char_type* Tethys_ZoneAddrMissing(const void* p);            // src/zone_ae.cxx (11.20 step 2)
+extern "C" [[noreturn]] void Tethys_ZoneFatal(const char_type* what, const char_type* name);
+#endif
+
+#ifdef TETHYS_SATURN
+u8 Tethys_QuicksaveTlvAttr(s32 type)
+{
+    return (type >= 0 && type < static_cast<s32>(ALIVE_COUNTOF(kObjectTypeAttributesTable_byte_547794.mTypes)))
+               ? kObjectTypeAttributesTable_byte_547794.mTypes[type]
+               : 0;
+}
+#endif
+
 ALIVE_VAR(1, 0x5c1bbc, u16, bUseAltSaveHeader_5C1BBC, 0);
 
 ALIVE_VAR(1, 0xbb234c, u16, sQuickSave_saved_switchResetters_count_BB234C, 0);
@@ -270,6 +284,17 @@ void QuikSave_RestoreBlyData_D481890_4C9BE0(const u8* pSaveData)
 
     while (*reinterpret_cast<const u32*>(pSaveData2) != 0)
     {
+#if defined(TETHYS_AE_ZONE) && TETHYS_AE_ZONE
+        // AE_ENGINE_DECISION.md 11.20 step 2: a CreateFromSaveState of a class
+        // of the code zone only runs while that class is in the zone.
+        {
+            const char_type* pMissing = Tethys_ZoneAddrMissing(reinterpret_cast<const void*>(sQuicksaveLoadFunctionTable_560C34.mFns[*pSaveData2]));
+            if (pMissing)
+            {
+                Tethys_ZoneFatal("ZN save", pMissing);
+            }
+        }
+#endif
         pSaveData2 += sQuicksaveLoadFunctionTable_560C34.mFns[*pSaveData2](reinterpret_cast<const u8*>(pSaveData2)) / sizeof(u16);
     }
 
@@ -313,6 +338,25 @@ void QuikSave_RestoreBlyData_D481890_4C9BE0(const u8* pSaveData)
                 }
                 ResourceManager::FreeResource_49C330(ppPathRes);
             }
+#ifdef TETHYS_SATURN
+            else
+            {
+                // SATURN (AE_ENGINE_DECISION.md 11.20 step 1): a path that is not
+                // in the heap takes its state from the save into Map.cpp's table,
+                // in the same walk order, so the stream stays aligned.
+                s32 count = 0;
+                TethysPathEntry* pEntries = Tethys_PathTableSlice(i, &count);
+                for (s32 k = 0; k < count; k++)
+                {
+                    const u32 attr = pEntries[k].field_0_off_attr >> 14;
+                    if (attr == 1 || attr == 2)
+                    {
+                        pEntries[k].field_2_flags = *pSrcFlags++;
+                        pEntries[k].field_3_state = *pSrcFlags++;
+                    }
+                }
+            }
+#endif
         }
     }
     pResourceManager_5C1BB0->LoadingLoop_465590(FALSE);
@@ -448,6 +492,38 @@ EXPORT void CCSTD Quicksave_SaveBlyData_4C9660(u8* pSaveBuffer)
                 }
                 ResourceManager::FreeResource_49C330(ppPathRes);
             }
+#ifdef TETHYS_SATURN
+            else
+            {
+                // SATURN (AE_ENGINE_DECISION.md 11.20 step 1): a path that is not in
+                // the heap saves from Map.cpp's table, the same bytes in the same
+                // order as its block would give.
+                s32 count = 0;
+                const TethysPathEntry* pEntries = Tethys_PathTableSlice(i, &count);
+                for (s32 k = 0; k < count; k++)
+                {
+                    if (sTethysQsEnd && pSaveBuffer + 2 > sTethysQsEnd)
+                    {
+                        continue; // R3: never past the Quicksave
+                    }
+                    const u32 attr = pEntries[k].field_0_off_attr >> 14;
+                    u8 flags = pEntries[k].field_2_flags;
+                    if (attr == 1)
+                    {
+                        if (flags & TLV_Flags::eBit1_Created)
+                        {
+                            flags = static_cast<u8>(flags & ~(TLV_Flags::eBit1_Created | TLV_Flags::eBit2_Destroyed));
+                        }
+                    }
+                    else if (attr != 2)
+                    {
+                        continue; // type 0 ignored
+                    }
+                    *pSaveBuffer++ = flags;
+                    *pSaveBuffer++ = pEntries[k].field_3_state;
+                }
+            }
+#endif
         }
     }
 

@@ -20,9 +20,6 @@
 #include "Sys_common.hpp"
 #include "Renderer/IRenderer.hpp"
 #include <gmock/gmock.h>
-#ifdef TETHYS_SATURN
-#include "ShadowZone.hpp" // SATURN: Tethys_DustLight's zone test
-#endif
 
 #ifdef TETHYS_SATURN
 // ============================================================================
@@ -61,17 +58,54 @@ extern "C" unsigned char Tethys_gProbeOn;
 // ao262.10: the two silent object-killers (Init returns 0, the object dies).
 extern "C" unsigned int Tethys_gVramFail;
 extern "C" unsigned int Tethys_gPalFail;
+// SATURN (AE_ENGINE_DECISION.md 11.21): palette changes asked of an animation
+// that has no palette (its Init was refused), skipped (Load_Pal_40A530).
+extern "C" {
+unsigned int Tethys_gPalSkip = 0;
+}
+// AE_ENGINE_DECISION.md 11.22, textures for what is drawn (src/renderer_saturn.cxx).
+extern "C" int Tethys_TexSlotLive(s16 x, s16 y);
+extern "C" void Tethys_TexSlotEvictable(s16 x, s16 y);
+extern "C" u32 Tethys_gUploadDrawn;
+extern "C" u32 Tethys_gTexRoom;
+// The renderer's room count at the last refused draw-time upload, and the
+// refusals, cumulative (read in a dump).
+static u32 sTethysUpFailRoom = 0;
+extern "C" {
+unsigned int Tethys_gUploadDrawnFail = 0;
+}
+
+// 11.22: an animation drawn through vRender and not drawn since its last
+// prefetch is off screen: its frames wait for a draw, so its next cel is not
+// posted to the slave, and the scratch keeps the cels the screen needs.
+static inline bool Tethys_CelSkipAE(AnimationBase* p)
+{
+    const bool bSeen = p->field_4_flags.Get(AnimFlags::eTethysSeen);
+    p->field_4_flags.Clear(AnimFlags::eTethysSeen);
+    return p->field_4_flags.Get(AnimFlags::eTethysDrawn) && !bSeen;
+}
 
 // AE has no clustered blood cels (the AE converter's CLUSTER_CELS is empty), so
-// nothing is refused by the cache or the prefetch. The GameSpeak chant glow
-// (src/chant_glow_ae.cxx) needs no refusal either, unlike AO's: Abe's chant
-// cels are too big to be cached or prefetched, and the composite decodes the
-// orb cels into its own buffer, never reading a cache entry.
+// nothing is refused by the cache or the prefetch. The light laid on Abe
+// (src/glow_ae.cxx) needs no refusal either, unlike AO's chant glow: it never
+// writes a cache entry (a cached cel is copied before it is lit) and only
+// reads them, through Tethys_CelPeekAE below, when no slave batch is in flight.
 #define TETHYS_CEL_ANIM_LIST gObjList_animations_5C1A24
 #define TETHYS_CEL_REFUSE_BLOCK(pBlock) false
 #define TETHYS_CEL_PREFETCH_OFF() 0
+#define TETHYS_CEL_SKIP_ANIM(pBase) Tethys_CelSkipAE(pBase)
 #include "TethysCelCache.hpp"
 #include "TethysObjectHooks.hpp" // the exported translation hooks, checked against their callers
+
+// SATURN (src/glow_ae.cxx): the cache's decoded copy of a particle's cel, read
+// without settling anything. Its callers run in AnimateAll and right after it,
+// before Tethys_CelPrefetch posts a batch; a batch in flight answers nullptr
+// (the caller decodes into its own buffer instead).
+extern "C" const u8* Tethys_CelPeekAE(const u8* pSrc, u32 len)
+{
+    const long i = Tethys_gSlzActive ? -1 : TethysCelLookup(pSrc, len);
+    return i < 0 ? nullptr : Tethys_gDbufScratch + sTethysCel[i].off;
+}
 
 // bt863/bt955: firewall gauges (declared by src/sys_saturn.cxx).
 extern "C" volatile s32 Tethys_gAnimBadBlock = 0; // garbage blocks and compression types skipped
@@ -154,60 +188,6 @@ EXPORT s32 CC Animation_OnFrame_Null_455F60(void*, s16*)
 {
     return 1;
 }
-
-#ifdef TETHYS_SATURN
-// SATURN (Exoddus; Romain on 473.ae.1, "la poussiere dans exoddus est quasi
-// invisible"): THE DUST'S LIGHT, WHERE THE PC ALSO LAYS IT ON ABE.
-//   The texel arithmetic is already the PC's own. The exe modulates through
-// the table PSX_EMU_SetDispType_4F9960 builds, c * (tint >> 3) >> 4 per 5-bit
-// channel, and adds with a 5-bit clamp (PsxRender.cpp): the renderer's
-// ShadeCramEntry and VDP2's addition, exactly; the entries the converter cuts
-// (c <= 3) add 0 there too. What differs is WHERE the light can go. The PC adds
-// the cloud over Abe (Foreground_36) and overlapping puffs add up; here the
-// dust is drawn one layer under him (above), so the share that falls on his
-// body cannot be drawn at all.
-//   Measured on MIP01C01, light the Saturn shows against all the light the PC
-// adds (scratch plates of 2026-10-19): walk 0.9 to 1.15, run 0.73 to 1.19 (mean
-// 0.92), knockback 0.93 to 1.09: Abe leaves his puffs behind or lies beside
-// them. Slide stop 0.32 to 0.59 (mean 0.44), slide turn 0.6 to 0.76, roll 0.38
-// to 0.83, landing 0.56: he stands over his own cloud, 48 to 57 % of the PC's
-// light is on him. Those puffs are burned brighter by the measured ratio, x2
-// for the stop (levels 11/8/1 instead of 5/4/0, mean 1.04) and x1.5 for the
-// others (8/6/0), so the cloud around him carries the PC's light: brighter
-// than the PC per pixel on the ground, on purpose, since it stands for the
-// light the PC puts on his legs. Walk, run and knockback stay the PC's.
-//   Never inside a shadow zone: there the PC's tint changes every frame by the
-// zone's own amount, and a gain on top of it would light up the dark. A puff
-// born where the zones leave its tint alone gets the gain, any other keeps the
-// PC's arithmetic. One test at birth: a puff does not move.
-static void Tethys_DustLight(Particle* pDust, s16 motion, FP xpos, FP ypos)
-{
-    s32 k16 = 24; // the gain in sixteenths
-    switch (motion)
-    {
-        case eAbeMotions::Motion_1_WalkLoop_44FBA0:
-        case eAbeMotions::Motion_33_RunLoop_4508E0:
-        case eAbeMotions::Motion_71_Knockback_455090:
-            return;
-        case eAbeMotions::Motion_25_RunSlideStop_451330:
-            k16 = 32;
-            break;
-        default:
-            break;
-    }
-    s16 r = pDust->field_D0_r;
-    s16 g = pDust->field_D2_g;
-    s16 b = pDust->field_D4_b;
-    ShadowZone::ShadowZones_Calculate_Colour_463CE0(FP_GetExponent(xpos), FP_GetExponent(ypos), pDust->field_D6_scale, &r, &g, &b);
-    if (r != pDust->field_D0_r || g != pDust->field_D2_g || b != pDust->field_D4_b)
-    {
-        return; // inside a zone: the PC's tint, untouched
-    }
-    pDust->field_D0_r = static_cast<s16>((r * k16) >> 4);
-    pDust->field_D2_g = static_cast<s16>((g * k16) >> 4);
-    pDust->field_D4_b = static_cast<s16>((b * k16) >> 4);
-}
-#endif
 
 EXPORT s32 CC Animation_OnFrame_Common_4561B0(void* pObjPtr, s16* pData)
 {
@@ -320,7 +300,11 @@ EXPORT s32 CC Animation_OnFrame_Common_4561B0(void* pObjPtr, s16* pData)
                 break;
         }
 #ifdef TETHYS_SATURN
-        Tethys_DustLight(pPartical, pObj->field_106_current_motion, xpos, ypos);
+        // SATURN (Exoddus; Romain, 2026-10-20: "Elle devrait etre devant comme sur
+        // pc, et s'ajouter a Abe"): the puff stays one layer under Abe (above), and
+        // the share of its light that falls on him is laid into his cel by
+        // src/glow_ae.cxx, at the PC's own tint: this reports the puff.
+        Tethys_GlowDustAE(ppAnimData);
 #endif
     }
     return 1;
@@ -536,26 +520,21 @@ void Animation::UploadTexture(const FrameHeader* pFrameHeader, const PSX_RECT& v
             Tethys_gDbufBytes[kPar] += destLen;
         }
         pPixels = pDst + celOff;
-        // SATURN (Exoddus, AO 387.ao.1's route 3): the GameSpeak chant glow,
-        // composited into the decoded cel before the upload, the one point where
-        // Abe's cel exists as writable indices (src/chant_glow_ae.cxx). Everywhere
-        // else this costs one load and a branch. A cel the composite changed is
-        // no longer the pristine decode, so a cached one is forgotten (Abe's chant
-        // cels are 6,264 B and more, past kTethysCelMax: they decode at offset 0
-        // and are never cached; the test stands for the case they would be).
-        if (Tethys_gChantGlowOn && !bWider
-            && Tethys_ChantGlowCompositeAE(this, pDst + celOff, pFrameHeader->field_4_width,
-                                           pFrameHeader->field_5_height,
-                                           static_cast<s32>(Tethys_gDbufScratchBytes - static_cast<u32>(celOff))) > 0
-            && celOff > 0)
-        {
-            Tethys_DbufScratchForget();
-        }
     }
     else if (ct != CompressionType::eType_0_NoCompression)
     {
         Tethys_gAnimBadBlock++;
         return;
+    }
+    // SATURN (Exoddus, AO 387.ao.1's route 3): the additive light that falls on
+    // Abe (the chant's orbs, his dust), laid into the cel before the upload, the
+    // one point where it exists as writable indices (src/glow_ae.cxx). Everywhere
+    // else this costs one load and a branch. The composite answers what to
+    // upload: this cel untouched, or its lit copy (a cache entry is never
+    // written, so nothing is forgotten).
+    if (Tethys_gGlowOn && !bWider && field_4_flags.Get(AnimFlags::eBit13_Is8Bit))
+    {
+        pPixels = Tethys_GlowCompositeAE(this, pPixels, pFrameHeader->field_4_width, pFrameHeader->field_5_height);
     }
     if (bWider)
     {
@@ -682,6 +661,29 @@ void Animation::DecompressFrame()
         Invoke_CallBacks_40B7A0();
     }
 
+#ifdef TETHYS_SATURN
+    // SATURN (AE_ENGINE_DECISION.md 11.22): TEXTURES FOR WHAT IS DRAWN. An
+    // animation already drawn through vRender uploads its frame when it is
+    // drawn (vRender_40B820), not here: the frame's events above ran, so the
+    // game does not change, only the upload waits. Off screen it then costs
+    // neither a decode nor texture memory, and the renderer may take its slot
+    // back (src/renderer_saturn.cxx AeEvictStale). An animation never drawn by
+    // vRender uploads here, as before: Blood, Water and ZapLine draw from the
+    // rect themselves, an AnimationUnknown copies its parent's polygon.
+    if (field_4_flags.Get(AnimFlags::eTethysDrawn))
+    {
+        field_4_flags.Set(AnimFlags::eTethysPending);
+        field_4_flags.Clear(AnimFlags::eTethysUpFail);
+        return;
+    }
+    Tethys_UploadFrame(pFrameInfo);
+}
+
+// DecompressFrame's upload half: the current frame into the slot keyed by the
+// rect, without the frame's events.
+void Animation::Tethys_UploadFrame(const FrameInfoHeader* pFrameInfo)
+{
+#endif
     const FrameHeader* pFrameHeader = reinterpret_cast<const FrameHeader*>(&(*field_20_ppBlock)[pFrameInfo->field_0_frame_header_offset]);
 
     // No VRAM allocation
@@ -759,6 +761,47 @@ void Animation::vRender_40B820(s32 xpos, s32 ypos, PrimHeader** ppOt, s16 width,
     {
         return;
     }
+
+#ifdef TETHYS_SATURN
+    // SATURN (AE_ENGINE_DECISION.md 11.22): the frame goes up here, when it is
+    // drawn (DecompressFrame). The first draw marks the animation and its slot
+    // (the one Init filled becomes evictable); then a frame change waiting, or a
+    // slot the renderer took back while the animation was off screen, uploads
+    // the current frame before the polygon is built. A refused upload (no room
+    // even after taking back a stale slot) leaves the animation undrawn, as any
+    // refused upload does, and is tried again at its next frame change or once
+    // the renderer reports room that may have appeared (Tethys_gTexRoom), not
+    // at every draw: each try is a decode.
+    if (field_84_vram_rect.w > 0)
+    {
+        if (!field_4_flags.Get(AnimFlags::eTethysDrawn))
+        {
+            field_4_flags.Set(AnimFlags::eTethysDrawn);
+            Tethys_TexSlotEvictable(field_84_vram_rect.x, field_84_vram_rect.y);
+        }
+        field_4_flags.Set(AnimFlags::eTethysSeen);
+        if (field_4_flags.Get(AnimFlags::eTethysPending)
+            || ((!field_4_flags.Get(AnimFlags::eTethysUpFail) || Tethys_gTexRoom != sTethysUpFailRoom)
+                && !Tethys_TexSlotLive(field_84_vram_rect.x, field_84_vram_rect.y)))
+        {
+            field_4_flags.Clear(AnimFlags::eTethysPending);
+            const FrameInfoHeader* pInfo = Get_FrameHeader_40B730(-1);
+            if (pInfo != &sBlankFrameInfoHeader_5440AC)
+            {
+                Tethys_gUploadDrawn = 1;
+                Tethys_UploadFrame(pInfo);
+                Tethys_gUploadDrawn = 0;
+                const bool bFail = !Tethys_TexSlotLive(field_84_vram_rect.x, field_84_vram_rect.y);
+                field_4_flags.Set(AnimFlags::eTethysUpFail, bFail);
+                if (bFail)
+                {
+                    sTethysUpFailRoom = Tethys_gTexRoom;
+                    Tethys_gUploadDrawnFail++;
+                }
+            }
+        }
+    }
+#endif
 
     FrameInfoHeader* pFrameInfoHeader = Get_FrameHeader_40B730(-1);
     FrameHeader* pFrameHeader = (FrameHeader*) &(*field_20_ppBlock)[pFrameInfoHeader->field_0_frame_header_offset];
@@ -1496,6 +1539,18 @@ void Animation::Load_Pal_40A530(u8** pAnimData, s32 palOffset)
     {
         // +4 = skip CLUT len
         const u8* pPal = &(*pAnimData)[palOffset];
+#ifdef TETHYS_SATURN
+        // SATURN (11.21): an Init refused for want of a VRAM rect (`vf`) leaves the
+        // animation without a palette, and its owner lives on, invisible, as
+        // Oddysee's do. A palette change on it (a Mudokon's mood, Mudokon.cpp
+        // 1290-1321) is then a no-op instead of RELIVE's fatal: the PC original
+        // has no such check. The heap tour of 477.ae.95 died here at MIP04C28.
+        if (field_90_pal_depth == 0)
+        {
+            Tethys_gPalSkip++;
+            return;
+        }
+#endif
         if (field_90_pal_depth != 16 && field_90_pal_depth != 64 && field_90_pal_depth != 256)
         {
             LOG_ERROR("Bad pal depth " << field_90_pal_depth);

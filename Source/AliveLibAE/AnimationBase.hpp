@@ -79,6 +79,17 @@ enum AnimFlags
 
     eBit25_bDecompressDone = 0x1000000,
 
+#ifdef TETHYS_SATURN
+    // SATURN (AE_ENGINE_DECISION.md 11.22): textures for what is drawn. Drawn
+    // through vRender at least once (its frames then go up when it is drawn); a
+    // frame change waiting for that upload; drawn since its last cel prefetch;
+    // the last draw-time upload found no room (no retry before the next frame).
+    eTethysDrawn = 0x2000000,
+    eTethysPending = 0x4000000,
+    eTethysSeen = 0x8000000,
+    eTethysUpFail = 0x10000000,
+#endif
+
     // Bit 26-32 = Nothing?
 };
 

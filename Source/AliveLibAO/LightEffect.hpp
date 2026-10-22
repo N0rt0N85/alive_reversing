@@ -43,4 +43,12 @@ public:
 };
 ALIVE_ASSERT_SIZEOF(LightEffect, 0xFC);
 
+#ifdef TETHYS_SATURN
+// SATURN 477.ao.2: the PlayStation's star twinkle (LightEffect.cpp), shared with
+// the four gold glows the Stockyards put in the night sky (DoorLight.cpp).
+void Tethys_StarArm(BaseAnimatedWithPhysicsGameObject* pObj, s32* pNextFlip, s32* pDim);
+void Tethys_StarTwinkle(BaseAnimatedWithPhysicsGameObject* pObj, s32* pNextFlip, s32* pDim);
+void Tethys_StarRender(BaseAnimatedWithPhysicsGameObject* pObj, PrimHeader** ppOt);
+#endif
+
 } // namespace AO

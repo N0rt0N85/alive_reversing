@@ -138,6 +138,11 @@ public:
     void GetPathResourceBlockPtrs();
     u8** GetPathResourceBlockPtr(u32 pathId);
     void ClearPathResourceBlocks();
+#ifdef TETHYS_SATURN
+    // SATURN (AE_ENGINE_DECISION.md 11.20, step 1): only the current path in the heap (Map.cpp).
+    void Tethys_PathPagingLevelLoaded();
+    void Tethys_PathPagingSwitch(s16 fromPath, s16 toPath);
+#endif
 
     EXPORT void RemoveObjectsWithPurpleLight_480740(s16 a2);
     EXPORT void Handle_PathTransition_481610();
@@ -189,3 +194,21 @@ ALIVE_ASSERT_SIZEOF(Map, 0xDC);
 ALIVE_VAR_EXTERN(Map, gMap_5C3030);
 ALIVE_VAR_EXTERN(s16, sMap_bDoPurpleLightEffect_5C311C);
 extern const CameraSwapEffects kPathChangeEffectToInternalScreenChangeEffect_55D55C[10];
+
+#ifdef TETHYS_SATURN
+// SATURN (AE_ENGINE_DECISION.md 11.20, step 1): the state of the TLVs of the
+// paths that are not in the heap (Map.cpp). One entry per TLV, in the walk
+// order of Quicksave_SaveBlyData_4C9660: the TLV's offset in its path's object
+// block (low 14 bits) and its quicksave attribute (top 2 bits), then its flags
+// and tlv_state bytes.
+struct TethysPathEntry final
+{
+    u16 field_0_off_attr;
+    u8 field_2_flags;
+    u8 field_3_state;
+};
+// The entries of a path that is NOT resident, or nullptr (*pCount = 0).
+TethysPathEntry* Tethys_PathTableSlice(s32 pathId, s32* pCount);
+// Path::TLV_Reset_4DB8E0 for a path that is not resident.
+void Tethys_PathTableReset(s32 pathId, u32 tlvOffset, s16 hiFlags, s8 bSetCreated, s8 bSetDestroyed);
+#endif

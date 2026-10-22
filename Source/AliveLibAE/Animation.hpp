@@ -130,6 +130,9 @@ public:
     EXPORT void Invoke_CallBacks_40B7A0();
 
     void UploadTexture(const FrameHeader* pFrameHeader, const PSX_RECT& vram_rect, s16 width_bpp_adjusted);
+#ifdef TETHYS_SATURN
+    void Tethys_UploadFrame(const FrameInfoHeader* pFrameInfo); // DecompressFrame's upload half (11.22)
+#endif
 
     u16 field_10_frame_delay;
     u16 field_12_scale; // padding?

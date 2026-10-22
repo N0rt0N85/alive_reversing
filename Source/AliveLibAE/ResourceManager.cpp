@@ -559,6 +559,96 @@ void Tethys_BupReleaseHeap(u8** ppBlock)
     }
     sPeakedManagedMemUsage_AB4A08 = sTethysBupPeakSnap; // a loan, never a tenant
 }
+
+// ---- AE_ENGINE_DECISION.md 11.22: THE GAME OBJECTS PAST THE HWRAM RESERVE.
+// In Exoddus a path's creatures all live until the path changes, and the worst
+// paths hold more than the 47 KB ae_new pool: 477.ae.96's tour died of HWRAM OOM
+// at NEP06C04 (25 Slurgs, 8 Fleeches, flames) and MIP04 came down to 4.5 KB.
+// The heap had 265 to 375 KB free in exactly those paths (tour 96), so an object
+// the HWRAM pool cannot hold with its reserve behind it (src/game_ae.cxx) gets a
+// block here: LWRAM costs about 2.1x HWRAM per access, a crash costs the game.
+//
+// One locked block per object, last fit like every locked block (the top of the
+// highest hole, so the compaction still gathers the free space below them).
+// Locked, it never moves (Reclaim_Memory_49C470 steps over it) and its handle
+// stays valid for its whole life: the block keeps it in its first word, the
+// object starts after it. 'TObj' is nobody's resource type, so no sweep by type
+// frees it. NO compaction from here: an ae_new can run under a raw pointer into
+// an unlocked block (a factory reading its resource), and a compaction would move
+// that block. Refused (null, counted) when the heap would keep less than
+// kTethysObjHeapKeep free (a film's 128 KB ring, src/movie_cinepak.cxx, and a
+// camera's loads) or the node pool fewer than kTethysObjNodeKeep free nodes (the
+// tour's dumps never used more than 107 of the 375).
+static const u32 kTethysObjType = 0x6A624F54; // 'TObj', for the heap census
+static const u32 kTethysObjHeapKeep = 163840;
+static const s32 kTethysObjNodeKeep = 64;
+// Read in a dump: blocks and bytes (headers included) held now, the most bytes
+// held at once, the asks refused.
+extern "C" volatile u32 Tethys_gHeapObjs = 0;
+extern "C" volatile u32 Tethys_gHeapObjBytes = 0;
+extern "C" volatile u32 Tethys_gHeapObjPeak = 0;
+extern "C" volatile u32 Tethys_gHeapObjRefused = 0;
+
+static bool Tethys_FreeNodesAtLeast(s32 n)
+{
+    const ResourceManager::ResourceHeapItem* pItem = sSecondLinkedListItem_5D29E8;
+    for (; n > 0; n--)
+    {
+        if (!pItem)
+        {
+            return false;
+        }
+        pItem = pItem->field_4_pNext;
+    }
+    return true;
+}
+
+extern "C" void* Tethys_HeapObjAlloc(u32 size)
+{
+    const u32 ask = size + sizeof(u8**);
+    u8** ppRes = nullptr;
+    if (kResHeapSize - sManagedMemoryUsedSize_AB4A04 >= ask + sizeof(ResourceManager::Header) + kTethysObjHeapKeep
+        && Tethys_FreeNodesAtLeast(kTethysObjNodeKeep))
+    {
+        ppRes = ResourceManager::Alloc_New_Resource_ImplEx(kTethysObjType, 0, ask, true, ResourceManager::eLastMatching, false, false);
+    }
+    if (!ppRes)
+    {
+        Tethys_gHeapObjRefused++;
+        return nullptr;
+    }
+    *reinterpret_cast<u8***>(*ppRes) = ppRes;
+    Tethys_gHeapObjs++;
+    Tethys_gHeapObjBytes += ResourceManager::Get_Header_49C410(ppRes)->field_0_size;
+    if (Tethys_gHeapObjBytes > Tethys_gHeapObjPeak)
+    {
+        Tethys_gHeapObjPeak = Tethys_gHeapObjBytes;
+    }
+    return *ppRes + sizeof(u8**);
+}
+
+// FreeResource_Impl_49C360 without its cel cache flush: no cel is ever decoded
+// from an object's bytes, and an Animation block that held this address before
+// flushed the cache when it was freed. Anything that is not one of these blocks
+// is a corruption, named.
+extern "C" void Tethys_HeapObjFree(void* ptr)
+{
+    u8* const pBlock = static_cast<u8*>(ptr) - sizeof(u8**);
+    u8** const ppRes = *reinterpret_cast<u8***>(pBlock);
+    const u32 off = reinterpret_cast<u32>(ppRes) - reinterpret_cast<u32>(&sResourceLinkedList_5D1E30[0]);
+    if (off >= kLinkedListArraySize * sizeof(ResourceManager::ResourceHeapItem) || off % sizeof(ResourceManager::ResourceHeapItem) != 0
+        || *ppRes != pBlock || ResourceManager::Get_Header_49C410(ppRes)->field_8_type != kTethysObjType)
+    {
+        Tethys_Fatal("heap object: bad block");
+    }
+    ResourceManager::Header* pHeader = ResourceManager::Get_Header_49C410(ppRes);
+    Tethys_gHeapObjs--;
+    Tethys_gHeapObjBytes -= pHeader->field_0_size;
+    pHeader->field_4_ref_count = 0;
+    pHeader->field_6_flags = 0;
+    pHeader->field_8_type = ResourceManager::Resource_Free;
+    sManagedMemoryUsedSize_AB4A04 -= pHeader->field_0_size;
+}
 #endif
 
 // TODO: Move to own file
@@ -2601,7 +2691,9 @@ struct CamSectorReader
                 vLanded = bytes;
                 return true;
             }
-            if (st <= 0 || Tethys_RawTicks() - t0 > 5u * 208000u)
+            // SATURN 477: signed, as in AliveLibAO's StreamFill (see there): a t0
+            // read 65,536 ticks in the future must not tear a healthy read.
+            if (st <= 0 || static_cast<s32>(Tethys_RawTicks() - t0) > static_cast<s32>(5u * 208000u))
             {
                 Tethys_CdStreamStop();
                 bad = true;

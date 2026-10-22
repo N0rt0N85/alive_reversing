@@ -2518,6 +2518,14 @@ EXPORT void Factory_LightEffect_484170(Path_TLV* pTlv, Map* /*pMap*/, TlvItemInf
                 break;
 
             case Path_LightEffect::Type::GoldGlow_1:
+#ifdef TETHYS_SATURN
+                if (Tethys_IsSkyGlow(pPathLightTlv, tlvOffsetLevelIdPathId.parts.levelId, tlvOffsetLevelIdPathId.parts.pathId))
+                {
+                    // SATURN 477.ao.2: a gold glow in the night sky draws a star (DoorLight.cpp)
+                    ResourceManager::LoadResource_446C90("STAR.BAN", ResourceManager::Resource_Animation, AOResourceID::kBGStarAOResID, loadMode);
+                    break;
+                }
+#endif
                 ResourceManager::LoadResource_446C90("GOLDGLOW.BAN", ResourceManager::Resource_Animation, AOResourceID::kGoldGlowAOResID_6011, loadMode);
                 break;
 
@@ -2560,7 +2568,15 @@ EXPORT void Factory_LightEffect_484170(Path_TLV* pTlv, Map* /*pMap*/, TlvItemInf
 
             case Path_LightEffect::Type::GoldGlow_1:
             {
+#ifdef TETHYS_SATURN
+                // SATURN 477.ao.2: a gold glow in the night sky draws a star (DoorLight.cpp)
+                ResourceManager::CheckResourceIsLoaded(ResourceManager::Resource_Animation,
+                    Tethys_IsSkyGlow(pPathLightTlv, tlvOffsetLevelIdPathId.parts.levelId, tlvOffsetLevelIdPathId.parts.pathId)
+                        ? AOResourceID::kBGStarAOResID
+                        : AOResourceID::kGoldGlowAOResID_6011);
+#else
                 ResourceManager::CheckResourceIsLoaded(ResourceManager::Resource_Animation, AOResourceID::kGoldGlowAOResID_6011);
+#endif
                 auto pLight = ao_new<DoorLight>();
                 if (pLight)
                 {

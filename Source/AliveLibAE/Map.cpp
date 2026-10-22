@@ -47,6 +47,43 @@ extern "C" void Tethys_CamCacheReset();    // src/cam_cache.cxx, level-scoped (b
 extern "C" void Tethys_CamPathPreload(const void* pCamNames, s32 count); // ResourceManager.cpp (426.ao.4)
 bool Tethys_MenuPinsRelease();             // ResourceManager.cpp (442.ao.1)
 extern "C" void Tethys_ActorPackForLevel(const char* lvl2); // src/renderer_saturn.cxx (R2, D-V1)
+#if defined(TETHYS_AE_ZONE) && TETHYS_AE_ZONE
+// AE_ENGINE_DECISION.md 11.20 step 2 (src/zone_ae.cxx): the code zone.
+extern "C" void Tethys_ZoneForLevel(const char* lvl2);
+extern "C" void Tethys_ZoneBounds(u32* pStart, u32* pEnd);
+extern "C" volatile u32 Tethys_gZoneSurvivors;
+// An object whose destructor lives in the code zone must not outlive the level
+// that loaded it: the next level's load overwrites that code. None should (every
+// zone class dies on a level change, the screen change deletes it); one that
+// does is deleted here, while its code is still in, and counted.
+static void Tethys_ZoneSurvivors()
+{
+    u32 z0 = 0;
+    u32 z1 = 0;
+    Tethys_ZoneBounds(&z0, &z1);
+    if (z0 >= z1)
+    {
+        return;
+    }
+    for (s32 i = 0; i < gBaseGameObject_list_BB47C4->Size(); i++)
+    {
+        BaseGameObject* pObj = gBaseGameObject_list_BB47C4->ItemAt(i);
+        if (!pObj)
+        {
+            break;
+        }
+        // The first slot of the vtable is VDestructor (BaseGameObject.hpp):
+        // overridden by every class, so it is the class's own code.
+        const u32 dtor = **reinterpret_cast<u32**>(pObj);
+        if (dtor >= z0 && dtor < z1)
+        {
+            i = gBaseGameObject_list_BB47C4->RemoveAt(i);
+            pObj->VDestructor(1);
+            Tethys_gZoneSurvivors++;
+        }
+    }
+}
+#endif
 extern "C" u8 Tethys_gChangeFilmPass;      // src/movie_ae.cxx: the eUnknown_11 film pass is running
 // 425.ao.10/426.ao.2/bt1044-1047/bt1069: the flip partition, latched per screen
 // change (renderer and CD seam counters, zeroed at T0; raw ticks ~208 a ms).
@@ -278,8 +315,15 @@ struct Map_PathsArrayExtended final
 };
 static Map_PathsArrayExtended sPathsArrayExtended = {};
 
+#ifdef TETHYS_SATURN
+void Tethys_PathPagingForget(bool bFree); // AE_ENGINE_DECISION.md 11.20 step 1, below ClearPathResourceBlocks
+#endif
+
 void Map::FreePathResourceBlocks()
 {
+#ifdef TETHYS_SATURN
+    Tethys_PathPagingForget(true); // the path table goes with the level's paths
+#endif
     for (s32 i = 0; i < Path_Get_Num_Paths(field_0_current_level); ++i)
     {
         if (sPathsArrayExtended.field_0_pPathRecs[i])
@@ -343,7 +387,370 @@ void Map::ClearPathResourceBlocks()
     {
         sPathsArrayExtended.field_0_pPathRecs[i] = nullptr;
     }
+#ifdef TETHYS_SATURN
+    Tethys_PathPagingForget(false); // a reset: the heap that held the table is gone with the rest
+#endif
 }
+
+#ifdef TETHYS_SATURN
+// ---- SATURN (AE_ENGINE_DECISION.md 11.20, step 1): THE CURRENT PATH ONLY.
+// The PC keeps every path of the level in the heap, locked, for the whole level:
+// MIPATH.BND is 79,432 B and BRPATH.BND 118,932 B, for ONE path in use at a time
+// (12,352 B in MIP01, 2,012 B in BRP28). While Abe is elsewhere, a path is
+// needed for one thing only: the state of its objects (a Slig dead, a Mudokon
+// saved, a lever pulled), the flags and tlv_state bytes of its TLVs, exactly
+// what Quicksave_SaveBlyData_4C9660 writes. So the level change still reads the
+// whole BND once (it holds every TLV's starting state), copies that state into
+// one table, and keeps only the destination path. A path change files the old
+// path's state in the table, frees its block, and brings the new path back from
+// its own record, <LV>PATHnn.BND (tools/ae/convert_ae.py path_piece_records):
+// one CD command of 2 to 9 sectors. The three readers of a path that is not the
+// current one go through the table: Path::TLV_Reset_4DB8E0 (an object that
+// outlives its path), Quicksave_SaveBlyData_4C9660 and its restore.
+//   Objects killed by the screen change are deleted in ScreenChange_480B80,
+// before GoTo_Camera, so their last TLV_Reset lands in the old block before it
+// is filed. A survivor (Abe, a follower) may still hold field_FC_pPathTLV into
+// it: cleared when the block goes (null is a state the code already handles).
+//   The path kept is moved to the heap top beside the other locked blocks: a
+// locked island in the middle is what cut MIP01C07's free space in two.
+//   Kill switch: TETHYS_AE_PATH_PAGING=0 keeps every path resident, as before.
+#ifndef TETHYS_AE_PATH_PAGING
+#define TETHYS_AE_PATH_PAGING 1
+#endif
+extern "C" [[noreturn]] void Tethys_Fatal(const char_type* msg);
+extern "C" {
+// Test gauges, read in RAM: path records brought back from the disc, TLV
+// resets filed in the table, the table's bytes, levels left whole (why: 1 no
+// room for the table, 2 an offset past 14 bits).
+volatile u32 Tethys_gPathPageLoads = 0;
+volatile u32 Tethys_gPathPageLate = 0;
+volatile u32 Tethys_gPathPageTable = 0;
+volatile u32 Tethys_gPathPageOff = 0;
+}
+static const s32 kTethysPathSlots = 32;                   // PathData.cpp kMaxPaths
+static const u32 kTethysPathTableType = 0x74745350;       // 'PStt', for the heap census
+static u8** sTethysPathTable = nullptr;
+static LevelIds sTethysPathLevel = LevelIds::eNone;
+static s16 sTethysPathFirst[kTethysPathSlots] = {};
+static s16 sTethysPathCount[kTethysPathSlots] = {};
+
+// ONE walk of a resident path block, in Quicksave_SaveBlyData_4C9660's order
+// (cells of the index table, then each chain), for its four uses: count the TLVs
+// (and check each offset fits 14 bits), fill a slice from the starting state,
+// file the block's state into its slice, give the slice's state back to the
+// block. One function, not a template per use: the HWRAM pool pays for code.
+// Returns the TLVs walked; *pOk goes false on an offset that does not fit or
+// does not meet the slice.
+enum class TethysPathWalk : s32
+{
+    eCount,
+    eFill,
+    eToTable,
+    eToBlock,
+};
+static s32 Tethys_PathWalk(LevelIds level, s32 pathId, u8* pPathRes, TethysPathWalk mode, TethysPathEntry* e, s32 count, bool* pOk)
+{
+    const PathBlyRec* pPathRec = Path_Get_Bly_Record_460F30(level, static_cast<s16>(pathId));
+    if (!pPathRec->field_0_blyName)
+    {
+        return 0;
+    }
+    const PathData* pPathData = pPathRec->field_4_pPathData;
+    const s32 widthCount = (pPathData->field_4_bTop - pPathData->field_0_bLeft) / pPathData->field_A_grid_width;
+    const s32 heightCount = (pPathData->field_6_bBottom - pPathData->field_2_bRight) / pPathData->field_C_grid_height;
+    const s32* indexTable = reinterpret_cast<const s32*>(pPathRes + pPathData->field_16_object_indextable_offset);
+    u8* const pObjects = pPathRes + pPathData->field_12_object_offset;
+    s32 n = 0;
+    for (s32 j = 0; j < widthCount * heightCount; j++)
+    {
+        if (indexTable[j] == -1)
+        {
+            continue;
+        }
+        Path_TLV* pTlv = reinterpret_cast<Path_TLV*>(pObjects + indexTable[j]);
+        while (pTlv)
+        {
+            const u32 off = static_cast<u32>(reinterpret_cast<u8*>(pTlv) - pObjects);
+            if (mode == TethysPathWalk::eCount)
+            {
+                if (off > 0x3FFFu)
+                {
+                    *pOk = false;
+                }
+            }
+            else if (mode == TethysPathWalk::eFill)
+            {
+                const u32 attr = Tethys_QuicksaveTlvAttr(static_cast<s32>(pTlv->field_4_type.mType)) & 3u;
+                e[n].field_0_off_attr = static_cast<u16>(off | (attr << 14));
+                e[n].field_2_flags = pTlv->field_0_flags.Raw().all;
+                e[n].field_3_state = pTlv->field_1_tlv_state;
+            }
+            else if (n >= count || (e[n].field_0_off_attr & 0x3FFFu) != off)
+            {
+                *pOk = false;
+            }
+            else if (mode == TethysPathWalk::eToTable)
+            {
+                e[n].field_2_flags = pTlv->field_0_flags.Raw().all;
+                e[n].field_3_state = pTlv->field_1_tlv_state;
+            }
+            else
+            {
+                pTlv->field_0_flags.Raw().all = e[n].field_2_flags;
+                pTlv->field_1_tlv_state = e[n].field_3_state;
+            }
+            n++;
+            pTlv = Path::Next_TLV_4DB6A0(pTlv);
+        }
+    }
+    return n;
+}
+
+static TethysPathEntry* Tethys_PathEntries()
+{
+    return sTethysPathTable ? reinterpret_cast<TethysPathEntry*>(*sTethysPathTable) : nullptr;
+}
+
+[[noreturn]] static void Tethys_PathFatal(const char_type* pWhat, s32 pathId)
+{
+    static char_type msg[32];
+    sprintf(msg, "%s %sPATH%02d", pWhat, Path_Get_Lvl_Name(sTethysPathLevel), static_cast<int>(pathId));
+    Tethys_Fatal(msg);
+}
+
+TethysPathEntry* Tethys_PathTableSlice(s32 pathId, s32* pCount)
+{
+    TethysPathEntry* pAll = Tethys_PathEntries();
+    if (!pAll || pathId <= 0 || pathId >= kTethysPathSlots || sTethysPathLevel != gMap_5C3030.field_0_current_level
+        || sPathsArrayExtended.field_0_pPathRecs[pathId])
+    {
+        *pCount = 0;
+        return nullptr;
+    }
+    *pCount = sTethysPathCount[pathId];
+    return pAll + sTethysPathFirst[pathId];
+}
+
+void Tethys_PathTableReset(s32 pathId, u32 tlvOffset, s16 hiFlags, s8 bSetCreated, s8 bSetDestroyed)
+{
+    s32 n = 0;
+    TethysPathEntry* e = Tethys_PathTableSlice(pathId, &n);
+    // Every match, not the first: two cells may name one chain, and the walk
+    // then lists its TLVs twice, as the quicksave does.
+    for (s32 i = 0; i < n; i++)
+    {
+        if ((e[i].field_0_off_attr & 0x3FFFu) != tlvOffset)
+        {
+            continue;
+        }
+        u8 flags = e[i].field_2_flags;
+        flags = (bSetDestroyed & 1) ? static_cast<u8>(flags | TLV_Flags::eBit2_Destroyed) : static_cast<u8>(flags & ~TLV_Flags::eBit2_Destroyed);
+        flags = (bSetCreated & 1) ? static_cast<u8>(flags | TLV_Flags::eBit1_Created) : static_cast<u8>(flags & ~TLV_Flags::eBit1_Created);
+        e[i].field_2_flags = flags;
+        if (hiFlags != -1)
+        {
+            e[i].field_3_state = static_cast<u8>(hiFlags);
+        }
+        Tethys_gPathPageLate++;
+    }
+}
+
+// Copy between a resident block and its slice, the offsets checked on the way.
+static bool Tethys_PathSliceCopy(s32 pathId, u8* pPathRes, bool bToTable)
+{
+    bool ok = true;
+    const s32 count = sTethysPathCount[pathId];
+    const s32 n = Tethys_PathWalk(sTethysPathLevel, pathId, pPathRes, bToTable ? TethysPathWalk::eToTable : TethysPathWalk::eToBlock,
+                                  Tethys_PathEntries() + sTethysPathFirst[pathId], count, &ok);
+    return ok && n == count;
+}
+
+static void Tethys_PathSetSlot(s32 pathId, u8** ppRes)
+{
+    sPathsArrayExtended.field_0_pPathRecs[pathId] = ppRes;
+    if (pathId < ALIVE_COUNTOF(gMap_5C3030.field_54_path_res_array.field_0_pPathRecs))
+    {
+        gMap_5C3030.field_54_path_res_array.field_0_pPathRecs[pathId] = ppRes;
+    }
+}
+
+// File a resident path's state in the table and let its block go.
+static void Tethys_PathRelease(s32 pathId)
+{
+    u8** ppRes = sPathsArrayExtended.field_0_pPathRecs[pathId];
+    if (!ppRes)
+    {
+        return;
+    }
+    if (!Tethys_PathSliceCopy(pathId, *ppRes, true))
+    {
+        Tethys_PathFatal("PG file", pathId);
+    }
+    const u8* pBlock = *ppRes;
+    const u32 bytes = ResourceManager::Get_Header_49C410(ppRes)->field_0_size;
+    for (s32 i = 0; i < gBaseGameObject_list_BB47C4->Size(); i++)
+    {
+        BaseGameObject* pObj = gBaseGameObject_list_BB47C4->ItemAt(i);
+        if (!pObj)
+        {
+            break;
+        }
+        if (pObj->field_6_flags.Get(BaseGameObject::eIsBaseAliveGameObject_Bit6))
+        {
+            auto pAlive = static_cast<BaseAliveGameObject*>(pObj);
+            const u8* p = reinterpret_cast<const u8*>(pAlive->field_FC_pPathTLV);
+            if (p >= pBlock && p < pBlock + bytes)
+            {
+                pAlive->field_FC_pPathTLV = nullptr;
+            }
+        }
+    }
+    ResourceManager::FreeResource_49C330(ppRes);
+    Tethys_PathSetSlot(pathId, nullptr);
+}
+
+// Move a resident path block to the heap top (last fit), beside the other locked
+// blocks. Kept in place when nothing higher fits.
+static void Tethys_PathToTop(s32 pathId)
+{
+    u8** ppRes = sPathsArrayExtended.field_0_pPathRecs[pathId];
+    if (!ppRes || ResourceManager::Get_Header_49C410(ppRes)->field_4_ref_count != 1)
+    {
+        return;
+    }
+    const u32 bytes = ResourceManager::Get_Header_49C410(ppRes)->field_0_size - sizeof(ResourceManager::Header);
+    u8** ppTop = ResourceManager::Alloc_New_Resource_ImplEx(ResourceManager::Resource_Path, static_cast<u32>(pathId), bytes, true,
+                                                             ResourceManager::eLastMatching, false, false);
+    if (!ppTop)
+    {
+        return;
+    }
+    if (*ppTop < *ppRes)
+    {
+        ResourceManager::FreeResource_49C330(ppTop);
+        return;
+    }
+    memcpy(*ppTop, *ppRes, bytes);
+    ResourceManager::FreeResource_49C330(ppRes);
+    Tethys_PathSetSlot(pathId, ppTop);
+}
+
+void Tethys_PathPagingForget(bool bFree)
+{
+    if (bFree && sTethysPathTable)
+    {
+        ResourceManager::FreeResource_49C330(sTethysPathTable);
+    }
+    sTethysPathTable = nullptr;
+    sTethysPathLevel = LevelIds::eNone;
+}
+
+// The level change, right after GetPathResourceBlockPtrs: build the table from
+// the whole BND, keep the destination path, let the others go.
+void Map::Tethys_PathPagingLevelLoaded()
+{
+    Tethys_PathPagingForget(true);
+#if TETHYS_AE_PATH_PAGING
+    const s16 keep = field_C_path ? field_C_path : 1;
+    const s32 nPaths = Path_Get_Num_Paths(field_A_level);
+    if (nPaths > kTethysPathSlots)
+    {
+        return;
+    }
+    s32 total = 0;
+    s32 resident = 0;
+    bool fits = true;
+    for (s32 i = 1; i < nPaths; i++)
+    {
+        sTethysPathFirst[i] = static_cast<s16>(total);
+        sTethysPathCount[i] = 0;
+        u8** ppRes = sPathsArrayExtended.field_0_pPathRecs[i];
+        if (!ppRes)
+        {
+            continue;
+        }
+        resident++;
+        const s32 c = Tethys_PathWalk(field_A_level, i, *ppRes, TethysPathWalk::eCount, nullptr, 0, &fits);
+        sTethysPathCount[i] = static_cast<s16>(c);
+        total += c;
+    }
+    if (!fits)
+    {
+        Tethys_gPathPageOff = 2;
+        return;
+    }
+    if (resident < 2 || total == 0)
+    {
+        return; // one path: nothing to page
+    }
+    sTethysPathTable = ResourceManager::Alloc_New_Resource_ImplEx(kTethysPathTableType, 0, static_cast<u32>(total) * sizeof(TethysPathEntry), true,
+                                                                  ResourceManager::eLastMatching, false, false);
+    if (!sTethysPathTable)
+    {
+        Tethys_gPathPageOff = 1; // every path stays resident, the PC's way
+        return;
+    }
+    sTethysPathLevel = field_A_level;
+    Tethys_gPathPageTable = static_cast<u32>(total) * sizeof(TethysPathEntry);
+    TethysPathEntry* pAll = Tethys_PathEntries();
+    for (s32 i = 1; i < nPaths; i++)
+    {
+        u8** ppRes = sPathsArrayExtended.field_0_pPathRecs[i];
+        if (!ppRes)
+        {
+            continue;
+        }
+        bool ok = true;
+        Tethys_PathWalk(field_A_level, i, *ppRes, TethysPathWalk::eFill, pAll + sTethysPathFirst[i], sTethysPathCount[i], &ok);
+    }
+    for (s32 i = 1; i < nPaths; i++)
+    {
+        if (i != keep)
+        {
+            Tethys_PathRelease(i);
+        }
+    }
+    Tethys_PathToTop(keep);
+#endif
+}
+
+// A path change inside the level, before Path::Init_4DB200 reads the new block.
+void Map::Tethys_PathPagingSwitch(s16 fromPath, s16 toPath)
+{
+#if TETHYS_AE_PATH_PAGING
+    if (!sTethysPathTable || sTethysPathLevel != field_A_level || fromPath == toPath || toPath <= 0 || toPath >= kTethysPathSlots)
+    {
+        return;
+    }
+    if (fromPath > 0 && fromPath < kTethysPathSlots)
+    {
+        Tethys_PathRelease(fromPath);
+    }
+    if (sPathsArrayExtended.field_0_pPathRecs[toPath])
+    {
+        return;
+    }
+    char_type name[16];
+    sprintf(name, "%sPATH%02d.BND", Path_Get_Lvl_Name(field_A_level), static_cast<int>(toPath));
+    ResourceManager::LoadResourceFile_49C170(name, nullptr);
+    u8** ppRes = ResourceManager::GetLoadedResource_49C2A0(ResourceManager::Resource_Path, toPath, TRUE, TRUE);
+    if (!ppRes)
+    {
+        Tethys_PathFatal("PG load", toPath);
+    }
+    Tethys_PathSetSlot(toPath, ppRes);
+    if (!Tethys_PathSliceCopy(toPath, *ppRes, false))
+    {
+        Tethys_PathFatal("PG slice", toPath);
+    }
+    Tethys_gPathPageLoads++;
+    Tethys_PathToTop(toPath);
+#else
+    (void) fromPath;
+    (void) toPath;
+#endif
+}
+#endif
 
 void Map::RemoveObjectsWithPurpleLight_480740(s16 bMakeInvisible)
 {
@@ -898,6 +1305,15 @@ void Map::GoTo_Camera_481890()
             // pack read may close the current GFS handle). The boot level comes
             // through here too: the first GoTo_Camera arrives from eNone.
             Tethys_ActorPackForLevel(Path_Get_Lvl_Name(field_A_level));
+#if defined(TETHYS_AE_ZONE) && TETHYS_AE_ZONE
+            // AE_ENGINE_DECISION.md 11.20 step 2: the destination level's
+            // classes into the code zone, at the same quiet point. Every object
+            // of the old level died in ScreenChange_480B80 (each zone class dies
+            // on a level change); one that did not would run code the load is
+            // about to overwrite, so it goes first, here, while its code is in.
+            Tethys_ZoneSurvivors();
+            Tethys_ZoneForLevel(Path_Get_Lvl_Name(field_A_level));
+#endif
         }
 #endif
 
@@ -925,6 +1341,9 @@ void Map::GoTo_Camera_481890()
         GetPathResourceBlockPtrs();
 
 #ifdef TETHYS_SATURN
+        // AE_ENGINE_DECISION.md 11.20 step 1: the table of every path's TLV
+        // state, then only the destination path stays.
+        Tethys_PathPagingLevelLoaded();
         Tethys_gBootPhase = 2;
 #endif
         if (field_A_level == field_0_current_level)
@@ -971,6 +1390,14 @@ void Map::GoTo_Camera_481890()
     const PathBlyRec* pPathRec_1 = Path_Get_Bly_Record_460F30(field_A_level, field_C_path);
     field_D4_ptr = pPathRec_1->field_4_pPathData;
 
+#ifdef TETHYS_SATURN
+    // AE_ENGINE_DECISION.md 11.20 step 1: a path change inside the level files
+    // the old path's TLV state and brings the new path back from the disc.
+    if (prevLevelId == field_A_level)
+    {
+        Tethys_PathPagingSwitch(prevPathId, field_C_path);
+    }
+#endif
     sPath_dword_BB47C0->Init_4DB200(
         field_D4_ptr,
         field_A_level,

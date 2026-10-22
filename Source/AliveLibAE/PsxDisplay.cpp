@@ -232,7 +232,23 @@ void PsxDisplay::ctor_41DC30()
     PSX_ResetGraph_4F8800(0);
     PSX_SetGraphDebug_4F8A10(0);
     Vram_init_495660();
+#ifdef TETHYS_SATURN
+    // SATURN (AE_ENGINE_DECISION.md 11.22): THE DISPLAY'S TOP HALF IS ROOM. On a
+    // PSX the first 640 x 240 halfwords are the frame on screen; on the Saturn
+    // the screen is VDP1 and VDP2, and nothing reads or writes them
+    // (PSX_LoadImage, PSX_ClearImage and PSX_MoveImage are no-ops in
+    // src/renderer_saturn.cxx): a rect is only the key of a texture slot. So
+    // animations may have them once the 384 x 512 right of the display is full
+    // (the allocator searches right to left), which a path with every creature
+    // alive does: tour 95, MIP04C28, 82 rects and 7 refused. Kept: the palettes
+    // (rows 240 to 271, Pal_Area_Init below), the bottom half (ScreenManager's,
+    // where the renderer takes y >= 272 for a CAM strip and a y = 256 page for
+    // the CAM recomposition), and (0, 0), which Animation reads as "no rect".
+    Vram_alloc_explicit_4955F0(0, 0, 0, 0);
+    Vram_alloc_explicit_4955F0(0, 240, 639, 271);
+#else
     Vram_alloc_explicit_4955F0(0, 0, 639, 271);
+#endif
     Pal_Area_Init_483080(0, 240, 640, 32);
     PSX_ClearOTag_4F6290(field_10_drawEnv[0].field_70_ot_buffer, field_A_buffer_size);
     PSX_ClearOTag_4F6290(field_10_drawEnv[1].field_70_ot_buffer, field_A_buffer_size);

@@ -76,6 +76,7 @@ extern "C" u32 Tethys_RawTicks(void);
 // before the sprite flush by src/sys_saturn.cxx).
 extern "C" u32 Tethys_gInAnimate;
 extern "C" void Tethys_CelPrefetch();
+extern "C" void Tethys_GlowTickAE(); // src/glow_ae.cxx (declared with its twins in TethysObjectHooks.hpp)
 static u32 sTethysPhase0 = 0;
 extern "C" void Tethys_ConfigLoad(void); // src/sys_saturn.cxx: the options record
 #endif
@@ -483,6 +484,127 @@ EXPORT void CC DDCheat_Allocate_415320()
 
 EXPORT void CC Game_Loop_467230();
 
+#if defined(TETHYS_AE_TOUR) && TETHYS_AE_TOUR
+// SATURN (AE_ENGINE_DECISION.md 11.20, step 3): THE HEAP TOUR, a TEST IMAGE
+// ONLY (tethys_start_ae.mk TETHYS_AE_TOUR=1). Once a real game runs (not the
+// menu, not a demo), Abe flies (DDCheat's flight) through every camera of the
+// nine game levels, the game's own SetActiveCam with an instant change, three
+// seconds each. Per camera, three words: the resource heap in use (KB, 10 bits),
+// its largest free block (KB, 10 bits) and the lowest HWRAM pool free seen
+// during the three seconds (64-byte units, 12 bits); then the most bytes of
+// game objects the heap held during them (11.22, the overflow past the HWRAM
+// reserve); then the textures at the end of them (11.22): live VDP1 slots (7
+// bits), KB left in the texture heap (9 bits), uploads the renderer refused
+// (12 bits) and animations refused a PSX VRAM rect (4 bits) during them. The log
+// lives in the resource heap (one locked block, last fit), not in .bss: the
+// HWRAM pool is one of the things measured. tools/ae/ae_tour.py read joins it to
+// the camera list. A wedge or an OOM on the way is the usual named fatal: the
+// log says how far the tour got.
+#include "ae/tour_cams.inc"
+u32 Tethys_HeapLargestFree(); // ResourceManager.cpp
+extern "C" u32 Tethys_PoolFree(); // src/game_ae.cxx
+extern "C" volatile u32 Tethys_gHeapObjBytes; // ResourceManager.cpp, 11.22
+extern "C" u32 Tethys_TexCensus();            // src/renderer_saturn.cxx, 11.22
+extern "C" u32 Tethys_gS5[24];                // [7]: uploads refused
+extern "C" u32 Tethys_gVramFail;              // src/sys_saturn.cxx
+extern "C" {
+volatile u32 Tethys_gTourDone = 0;
+volatile u32 Tethys_gTourWords = 0; // words per camera, for the reader
+u32* volatile Tethys_gTourLogPtr = nullptr;
+}
+static s32 sTethysTourIdx = -1;
+static s32 sTethysTourWait = 0;
+static s32 sTethysTourPlace = 0;
+static u32 sTethysTourPoolMin = 0xFFFFFFFFu;
+static u32 sTethysTourObjPeak = 0;
+static u32 sTethysTourTexFail0 = 0;
+static u32 sTethysTourVramFail0 = 0;
+
+static void Tethys_TourTick()
+{
+    if (gAttract_5C1BA0 || !sActiveHero_5C1B68 || gMap_5C3030.field_6_state != Map::CamChangeStates::eInactive_0
+        || gMap_5C3030.field_0_current_level == LevelIds::eMenu_0 || gMap_5C3030.field_0_current_level == LevelIds::eNone)
+    {
+        return;
+    }
+    const u32 count = ALIVE_COUNTOF(kTethysTourCams);
+    if (sTethysTourIdx < 0)
+    {
+        u8** ppLog = ResourceManager::Alloc_New_Resource_ImplEx(0x52554F54 /* 'TOUR' */, 0, count * 3 * sizeof(u32), true,
+                                                                ResourceManager::eLastMatching, false, false);
+        if (!ppLog)
+        {
+            return; // no room yet: try again next frame
+        }
+        Tethys_gTourLogPtr = reinterpret_cast<u32*>(*ppLog);
+        Tethys_gTourWords = 3;
+        sTethysTourIdx = 0;
+        sTethysTourWait = 150;
+        return;
+    }
+    const u32 pool = Tethys_PoolFree();
+    if (pool < sTethysTourPoolMin)
+    {
+        sTethysTourPoolMin = pool;
+    }
+    if (Tethys_gHeapObjBytes > sTethysTourObjPeak)
+    {
+        sTethysTourObjPeak = Tethys_gHeapObjBytes;
+    }
+    if (sTethysTourPlace)
+    {
+        // The change is done: Abe to the middle of the camera, flying, as
+        // DDCheat's teleport places him, so no fall and no death on arrival.
+        sTethysTourPlace = 0;
+        PSX_Point pos = {};
+        gMap_5C3030.GetCurrentCamCoords_480680(&pos);
+        sActiveHero_5C1B68->field_B8_xpos = FP_FromInteger(pos.field_0_x + 184);
+        sActiveHero_5C1B68->field_BC_ypos = FP_FromInteger(pos.field_2_y + 60);
+        sActiveHero_5C1B68->field_C2_lvl_number = gMap_5C3030.field_0_current_level;
+        sActiveHero_5C1B68->field_C0_path_number = gMap_5C3030.field_2_current_path;
+        sActiveHero_5C1B68->field_100_pCollisionLine = nullptr;
+        sActiveHero_5C1B68->field_F8_LastLineYPos = sActiveHero_5C1B68->field_BC_ypos;
+        sDDCheat_FlyingEnabled_5C2C08 = true;
+    }
+    if (--sTethysTourWait > 0)
+    {
+        return;
+    }
+    if (sTethysTourIdx > 0 && static_cast<u32>(sTethysTourIdx) <= count)
+    {
+        const u32 used = sManagedMemoryUsedSize_AB4A04 >> 10;
+        const u32 mx = Tethys_HeapLargestFree() >> 10;
+        const u32 pm = sTethysTourPoolMin >> 6;
+        u32* const pRow = &Tethys_gTourLogPtr[3 * (sTethysTourIdx - 1)];
+        pRow[0] = ((used > 1023u ? 1023u : used) << 22) | ((mx > 1023u ? 1023u : mx) << 12) | (pm > 4095u ? 4095u : pm);
+        pRow[1] = sTethysTourObjPeak;
+        const u32 tex = Tethys_TexCensus();
+        const u32 live = tex >> 16;
+        const u32 room = tex & 0xFFFFu;
+        const u32 texFail = Tethys_gS5[7] - sTethysTourTexFail0;
+        const u32 vramFail = Tethys_gVramFail - sTethysTourVramFail0;
+        pRow[2] = ((live > 127u ? 127u : live) << 25) | ((room > 511u ? 511u : room) << 16)
+                | ((texFail > 4095u ? 4095u : texFail) << 4) | (vramFail > 15u ? 15u : vramFail);
+        Tethys_gTourDone = static_cast<u32>(sTethysTourIdx);
+    }
+    if (static_cast<u32>(sTethysTourIdx) >= count)
+    {
+        sTethysTourWait = 0x7FFFFFFF; // done: Abe stays where the last camera put him
+        return;
+    }
+    const u16 w = kTethysTourCams[sTethysTourIdx];
+    sDDCheat_FlyingEnabled_5C2C08 = true;
+    gMap_5C3030.SetActiveCam_480D30(static_cast<LevelIds>(w >> 12), static_cast<s16>((w >> 7) & 31), static_cast<s16>(w & 127),
+                                    CameraSwapEffects::eInstantChange_0, 0, 0);
+    sTethysTourPlace = 1;
+    sTethysTourPoolMin = 0xFFFFFFFFu;
+    sTethysTourObjPeak = Tethys_gHeapObjBytes;
+    sTethysTourTexFail0 = Tethys_gS5[7];
+    sTethysTourVramFail0 = Tethys_gVramFail;
+    sTethysTourIdx++;
+    sTethysTourWait = 90; // three seconds of updates for the screen's loads
+}
+#endif
 
 EXPORT void CC Game_Init_LoadingIcon_482CD0()
 {
@@ -870,6 +992,10 @@ EXPORT void CC Game_Loop_467230()
             GetGameAutoPlayer().SyncPoint(SyncPoints::AnimateAll);
             AnimationBase::AnimateAll_40AC20(gObjList_animations_5C1A24);
 #ifdef TETHYS_SATURN
+            // SATURN (Exoddus, src/glow_ae.cxx): a still Abe under dust that moved
+            // is uploaded again with its light, and once more without it when the
+            // dust has gone. Before the prefetch: no slave batch is in flight.
+            Tethys_GlowTickAE();
             // SATURN (R2's request, AO 445.ao.1 twin): hand the NEXT tick's cels
             // to the slave SH-2, which decodes them while VRender and the OT walk
             // run below.
@@ -987,6 +1113,9 @@ EXPORT void CC Game_Loop_467230()
 
         bPauseMenuObjectFound = false;
 
+#if defined(TETHYS_AE_TOUR) && TETHYS_AE_TOUR
+        Tethys_TourTick(); // AE_ENGINE_DECISION.md 11.20 step 3, test image only
+#endif
         gMap_5C3030.ScreenChange_480B80();
         sInputObject_5BD4E0.Update(GetGameAutoPlayer());
 

@@ -27,6 +27,10 @@
 //                                   prefetched (AO: the blood block it clusters)
 //   TETHYS_CEL_PREFETCH_OFF()       an extra reason to post nothing this tick
 //                                   (AO: the GameSpeak menu's chant glow)
+// and optionally
+//   TETHYS_CEL_SKIP_ANIM(pBase)     an animation whose next cel is not posted
+//                                   (Exoddus 11.22: off screen, its frames wait
+//                                   for a draw); asked last, once per candidate
 // It defines (extern "C") Tethys_CelFence, Tethys_DbufScratchForget and
 // Tethys_CelPrefetch, the cache gauges Tethys_gDbufMemoHits, Tethys_gDbufCelLive
 // and Tethys_gDbufCelWraps, and static helpers for the decoder:
@@ -36,6 +40,9 @@
 
 #if !defined(TETHYS_CEL_ANIM_LIST) || !defined(TETHYS_CEL_REFUSE_BLOCK) || !defined(TETHYS_CEL_PREFETCH_OFF)
 #error "TethysCelCache.hpp: define TETHYS_CEL_ANIM_LIST, TETHYS_CEL_REFUSE_BLOCK and TETHYS_CEL_PREFETCH_OFF first"
+#endif
+#if !defined(TETHYS_CEL_SKIP_ANIM)
+#define TETHYS_CEL_SKIP_ANIM(pBase) false
 #endif
 
 // src/sys_saturn.cxx: the shared scratch, bound by src/main.cxx (both configurations).
@@ -396,7 +403,8 @@ extern "C" void Tethys_CelPrefetch()
         }
         if (pBase->field_4_flags.Get(AnimFlags::eBit2_Animate)
             && pBase->field_E_frame_change_counter == 1
-            && *reinterpret_cast<const void* const*>(pBase) == sTethysAnimVptr)
+            && *reinterpret_cast<const void* const*>(pBase) == sTethysAnimVptr
+            && !TETHYS_CEL_SKIP_ANIM(pBase))
         {
             TethysPrefetchOne(static_cast<Animation*>(pBase));
         }

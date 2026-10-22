@@ -11,11 +11,57 @@
 #include "Midi.hpp"
 #include "ScreenManager.hpp"
 #include "CameraSwapper.hpp"
+#ifdef TETHYS_SATURN
+#include "LightEffect.hpp" // SATURN 477.ao.2: the star twinkle
+#include "Factory.hpp"     // SATURN 477.ao.2: TlvItemInfoUnion
+#endif
 
 namespace AO {
 
 ALIVE_VAR(1, 0x4C30A8, s32, gNextDoorLightUpdate_4C30A8, -1);
 ALIVE_VAR(1, 0x4FC8A4, s32, gDoorLightUpdateTimer_4FC8A4, 0);
+
+#ifdef TETHYS_SATURN
+// SATURN 477.ao.2 -- THE FOUR GOLD GLOWS IN THE STOCKYARDS' NIGHT SKY ARE STARS.
+// The PC paths put a GoldGlow (size 9) on four points of the E1/E2 night sky.
+// The PC draws its orange glow there, and so did we, through the lamp halo
+// (renderer_saturn.cxx, bt1098): "un halo clignotant" (Romain, on the tester's
+// video, E1P02C01, top right). The PlayStation shows a white twinkling star
+// there, the same sparkle, size and rhythm as its 31 stars (PS1 capture,
+// measured frame by frame, see LightEffect.cpp). So these four draw
+// LightEffect's star. The object stays a DoorLight on purpose: its constructor
+// and its pulse draw from the game's generator, and the attract demos replay
+// against that sequence (PLAYBK10 and PLAYBK20 walk these two paths).
+bool Tethys_IsSkyGlow(const Path_LightEffect* pTlv, u8 levelId, u8 pathId)
+{
+    struct SkyGlow final
+    {
+        u8 level;
+        u8 path;
+        s16 x;
+        s16 y;
+    };
+    static const SkyGlow kSkyGlows[] = {
+        {static_cast<u8>(LevelIds::eStockYards_5), 2, 2574, 151},       // E1P02C01
+        {static_cast<u8>(LevelIds::eStockYards_5), 4, 2335, 128},       // E1P04C05
+        {static_cast<u8>(LevelIds::eStockYards_5), 4, 2627, 145},       // E1P04C05
+        {static_cast<u8>(LevelIds::eStockYardsReturn_6), 4, 2466, 195}, // E2P04C04
+    };
+    if (pTlv->field_18_type != Path_LightEffect::Type::GoldGlow_1)
+    {
+        return false;
+    }
+    for (const SkyGlow& g : kSkyGlows)
+    {
+        if (g.level == levelId && g.path == pathId
+            && g.x == pTlv->field_10_top_left.field_0_x && g.y == pTlv->field_10_top_left.field_2_y)
+        {
+            return true;
+        }
+    }
+    return false;
+}
+#endif
 
 DoorLight* DoorLight::ctor_405D90(Path_LightEffect* pTlv, s32 tlvInfo)
 {
@@ -32,11 +78,26 @@ DoorLight* DoorLight::ctor_405D90(Path_LightEffect* pTlv, s32 tlvInfo)
     field_F0_switch_id = pTlv->field_1C_switch_id;
     field_EE_switch_value = SwitchStates_Get(pTlv->field_1C_switch_id);
 
+#ifdef TETHYS_SATURN
+    TlvItemInfoUnion tethysInfo;
+    tethysInfo.all = static_cast<u32>(tlvInfo);
+    const bool bSkyStar = Tethys_IsSkyGlow(pTlv, tethysInfo.parts.levelId, tethysInfo.parts.pathId);
+    field_D4_padding[0] = bSkyStar ? 1 : 0; // SATURN 477.ao.2: [1] and [2] carry the twinkle
+#endif
+
     s32 xOff = 0;
     switch (pTlv->field_18_type)
     {
         case Path_LightEffect::Type::GoldGlow_1:
         {
+#ifdef TETHYS_SATURN
+            if (bSkyStar)
+            {
+                const AnimRecord& starRec = AO::AnimRec(AnimId::Star);
+                Animation_Init_417FD0(starRec.mFrameTableOffset, starRec.mMaxW, starRec.mMaxH, ResourceManager::GetLoadedResource_4554F0(ResourceManager::Resource_Animation, starRec.mResourceId, 1, 0), 1);
+                break;
+            }
+#endif
             const AnimRecord& goldRec = AO::AnimRec(AnimId::GoldGlow);
             Animation_Init_417FD0(goldRec.mFrameTableOffset, goldRec.mMaxW, goldRec.mMaxH, ResourceManager::GetLoadedResource_4554F0(ResourceManager::Resource_Animation, goldRec.mResourceId, 1, 0), 1);
             break;
@@ -124,6 +185,16 @@ DoorLight* DoorLight::ctor_405D90(Path_LightEffect* pTlv, s32 tlvInfo)
 
     field_BC_sprite_scale = FP_FromInteger(1);
     field_AC_ypos = FP_FromInteger(pTlv->field_10_top_left.field_2_y);
+#ifdef TETHYS_SATURN
+    if (bSkyStar)
+    {
+        // SATURN 477.ao.2: the star's own look, as LightEffect's ctor sets it.
+        field_10_anim.field_B_render_mode = TPageAbr::eBlend_0;
+        field_10_anim.field_4_flags.Set(AnimFlags::eBit16_bBlending);
+        field_BC_sprite_scale = FP_FromDouble(0.4);
+        Tethys_StarArm(this, &field_D4_padding[1], &field_D4_padding[2]);
+    }
+#endif
     return this;
 }
 
@@ -168,6 +239,12 @@ void DoorLight::VUpdate()
 
 void DoorLight::VUpdate_4060A0()
 {
+#ifdef TETHYS_SATURN
+    if (field_D4_padding[0])
+    {
+        Tethys_StarTwinkle(this, &field_D4_padding[1], &field_D4_padding[2]); // SATURN 477.ao.2
+    }
+#endif
     if (static_cast<s32>(gnFrameCount_507670) > gDoorLightUpdateTimer_4FC8A4)
     {
         gNextDoorLightUpdate_4C30A8 = gnFrameCount_507670 + Math_RandomRange_450F20(6, 20);
@@ -241,6 +318,13 @@ void DoorLight::VRender(PrimHeader** ppOt)
 
 void DoorLight::VRender_406370(PrimHeader** ppOt)
 {
+#ifdef TETHYS_SATURN
+    if (field_D4_padding[0])
+    {
+        Tethys_StarRender(this, ppOt); // SATURN 477.ao.2: a star, as on the PlayStation
+        return;
+    }
+#endif
     if (sNumCamSwappers_507668 == 0)
     {
         const FP xpos = FP_FromInteger(pScreenManager_4FF7C8->field_14_xpos) + field_A8_xpos - pScreenManager_4FF7C8->field_10_pCamPos->field_0_x;

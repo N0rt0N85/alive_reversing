@@ -12,6 +12,10 @@ ALIVE_VAR(1, 0xbb47c0, Path*, sPath_dword_BB47C0, nullptr);
 #ifdef TETHYS_SATURN
 extern "C" volatile u32 Tethys_gTlvGuard;    // AE ResourceManager.cpp, `tg` (454.ao.1)
 extern "C" volatile s32 Tethys_gLastTlvType; // src/sys_saturn.cxx, the boot forensics
+#if defined(TETHYS_AE_ZONE) && TETHYS_AE_ZONE
+extern "C" const char_type* Tethys_ZoneTlvTypeMissing(s32 type);              // src/zone_ae.cxx (11.20 step 2)
+extern "C" [[noreturn]] void Tethys_ZoneFatal(const char_type* what, const char_type* name);
+#endif
 
 // SATURN (AO 454.ao.1 twin, U1a A10): a TLV offset Loader may dereference:
 // 4-aligned (the walk reads 32-bit fields in place) and wholly inside the
@@ -110,6 +114,19 @@ void Path::Loader_4DB800(s16 xpos, s16 ypos, LoadMode loadMode, TlvTypes typeToL
 
 #ifdef TETHYS_SATURN
                 Tethys_gLastTlvType = static_cast<s32>(pPathTLV->field_4_type.mType); // which factory was live at a fatal
+#endif
+#if defined(TETHYS_AE_ZONE) && TETHYS_AE_ZONE
+                // AE_ENGINE_DECISION.md 11.20 step 2: a factory that builds a class
+                // of the code zone only builds while that class is in the zone;
+                // otherwise a named fatal, never a jump into another class's code.
+                if (loadMode == LoadMode::ConstructObject_0)
+                {
+                    const char_type* pMissing = Tethys_ZoneTlvTypeMissing(static_cast<s32>(pPathTLV->field_4_type.mType));
+                    if (pMissing)
+                    {
+                        Tethys_ZoneFatal("ZN tlv", pMissing);
+                    }
+                }
 #endif
                 // Call the factory to construct the item
                 field_C_pPathData->field_1E_object_funcs->object_funcs[static_cast<s32>(pPathTLV->field_4_type.mType)](pPathTLV, this, data, loadMode); // SATURN: field_1E is a pointer now (PathData.hpp)
@@ -409,6 +426,14 @@ EXPORT void CCSTD Path::TLV_Reset_4DB8E0(u32 tlvOffset_levelId_PathId, s16 hiFla
             }
             ResourceManager::FreeResource_49C330(ppPathRes);
         }
+#ifdef TETHYS_SATURN
+        else
+        {
+            // SATURN (AE_ENGINE_DECISION.md 11.20 step 1): the path is not in the
+            // heap any more; its TLV state lives in Map.cpp's path table.
+            Tethys_PathTableReset(data.parts.pathId, data.parts.tlvOffset, hiFlags, bSetCreated, bSetDestroyed);
+        }
+#endif
     }
 }
 

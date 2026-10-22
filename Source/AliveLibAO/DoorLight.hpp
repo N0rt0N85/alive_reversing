@@ -25,6 +25,12 @@ struct Path_LightEffect final : public Path_TLV
 };
 ALIVE_ASSERT_SIZEOF(Path_LightEffect, 0x20);
 
+#ifdef TETHYS_SATURN
+// SATURN 477.ao.2: the four GoldGlow TLVs the Stockyards put in the night sky,
+// drawn as the PlayStation shows them, a twinkling star (DoorLight.cpp).
+bool Tethys_IsSkyGlow(const Path_LightEffect* pTlv, u8 levelId, u8 pathId);
+#endif
+
 
 class DoorLight final : public BaseAnimatedWithPhysicsGameObject
 {

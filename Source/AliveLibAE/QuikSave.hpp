@@ -87,6 +87,11 @@ EXPORT void CC Quicksave_SaveSwitchResetterStates_4C9870();
 EXPORT void CC Quicksave_RestoreSwitchResetterStates_4C9A30();
 
 #ifdef TETHYS_SATURN
+// SATURN (AE_ENGINE_DECISION.md 11.20, step 1): kObjectTypeAttributesTable's
+// value for a TLV type (0 not saved, 1 saved with Created cleared, 2 saved as
+// is), for the path table of Map.cpp. 0 for a type past the table.
+u8 Tethys_QuicksaveTlvAttr(s32 type);
+
 // SATURN (U1c T07/T08/T10, decision D-T2): the PC's save files are backup-RAM
 // slots (src/save_saturn.cxx). Write: sActiveQuicksaveData from 0x200 (its
 // zero tail trimmed) into the slot requested with Tethys_SaveSlotRequest,

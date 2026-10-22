@@ -57,7 +57,7 @@
 
 #ifdef TETHYS_SATURN
 extern "C" [[noreturn]] void Tethys_Fatal(const char_type* msg); // SATURN: src/main.cxx
-#include "TethysObjectHooks.hpp" // SATURN: the chant glow's arm and disarm (src/chant_glow_ae.cxx)
+#include "TethysObjectHooks.hpp" // SATURN: the chant glow's arm and disarm (src/glow_ae.cxx)
 #endif
 
 #if defined(TETHYS_AE_START_CAM) && TETHYS_AE_START_CAM > 0
@@ -842,7 +842,7 @@ void MainMenuController::dtor_4CEF30()
 {
     SetVTable(this, 0x547958);
 #ifdef TETHYS_SATURN
-    Tethys_ChantGlowDisarmAE(); // SATURN: the glow's block and its CRAM pin leave with the menu
+    Tethys_GlowChantDisarmAE(); // SATURN: the chant glow and its CRAM pin leave with the menu
 #endif
 
     Path::TLV_Reset_4DB8E0(field_1F0_tlvOffsetLevelIdPathId, -1, 0, 0);
@@ -4314,21 +4314,16 @@ void MainMenuController::AnimationAndSoundLogic_4CFE80()
                         field_20_animation.SetFrame_409D50(field_22A_anim_frame_num);
 #ifdef TETHYS_SATURN
                         // SATURN (Exoddus, AO 387.ao.1's route 3): the chant glow
-                        // (src/chant_glow_ae.cxx) arms with the chant, the animation now
-                        // on its table and block, and drops with any other animation of
-                        // the controller. (184, 162) is where Render_4CF4C0 draws Abe;
-                        // the orbs are the Particles AbeSpeak_Update spawns from the
-                        // eOptionFlare block.
+                        // (src/glow_ae.cxx) arms with the chant and drops with any other
+                        // animation of the controller; the orbs are the Particles
+                        // AbeSpeak_Update spawns from the eOptionFlare block.
                         if (field_228_res_idx == eAbe_Chant)
                         {
-                            Tethys_ChantGlowArmAE(&field_20_animation,
-                                                  field_F4_resources.field_0_resources[MenuResIds::eOptionFlare],
-                                                  rec.mFrameTableOffset,
-                                                  AnimRec(AnimId::OptionChantOrb_Particle).mFrameTableOffset, 184, 162);
+                            Tethys_GlowChantArmAE(&field_20_animation, field_F4_resources.field_0_resources[MenuResIds::eOptionFlare]);
                         }
                         else
                         {
-                            Tethys_ChantGlowDisarmAE();
+                            Tethys_GlowChantDisarmAE();
                         }
 #endif
 

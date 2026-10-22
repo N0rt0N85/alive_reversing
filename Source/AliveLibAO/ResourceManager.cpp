@@ -2569,7 +2569,14 @@ struct CamSectorReader
                 vLanded = bytes;
                 return true;
             }
-            if (st <= 0 || Tethys_RawTicks() - t0 > 5u * 208000u)
+            // SATURN 477.ao.1: signed. Tethys_RawTicks can read 65,536 ticks
+            // (315 ms) in the FUTURE: SRL::Timer::Capture reads the FRT before
+            // its overflow counter (sys_saturn.cxx, the TETHYS_PD banner). A t0
+            // taken in that window made the unsigned difference ~4.29e9 on the
+            // first wait and tore a healthy read: 473.ao.1, "CAM stream: torn
+            // L1P02C09", field-reported. Signed, such a t0 only delays the
+            // verdict by 315 ms.
+            if (st <= 0 || static_cast<s32>(Tethys_RawTicks() - t0) > static_cast<s32>(5u * 208000u))
             {
                 Tethys_CdStreamStop();
                 bad = true;
